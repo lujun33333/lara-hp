@@ -1,0 +1,22 @@
+Resources/*
+xcuserdata/
+*.xcuserstate
+.DS_Store
+
+# 出包产物与编译中间件
+build/
+*.ipa
+build_ipa.log
+*.xcarchive
+*.obj
+*.pdb
+.codex-tests/
+.codex-temp/
+
+# Python 辅助脚本的缓存
+__pycache__/
+*.pyc
+
+# macOS 压缩包残留
+__MACOSX/
+._*

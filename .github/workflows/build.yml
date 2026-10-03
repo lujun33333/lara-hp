@@ -1,0 +1,202 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the verified artifact to the nightly release
+        required: true
+        default: false
+        type: boolean
+      local_test_auth_bypass:
+        description: Build an explicitly marked local-test IPA without card verification
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: setup xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: show xcode version
+        run: xcodebuild -version
+
+      - name: build
+        env:
+          LOCAL_TEST_AUTH_BYPASS: ${{ inputs.local_test_auth_bypass || false }}
+        run: |
+          chmod +x scripts/build_ipa_pe.sh
+          BUILD_ARGS=()
+          if [ "$LOCAL_TEST_AUTH_BYPASS" = true ]; then
+            BUILD_ARGS+=(--local-test-auth-bypass)
+          fi
+          ./scripts/build_ipa_pe.sh "${BUILD_ARGS[@]}"
+
+      - name: summary
+        if: always()
+        run: |
+          IPA_LIST=$(find . -maxdepth 1 -name 'Core-SET-*.ipa' -print | sort)
+          if [ -n "$IPA_LIST" ]; then
+            IPA_COUNT=$(printf '%s\n' "$IPA_LIST" | wc -l | tr -d ' ')
+          else
+            IPA_COUNT=0
+          fi
+          if [ "$IPA_COUNT" -ne 1 ]; then
+            printf '### Core-SET build failed\n\nExpected exactly one Core-SET-*.ipa; found %s. See build/xcodebuild-CoreSet.log.\n' \
+              "$IPA_COUNT" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          IPA="$IPA_LIST"
+          STEM="${IPA#./}"
+          STEM="${STEM%.ipa}"
+          JSON="$STEM.json"
+          SOURCES="$STEM.sources.jsonl"
+          CHECKSUMS="$STEM.sha256"
+          LOG="build/xcodebuild-CoreSet.log"
+          for FILE in "$JSON" "$SOURCES" "$CHECKSUMS" "$LOG"; do
+            if [ ! -f "$FILE" ]; then
+              printf '### Core-SET artifact incomplete\n\nMissing `%s`.\n' \
+                "$FILE" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          done
+          shasum -a 256 -c "$CHECKSUMS"
+
+          AUTH_BYPASS=$(python3 -c 'import json,sys; print("true" if json.load(open(sys.argv[1], encoding="utf-8"))["localTestAuthorizationBypass"] else "false")' "$JSON")
+          case "$AUTH_BYPASS:$STEM" in
+            true:*-local-test-auth-bypass) ;;
+            false:*-local-test-auth-bypass)
+              echo "production manifest uses a local-test artifact name" >&2
+              exit 1
+              ;;
+            false:*) ;;
+            *)
+              echo "local-test manifest/artifact name mismatch" >&2
+              exit 1
+              ;;
+          esac
+          SOURCE_STATE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sourceState"])' "$JSON")
+          SOURCE_COMMIT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sourceCommit"])' "$JSON")
+          SOURCE_TREE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sourceTree"])' "$JSON")
+          SOURCE_FINGERPRINT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sourceFingerprint"])' "$JSON")
+          {
+            printf '### Core-SET build succeeded\n\n'
+            printf '| Item | Value |\n|---|---|\n'
+            printf '| IPA | `%s` |\n' "$IPA"
+            printf '| Size | %s bytes |\n' "$(wc -c < "$IPA" | tr -d ' ')"
+            printf '| SHA-256 | `%s` |\n' "$(shasum -a 256 "$IPA" | awk '{print $1}')"
+            printf '| Source state | `%s` |\n' "$SOURCE_STATE"
+            printf '| Commit | `%s` |\n' "$SOURCE_COMMIT"
+            printf '| Tree | `%s` |\n' "$SOURCE_TREE"
+            printf '| Source fingerprint | `%s` |\n' "$SOURCE_FINGERPRINT"
+            printf '| Local-test auth bypass | `%s` |\n' "$AUTH_BYPASS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: upload verified build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-set-${{ inputs.local_test_auth_bypass == true && 'local-test-auth-bypass' || 'production' }}-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            Core-SET-*.ipa
+            Core-SET-*.json
+            Core-SET-*.sources.jsonl
+            Core-SET-*.sha256
+            build/xcodebuild-CoreSet.log
+
+  release:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish == true && inputs.local_test_auth_bypass != true }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: download verified build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: core-set-production-${{ github.sha }}
+          path: build/
+
+      - name: verify downloaded build artifact
+        run: |
+          cd build
+          CHECKSUMS=(Core-SET-*.sha256)
+          if [ "${#CHECKSUMS[@]}" -ne 1 ] || [ ! -f "${CHECKSUMS[0]}" ]; then
+            echo "expected exactly one Core-SET checksum manifest" >&2
+            exit 1
+          fi
+          shasum -a 256 -c "${CHECKSUMS[0]}"
+          JSONS=(Core-SET-*.json)
+          if [ "${#JSONS[@]}" -ne 1 ] || [ ! -f "${JSONS[0]}" ]; then
+            echo "expected exactly one Core-SET JSON manifest" >&2
+            exit 1
+          fi
+          case "${JSONS[0]}" in
+            *-local-test-auth-bypass-*)
+              echo "refusing to publish local-test auth bypass artifact" >&2
+              exit 1
+              ;;
+          esac
+          AUTH_BYPASS=$(python3 -c 'import json,sys; print("true" if json.load(open(sys.argv[1], encoding="utf-8"))["localTestAuthorizationBypass"] else "false")' "${JSONS[0]}")
+          if [ "$AUTH_BYPASS" != false ]; then
+            echo "refusing to publish manifest with local-test authorization bypass" >&2
+            exit 1
+          fi
+
+      - name: write release notes
+        run: |
+          COMMITS=$(git log --since="12 hours ago" --pretty=format:"- %h %s (%an)")
+          {
+            printf 'Core-SET nightly build\n\nLast 12 hours commits:\n\n'
+            if [ -n "$COMMITS" ]; then
+              printf '%s\n' "$COMMITS"
+            else
+              printf 'no commits in the last 12 hours\n'
+            fi
+          } > release_notes.txt
+
+      - name: update nightly release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view nightly >/dev/null 2>&1 || \
+          gh release create nightly \
+            --title "Nightly" \
+            --notes "initial nightly" \
+            --prerelease
+      
+          gh release edit nightly \
+            --title "Nightly" \
+            --notes-file release_notes.txt \
+            --prerelease
+      
+          gh release upload nightly \
+            build/Core-SET-*.ipa \
+            build/Core-SET-*.json \
+            build/Core-SET-*.sources.jsonl \
+            build/Core-SET-*.sha256 \
+            --clobber

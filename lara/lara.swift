@@ -1,0 +1,125 @@
+//
+//  lara.swift
+//  lara
+//
+//  Created by ruter on 23.03.26.
+//
+
+import UIKit
+import UniformTypeIdentifiers
+
+let g_isunsupported: Bool = isunsupported()
+var weonadebugbuild_pjbweouttahereexclamationmark: Bool = false
+
+@main
+final class LaraAppDelegate: UIResponder, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        bootstrapLaraApplication()
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(
+            name: "Default Configuration",
+            sessionRole: connectingSceneSession.role
+        )
+        configuration.delegateClass = LaraSceneDelegate.self
+        return configuration
+    }
+
+    func application(
+        _ application: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        .portrait
+    }
+
+    func applicationWillTerminate(_ application: UIApplication) {
+        CoreSetRuntimeCoordinator.stopAllForTermination()
+    }
+}
+
+@objc(ZeqcgKhNvh)
+final class LaraSceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+    private var coreSetRuntime: CoreSetRuntimeCoordinator?
+
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        guard let windowScene = scene as? UIWindowScene else { return }
+        let window = UIWindow(windowScene: windowScene)
+        self.window = window
+        window.backgroundColor = .black
+        let launcher = CoreSetLauncherViewController(
+            authorizationState: .initialForCurrentBuild
+        )
+        let runtime = CoreSetRuntimeCoordinator(scene: windowScene, launcher: launcher)
+        coreSetRuntime = runtime
+        launcher.coreSetRuntime = runtime
+        window.rootViewController = launcher
+        window.makeKeyAndVisible()
+    }
+
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        coreSetRuntime?.activate()
+    }
+
+    func sceneWillEnterForeground(_ scene: UIScene) {
+    }
+
+    func sceneWillResignActive(_ scene: UIScene) {
+        coreSetRuntime?.deactivate()
+    }
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        coreSetRuntime?.deactivate()
+    }
+
+    func sceneDidDisconnect(_ scene: UIScene) {
+        // Coordinator retains itself until window cleanup AND stop receipts finish.
+        _ = coreSetRuntime?.stop()
+        coreSetRuntime = nil
+    }
+}
+
+private func bootstrapLaraApplication() {
+    #if DEBUG
+    weonadebugbuild_pjbweouttahereexclamationmark = true
+    #endif
+
+    // fix file picker
+    let fixMethod = class_getInstanceMethod(
+        UIDocumentPickerViewController.self,
+        #selector(UIDocumentPickerViewController.fix_init(forOpeningContentTypes:asCopy:))
+    )!
+    let origMethod = class_getInstanceMethod(
+        UIDocumentPickerViewController.self,
+        #selector(UIDocumentPickerViewController.init(forOpeningContentTypes:asCopy:))
+    )!
+    method_exchangeImplementations(origMethod, fixMethod)
+
+    if UserDefaults.standard.bool(forKey: "keepAlive") {
+        toggleka()
+    }
+    globallogger.capture()
+}
+
+// file picker fixes
+extension UIDocumentPickerViewController {
+    @objc func fix_init(forOpeningContentTypes contentTypes: [UTType], asCopy: Bool) -> UIDocumentPickerViewController {
+        return fix_init(forOpeningContentTypes: contentTypes, asCopy: true)
+    }
+}
+
+// make strings compatiable with errors
+extension String: @retroactive Error {}
