@@ -109,17 +109,25 @@ extension CoreSetFeatureConsumer {
     var supportedFields: Set<CoreSetField> { [] }
 }
 
-private final class CoreSetConsumerBinding<Value: Equatable> {
+private final class CoreSetConsumerBinding {
     let id = UUID()
     weak var owner: AnyObject?
-    let currentAvailability: () -> CoreSetAvailability
-    let supportedFields: () -> Set<CoreSetField>
-    init<Consumer: CoreSetFeatureConsumer>(_ consumer: Consumer) where Consumer.State == Value {
+    private let readAvailability: (AnyObject) -> CoreSetAvailability
+    private let readSupportedFields: (AnyObject) -> Set<CoreSetField>
+    init<Consumer: CoreSetFeatureConsumer>(_ consumer: Consumer) {
         owner = consumer
-        currentAvailability = { [weak consumer] in
-            consumer?.availability ?? .unavailable(reason: "Consumer released")
+        readAvailability = { owner in
+            (owner as? Consumer)?.availability ?? .unavailable(reason: "Consumer released")
         }
-        supportedFields = { [weak consumer] in consumer?.supportedFields ?? [] }
+        readSupportedFields = { owner in (owner as? Consumer)?.supportedFields ?? [] }
+    }
+    func currentAvailability() -> CoreSetAvailability {
+        guard let owner else { return .unavailable(reason: "Consumer released") }
+        return readAvailability(owner)
+    }
+    func supportedFields() -> Set<CoreSetField> {
+        guard let owner else { return [] }
+        return readSupportedFields(owner)
     }
 }
 
@@ -137,7 +145,7 @@ struct CoreSetFeatureChannel<Value: Equatable> {
     private(set) var suspended = false
     // Tracks possible effects even after a failed/lost apply acknowledgement.
     private var mayHaveEffects = false
-    private var binding: CoreSetConsumerBinding<Value>?
+    private var binding: CoreSetConsumerBinding?
 
     init(capability: CoreSetCapability, desired: Value) {
         self.capability = capability
