@@ -642,8 +642,10 @@ SYSTEM_SWIFT_LOADS="$(grep -E '^/usr/lib/swift/libswift[^/]*\.dylib$' \
     <<<"$MAIN_DYLIB_LOADS" || true)"
 NON_SYSTEM_SWIFT_LOADS="$(grep -E '(^|/)libswift[^/]*\.dylib$' \
     <<<"$MAIN_DYLIB_LOADS" | grep -Ev '^/usr/lib/swift/' || true)"
-[[ -n "$SYSTEM_SWIFT_LOADS" ]] \
-    || die "最终主 Mach-O 未链接 iOS 系统 Swift runtime"
+if [[ -z "$SYSTEM_SWIFT_LOADS" ]]; then
+    printf '[!] 主 Mach-O 动态依赖：\n%s\n' "$MAIN_DYLIB_LOADS" >&2
+    die "最终主 Mach-O 未链接 iOS 系统 Swift runtime"
+fi
 [[ -z "$NON_SYSTEM_SWIFT_LOADS" ]] \
     || die "最终主 Mach-O 仍有非系统 Swift runtime load command：$NON_SYSTEM_SWIFT_LOADS"
 NORMALIZED_LOAD_COMMANDS="$(xcrun otool -l "$BIN")"
