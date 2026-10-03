@@ -10,7 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
-extern kern_return_t mach_vm_deallocate(task_t, mach_vm_address_t, mach_vm_size_t);
+extern "C" kern_return_t mach_vm_deallocate(task_t, mach_vm_address_t, mach_vm_size_t);
 static const uint64_t CSPageSize = 0x4000;
 static BOOL CSOffset(uint32_t value, uint32_t alignment) {
     return value != 0 && value < 0x10000 && (value & (alignment - 1)) == 0;

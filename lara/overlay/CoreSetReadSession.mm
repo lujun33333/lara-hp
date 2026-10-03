@@ -7,12 +7,12 @@
 #import <stdlib.h>
 #import <string.h>
 
-extern kern_return_t mach_vm_read_overwrite(vm_map_read_t, mach_vm_address_t,
+extern "C" kern_return_t mach_vm_read_overwrite(vm_map_read_t, mach_vm_address_t,
     mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
-extern kern_return_t mach_vm_region_recurse(vm_map_read_t, mach_vm_address_t *,
+extern "C" kern_return_t mach_vm_region_recurse(vm_map_read_t, mach_vm_address_t *,
     mach_vm_size_t *, natural_t *, vm_region_recurse_info_t, mach_msg_type_number_t *);
-extern int proc_listallpids(void *, int);
-extern int proc_name(int, void *, uint32_t);
+extern "C" int proc_listallpids(void *, int);
+extern "C" int proc_name(int, void *, uint32_t);
 
 static const char *const CSProcessName = "ShadowTrackerExtra";
 static const char *const CSBundleID = "com.tencent.tmgp.pubgmhd";
