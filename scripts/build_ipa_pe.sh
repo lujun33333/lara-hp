@@ -538,6 +538,25 @@ BIN="$SRC_APP/$PRODUCT_NAME"
 INFO_PLIST="$SRC_APP/Info.plist"
 [[ -f "$INFO_PLIST" ]] || die "构建后未找到 Info.plist"
 
+# Xcode may rewrite standalone PNG resources even when PNG compression is off.
+# Restore the exact audited source bytes before the bundle is signed.
+for resource in hf.png CoreSetLoading.png; do
+    case "$resource" in
+        hf.png)
+            source_png="$ROOT/lara/CoreSetAssets/hf.png"
+            expected_png_sha="a4e166b3ba37ce01a1407f40634be05b1a17fa19927a600e7c9d8b0c17175790"
+            ;;
+        CoreSetLoading.png)
+            source_png="$ROOT/lara/CoreSetLoading.png"
+            expected_png_sha="7f521ef9a446a740941ce436d2cc0a30f388e423ee6013e9fb16e6f10ccd3bec"
+            ;;
+    esac
+    [[ -f "$source_png" && "$(shasum -a 256 "$source_png" | awk '{print $1}')" == "$expected_png_sha" ]] \
+        || die "Core-SET 源 PNG 摘要不一致：$resource"
+    cp "$source_png" "$SRC_APP/$resource" \
+        || die "无法恢复 Core-SET 原始 PNG：$resource"
+done
+
 # AX 1.2.8 参考 plist 没有工程自定义的构建指纹；提交信息只写入
 # IPA 旁边的 JSON 清单。PlistBuddy 仅用于清理旧 DerivedData 可能残留的键。
 /usr/libexec/PlistBuddy -c 'Delete :LARABuildSourceCommit' "$INFO_PLIST" \
