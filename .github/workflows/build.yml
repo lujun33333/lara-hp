@@ -42,24 +42,24 @@ jobs:
         env:
           LOCAL_TEST_AUTH_BYPASS: ${{ inputs.local_test_auth_bypass || false }}
         run: |
-          chmod +x scripts/build_ipa_wz.sh
+          chmod +x scripts/build_ipa_pe.sh
           BUILD_ARGS=()
           if [ "$LOCAL_TEST_AUTH_BYPASS" = true ]; then
             BUILD_ARGS+=(--local-test-auth-bypass)
           fi
-          ./scripts/build_ipa_wz.sh "${BUILD_ARGS[@]}"
+          ./scripts/build_ipa_pe.sh "${BUILD_ARGS[@]}"
 
       - name: summary
         if: always()
         run: |
-          IPA_LIST=$(find . -maxdepth 1 -name 'AX-Pro-1.2.8-*.ipa' -print | sort)
+          IPA_LIST=$(find . -maxdepth 1 -name 'Core-SET-*.ipa' -print | sort)
           if [ -n "$IPA_LIST" ]; then
             IPA_COUNT=$(printf '%s\n' "$IPA_LIST" | wc -l | tr -d ' ')
           else
             IPA_COUNT=0
           fi
           if [ "$IPA_COUNT" -ne 1 ]; then
-            printf '### AX Pro 1.2.8 build failed\n\nExpected exactly one AX-Pro-1.2.8-*.ipa; found %s. See build/xcodebuild-wz.log.\n' \
+            printf '### Core-SET build failed\n\nExpected exactly one Core-SET-*.ipa; found %s. See build/xcodebuild-CoreSet.log.\n' \
               "$IPA_COUNT" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
@@ -70,10 +70,10 @@ jobs:
           JSON="$STEM.json"
           SOURCES="$STEM.sources.jsonl"
           CHECKSUMS="$STEM.sha256"
-          LOG="build/xcodebuild-wz.log"
+          LOG="build/xcodebuild-CoreSet.log"
           for FILE in "$JSON" "$SOURCES" "$CHECKSUMS" "$LOG"; do
             if [ ! -f "$FILE" ]; then
-              printf '### AX Pro 1.2.8 artifact incomplete\n\nMissing `%s`.\n' \
+              printf '### Core-SET artifact incomplete\n\nMissing `%s`.\n' \
                 "$FILE" >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
@@ -82,8 +82,8 @@ jobs:
 
           AUTH_BYPASS=$(python3 -c 'import json,sys; print("true" if json.load(open(sys.argv[1], encoding="utf-8"))["localTestAuthorizationBypass"] else "false")' "$JSON")
           case "$AUTH_BYPASS:$STEM" in
-            true:*-local-test-auth-bypass-*) ;;
-            false:*-local-test-auth-bypass-*)
+            true:*-local-test-auth-bypass) ;;
+            false:*-local-test-auth-bypass)
               echo "production manifest uses a local-test artifact name" >&2
               exit 1
               ;;
@@ -98,7 +98,7 @@ jobs:
           SOURCE_TREE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sourceTree"])' "$JSON")
           SOURCE_FINGERPRINT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sourceFingerprint"])' "$JSON")
           {
-            printf '### AX Pro 1.2.8 build succeeded\n\n'
+            printf '### Core-SET build succeeded\n\n'
             printf '| Item | Value |\n|---|---|\n'
             printf '| IPA | `%s` |\n' "$IPA"
             printf '| Size | %s bytes |\n' "$(wc -c < "$IPA" | tr -d ' ')"
@@ -113,14 +113,14 @@ jobs:
       - name: upload verified build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ax-pro-1.2.8-${{ inputs.local_test_auth_bypass == true && 'local-test-auth-bypass' || 'production' }}-${{ github.sha }}
+          name: core-set-${{ inputs.local_test_auth_bypass == true && 'local-test-auth-bypass' || 'production' }}-${{ github.sha }}
           if-no-files-found: error
           path: |
-            AX-Pro-1.2.8-*.ipa
-            AX-Pro-1.2.8-*.json
-            AX-Pro-1.2.8-*.sources.jsonl
-            AX-Pro-1.2.8-*.sha256
-            build/xcodebuild-wz.log
+            Core-SET-*.ipa
+            Core-SET-*.json
+            Core-SET-*.sources.jsonl
+            Core-SET-*.sha256
+            build/xcodebuild-CoreSet.log
 
   release:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish == true && inputs.local_test_auth_bypass != true }}
@@ -138,21 +138,21 @@ jobs:
       - name: download verified build artifact
         uses: actions/download-artifact@v4
         with:
-          name: ax-pro-1.2.8-production-${{ github.sha }}
+          name: core-set-production-${{ github.sha }}
           path: build/
 
       - name: verify downloaded build artifact
         run: |
           cd build
-          CHECKSUMS=(AX-Pro-1.2.8-*.sha256)
+          CHECKSUMS=(Core-SET-*.sha256)
           if [ "${#CHECKSUMS[@]}" -ne 1 ] || [ ! -f "${CHECKSUMS[0]}" ]; then
-            echo "expected exactly one AX Pro 1.2.8 checksum manifest" >&2
+            echo "expected exactly one Core-SET checksum manifest" >&2
             exit 1
           fi
           shasum -a 256 -c "${CHECKSUMS[0]}"
-          JSONS=(AX-Pro-1.2.8-*.json)
+          JSONS=(Core-SET-*.json)
           if [ "${#JSONS[@]}" -ne 1 ] || [ ! -f "${JSONS[0]}" ]; then
-            echo "expected exactly one AX Pro 1.2.8 JSON manifest" >&2
+            echo "expected exactly one Core-SET JSON manifest" >&2
             exit 1
           fi
           case "${JSONS[0]}" in
@@ -171,7 +171,7 @@ jobs:
         run: |
           COMMITS=$(git log --since="12 hours ago" --pretty=format:"- %h %s (%an)")
           {
-            printf 'AX Pro 1.2.8 nightly build\n\nLast 12 hours commits:\n\n'
+            printf 'Core-SET nightly build\n\nLast 12 hours commits:\n\n'
             if [ -n "$COMMITS" ]; then
               printf '%s\n' "$COMMITS"
             else
@@ -195,8 +195,8 @@ jobs:
             --prerelease
       
           gh release upload nightly \
-            build/AX-Pro-1.2.8-*.ipa \
-            build/AX-Pro-1.2.8-*.json \
-            build/AX-Pro-1.2.8-*.sources.jsonl \
-            build/AX-Pro-1.2.8-*.sha256 \
+            build/Core-SET-*.ipa \
+            build/Core-SET-*.json \
+            build/Core-SET-*.sources.jsonl \
+            build/Core-SET-*.sha256 \
             --clobber

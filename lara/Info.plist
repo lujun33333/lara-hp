@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>AX Pro</string>
+	<string>Core-SET</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleName</key>
-	<string>AX Pro</string>
+	<string>Core-SET</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
@@ -22,8 +22,6 @@
 			<array>
 				<string>AppIcon60x60</string>
 			</array>
-			<key>CFBundleIconName</key>
-			<string>AppIcon</string>
 		</dict>
 	</dict>
 	<key>CFBundleIcons~ipad</key>
@@ -35,8 +33,6 @@
 				<string>AppIcon60x60</string>
 				<string>AppIcon76x76</string>
 			</array>
-			<key>CFBundleIconName</key>
-			<string>AppIcon</string>
 		</dict>
 	</dict>
 	<key>MinimumOSVersion</key>
@@ -49,7 +45,12 @@
 	</array>
 	<key>UIAppFonts</key>
 	<array>
-		<string>Rajdhani Bold.otf</string>
+		<string>OPPOSans-H.ttf</string>
+		<string>IcoMoon.ttf</string>
+	</array>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tencentlaunch1106467070</string>
 	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>

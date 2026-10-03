@@ -5,15 +5,11 @@
 
 @import UIKit;
 #import <Foundation/Foundation.h>
+#import "overlay/CoreSetHUDHost.h"
 
 #import "darksword.h"
 #import "offsets.h"
 #import "utils.h"
-#import "wzmem.h"
-#import "wzesp.h"
-#import "wz/WZAimRuntime.h"
-#import "wz/WZAimObserver.h"
-#import "WZHUDBridge.h"
 #import "headers/AXLauncherAuthorizationPolicy.h"
 #import "vnode.h"
 #import "apfs.h"
@@ -22,6 +18,13 @@
 #import "IconServices.h"
 #import "rc.h"
 #import "RemoteCall.h"
+#import "overlay/CoreSetReadSession.h"
+#import "overlay/CoreSetTargetWriteSession.h"
+#import "overlay/CoreSetPlayerSnapshot.h"
+#import "overlay/CoreSetMaterialSnapshot.h"
+#import "overlay/CoreSetPerformanceSampler.h"
+#import "overlay/CoreSetMetalRenderAdapter.h"
+#import "overlay/CoreSetRemoteHostingAdapter.h"
 #import "decrypt.h"
 #import "persistence.h"
 #import "ota.h"

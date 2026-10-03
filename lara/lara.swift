@@ -17,13 +17,8 @@ final class LaraAppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        laramgr.shared.startBackgroundAudio()
         bootstrapLaraApplication()
         return true
-    }
-
-    func applicationWillTerminate(_ application: UIApplication) {
-        laramgr.shared.terminateWZSession()
     }
 
     func application(
@@ -45,11 +40,16 @@ final class LaraAppDelegate: UIResponder, UIApplicationDelegate {
     ) -> UIInterfaceOrientationMask {
         .portrait
     }
+
+    func applicationWillTerminate(_ application: UIApplication) {
+        CoreSetRuntimeCoordinator.stopAllForTermination()
+    }
 }
 
 @objc(ZeqcgKhNvh)
 final class LaraSceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
+    private var coreSetRuntime: CoreSetRuntimeCoordinator?
 
     func scene(
         _ scene: UIScene,
@@ -60,26 +60,35 @@ final class LaraSceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = UIWindow(windowScene: windowScene)
         self.window = window
         window.backgroundColor = .black
-        window.rootViewController = AXLauncherViewController(
-            manager: laramgr.shared,
+        let launcher = CoreSetLauncherViewController(
             authorizationState: .initialForCurrentBuild
         )
+        let runtime = CoreSetRuntimeCoordinator(scene: windowScene, launcher: launcher)
+        coreSetRuntime = runtime
+        launcher.coreSetRuntime = runtime
+        window.rootViewController = launcher
         window.makeKeyAndVisible()
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
+        coreSetRuntime?.activate()
     }
 
     func sceneWillEnterForeground(_ scene: UIScene) {
     }
 
     func sceneWillResignActive(_ scene: UIScene) {
+        coreSetRuntime?.deactivate()
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {
+        coreSetRuntime?.deactivate()
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
+        // Coordinator retains itself until window cleanup AND stop receipts finish.
+        _ = coreSetRuntime?.stop()
+        coreSetRuntime = nil
     }
 }
 
@@ -87,10 +96,6 @@ private func bootstrapLaraApplication() {
     #if DEBUG
     weonadebugbuild_pjbweouttahereexclamationmark = true
     #endif
-
-    // AX AppDelegate notification registration@0x100007470 listens for the
-    // exact Darwin request used by requestHUDTermination@0x100007aac.
-    wzhud_install_termination_notification()
 
     // fix file picker
     let fixMethod = class_getInstanceMethod(
