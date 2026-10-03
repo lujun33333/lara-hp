@@ -754,16 +754,17 @@ done
    "3232f3ed80a07cd9d710d6a88bf9572f17bb0ae5a6fbf37992d34f96ca311420" ]] \
     || die "Core-SET v1.7 iPad 图标摘要不一致"
 
-say "检查 App bundle 根条目："
-find "$SRC_APP" -mindepth 1 -maxdepth 1 -print | sort >&2
-python3 - "$SRC_APP" "$PRODUCT_NAME" <<'PY' \
+WEAPON_MANIFEST_SHA256="426c223f6a1859edc11930c20200a7ce7cd5e001946d0bf9cc8bdaa93ce96a10"
+python3 - "$SRC_APP" "$PRODUCT_NAME" "$WEAPON_MANIFEST_SHA256" <<'PY' \
     || die "App bundle 根条目与 Core-SET 资源契约不一致"
 import hashlib
+import json
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
 executable = sys.argv[2]
+weapon_manifest_sha = sys.argv[3]
 required_files = {
     executable,
     "Info.plist",
@@ -794,9 +795,29 @@ for name, expected in core_set_hashes.items():
     if actual != expected:
         raise SystemExit(f"Core-SET root resource hash mismatch for {name}: {actual}")
 directories = {entry.name for entry in root.iterdir() if entry.is_dir()}
-unexpected_directories = directories - {"_CodeSignature"}
+unexpected_directories = directories - {"_CodeSignature", "CoreSetWeaponIcons"}
 if unexpected_directories:
     raise SystemExit(f"unexpected root directories: {sorted(unexpected_directories)}")
+weapon_folder = root / "CoreSetWeaponIcons"
+if not weapon_folder.is_dir():
+    raise SystemExit("missing CoreSetWeaponIcons directory")
+manifest_bytes = (weapon_folder / "manifest.json").read_bytes()
+if hashlib.sha256(manifest_bytes).hexdigest() != weapon_manifest_sha:
+    raise SystemExit("CoreSetWeaponIcons manifest hash mismatch")
+icons = json.loads(manifest_bytes)["icons"]
+if len(icons) != 89:
+    raise SystemExit("CoreSetWeaponIcons icon count mismatch")
+expected_icons = {"manifest.json"}
+for icon in icons:
+    name = icon["file"]
+    if name != f'{icon["id"]}.png' or name in expected_icons:
+        raise SystemExit(f"invalid CoreSetWeaponIcons entry: {name}")
+    expected_icons.add(name)
+    data = (weapon_folder / name).read_bytes()
+    if len(data) != icon["bytes"] or hashlib.sha256(data).hexdigest() != icon["sha256"]:
+        raise SystemExit(f"CoreSetWeaponIcons hash mismatch: {name}")
+if {entry.name for entry in weapon_folder.iterdir()} != expected_icons:
+    raise SystemExit("CoreSetWeaponIcons directory entries mismatch")
 signature = root / "_CodeSignature"
 if not signature.is_dir():
     raise SystemExit("missing _CodeSignature directory")
@@ -825,9 +846,10 @@ mkdir -p "$STAGE/Payload"
 cp -R "$SRC_APP" "$STAGE/Payload/$PRODUCT_NAME.app"
 (cd "$STAGE" && zip -qry "$OUTPUT_IPA" Payload)
 
-python3 - "$OUTPUT_IPA" "$EXPECTED_BUNDLE_IDENTIFIER" <<'PY' \
+python3 - "$OUTPUT_IPA" "$EXPECTED_BUNDLE_IDENTIFIER" "$WEAPON_MANIFEST_SHA256" <<'PY' \
     || die "最终 IPA 的 ZIP 条目、plist 或资源与 Core-SET 契约不一致"
 import hashlib
+import json
 import plistlib
 import sys
 import zipfile
@@ -835,6 +857,7 @@ from collections import Counter
 
 archive = sys.argv[1]
 expected_bundle_identifier = sys.argv[2]
+weapon_manifest_sha = sys.argv[3]
 prefix = "Payload/Core-SET.app/"
 required = {
     "Core-SET",
@@ -881,9 +904,29 @@ with zipfile.ZipFile(archive) as ipa:
             f"root files mismatch: missing={sorted(required-direct_files)}, "
             f"extra={sorted(direct_files-required)}"
         )
+    weapon_prefix = "CoreSetWeaponIcons/"
+    manifest_bytes = ipa.read(prefix + weapon_prefix + "manifest.json")
+    if hashlib.sha256(manifest_bytes).hexdigest() != weapon_manifest_sha:
+        raise SystemExit("zipped CoreSetWeaponIcons manifest hash mismatch")
+    icons = json.loads(manifest_bytes)["icons"]
+    if len(icons) != 89:
+        raise SystemExit("zipped CoreSetWeaponIcons icon count mismatch")
+    expected_icons = {weapon_prefix + "manifest.json"}
+    for icon in icons:
+        name = icon["file"]
+        if name != f'{icon["id"]}.png' or weapon_prefix + name in expected_icons:
+            raise SystemExit(f"invalid zipped CoreSetWeaponIcons entry: {name}")
+        expected_icons.add(weapon_prefix + name)
+        data = ipa.read(prefix + weapon_prefix + name)
+        if len(data) != icon["bytes"] or hashlib.sha256(data).hexdigest() != icon["sha256"]:
+            raise SystemExit(f"zipped CoreSetWeaponIcons hash mismatch: {name}")
+    actual_icons = {name for name in relative if name.startswith(weapon_prefix) and not name.endswith("/")}
+    if actual_icons != expected_icons:
+        raise SystemExit("zipped CoreSetWeaponIcons entries mismatch")
     forbidden_nested = {
         name for name in relative
         if "/" in name.rstrip("/") and not name.startswith("_CodeSignature/")
+        and name not in expected_icons
     }
     if forbidden_nested:
         raise SystemExit(f"unexpected nested entries: {sorted(forbidden_nested)}")
