@@ -1,9 +1,9 @@
 #include <stddef.h>
 
 #if defined(XPF_TEST_LARA_HEADER)
-#include "../lara/headers/xpf.h"
+#include "../../lara/headers/xpf.h"
 #else
-#include "../vendor/XPF/src/xpf.h"
+#include "../../vendor/XPF/src/xpf.h"
 #endif
 
 _Static_assert(offsetof(XPF, firstItem) == 0x110, "AX 1.2.8 firstItem ABI");

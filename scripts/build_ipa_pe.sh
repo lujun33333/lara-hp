@@ -367,10 +367,10 @@ git -C "$CHOMA_DIR" checkout --detach "$CHOMA_COMMIT" >/dev/null 2>&1 \
 # "AX 1.2.8 firstItem ABI"、ignoreBaseSet ABI 和 XPF size。
 IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 xcrun --sdk iphoneos clang -fsyntax-only -arch arm64 -isysroot "$IOS_SDK" \
-    -DXPF_LAYOUT_ONLY "$ROOT/tests/xpf_ax128_layout_test.c" \
+    -DXPF_LAYOUT_ONLY "$ROOT/scripts/build_support/xpf_layout_check.c" \
     || die "XPF AX 1.2.8 布局编译门禁失败"
 xcrun --sdk iphoneos clang -fsyntax-only -arch arm64 -isysroot "$IOS_SDK" \
-    -DXPF_LAYOUT_ONLY -DXPF_TEST_LARA_HEADER "$ROOT/tests/xpf_ax128_layout_test.c" \
+    -DXPF_LAYOUT_ONLY -DXPF_TEST_LARA_HEADER "$ROOT/scripts/build_support/xpf_layout_check.c" \
     || die "Lara XPF AX 1.2.8 布局编译门禁失败"
 mkdir -p "$ROOT/build"
 # 该 dylib 只用于 lipo/nm/otool ABI 门禁，不进入 App；覆盖 XPF Makefile 的

@@ -1,9 +1,7 @@
 import UIKit
 
-// Core-SET 1.6, embedded LuaJIT prototype 133 (offset 0x6d83).
-// Core-SET 1.7: matching UI prototype 148 (offset 0x85c5); see
-// artifacts/core-set-v1.7/ui-comparison.json for the static structure comparison.
-// The original IPA is the specification; no game/backend state is read here.
+// Core-SET v1.7 homepage geometry for the local UIKit presentation.
+// This layout does not read game or backend state.
 struct CoreSetHomeLayout {
     let width: CGFloat
     let height: CGFloat

@@ -1,6 +1,6 @@
 import Foundation
 
-// v1.7 UI contract only; see artifacts/core-set-v1.7/v1.7-ui-evidence.md, batch 3.
+// Core-SET v1.7 UI state contract for local controls and consumer receipts.
 // Nil means unobserved/unselected, not a reference default. No game schema or algorithm.
 // Owners must serialize mutations and consumer callbacks on the same executor.
 enum CoreSetPage: String, CaseIterable { case home, player, materials, adjustments, radar, aim, recoil }
