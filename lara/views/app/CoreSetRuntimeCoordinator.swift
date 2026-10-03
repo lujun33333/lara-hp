@@ -366,7 +366,7 @@ final class CoreSetRuntimeCoordinator {
 
     private func publishStatus() {
         let local = host.localSurfacesReady ? "本应用悬浮可用" : "本应用悬浮未就绪"
-        let renderer = host.activeBackend == .metal ? "Metal" : "CA"
+        let renderer = host.activeBackend == CoreSetHUDBackendMetal ? "Metal" : "CA"
         let frame = host.lastConsumedSequence > 0 ? "\(renderer) 本地帧已消费" : "\(renderer) 本地帧未确认"
         let hosting = host.crossApplicationHosted ? "跨应用双面已回读" : "跨应用 unavailable"
         let cleanup = host.cleanupPending ? " · 清理待确认" : ""
@@ -416,7 +416,7 @@ final class CoreSetRuntimeCoordinator {
             channelsRestored = channelsRestored && playerReadClean && materialReadClean && radarReadClean && previewReadClean && aimWriteClean && recoilWriteClean
             self.menu.refreshConsumerAvailability()
             self.publishStatus()
-            if result.complete && channelsRestored && !self.host.cleanupPending {
+            if result.complete.boolValue && channelsRestored && !self.host.cleanupPending {
                 self.host.stateDidChange = nil
                 self.host.frameDidConsume = nil
                 Self.retained.removeValue(forKey: self.identity)
@@ -431,7 +431,7 @@ final class CoreSetRuntimeCoordinator {
         // waiting for a callback that itself needs that queue.
         for owner in Array(retained.values) {
             let result = owner.stop()
-            if !result.complete { NSLog("Core-SET: overlay cleanup remains unconfirmed") }
+            if !result.complete.boolValue { NSLog("Core-SET: overlay cleanup remains unconfirmed") }
         }
     }
 }
@@ -477,6 +477,6 @@ private final class CoreSetLocalHostConsumer: CoreSetFeatureConsumer {
 
     func stop(_ token: CoreSetRequestToken, completion: @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) {
         let result = host.stop()
-        completion(token, result.complete ? .restored : .failed(reason: "窗口清理未确认"))
+        completion(token, result.complete.boolValue ? .restored : .failed(reason: "窗口清理未确认"))
     }
 }
