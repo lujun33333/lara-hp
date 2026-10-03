@@ -754,6 +754,8 @@ done
    "3232f3ed80a07cd9d710d6a88bf9572f17bb0ae5a6fbf37992d34f96ca311420" ]] \
     || die "Core-SET v1.7 iPad 图标摘要不一致"
 
+say "检查 App bundle 根条目："
+find "$SRC_APP" -mindepth 1 -maxdepth 1 -print | sort >&2
 python3 - "$SRC_APP" "$PRODUCT_NAME" <<'PY' \
     || die "App bundle 根条目与 Core-SET 资源契约不一致"
 import hashlib
