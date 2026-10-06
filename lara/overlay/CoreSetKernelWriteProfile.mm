@@ -44,7 +44,7 @@ static NSUUID *CSCurrentKernelUUID(void) {
     ds_kreadbuf(kernel_base + sizeof(header), commands.mutableBytes, commands.length);
     ds_kreadbuf(kernel_base + sizeof(header), confirm.mutableBytes, confirm.length);
     if (![commands isEqualToData:confirm]) return nil;
-    const uint8_t *bytes = commands.bytes;
+    const uint8_t *bytes = static_cast<const uint8_t *>(commands.bytes);
     size_t offset = 0;
     for (uint32_t index = 0; index < header.ncmds; ++index) {
         if (offset > commands.length || commands.length - offset < sizeof(struct load_command)) return nil;
