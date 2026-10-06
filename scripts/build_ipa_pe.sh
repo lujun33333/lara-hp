@@ -718,8 +718,12 @@ fi
 # 字段偏移已经由两份头文件的编译期断言和上面的独立 arm64/arm64e dylib
 # 指令级门禁覆盖。静态库进入主程序后可能被 LTO/内联/linker relaxation 改写为
 # 不再含直接 #0x110/#0x118 immediate 的等价寻址，不能重复套用 dylib 反汇编形态。
-LC_ALL=C grep -a -q -- "arm_maxoffset" "$BIN" \
-    || die "主 Mach-O 缺少 arm_maxoffset 兼容 finder"
+if ! LC_ALL=C grep -a -q -- "arm_maxoffset" "$BIN"; then
+    printf '[!] arm_maxoffset bytes check: absent; executable=%s; size=%s; sha256=%s\n' \
+        "$BIN" "$(wc -c < "$BIN" | tr -d ' ')" \
+        "$(shasum -a 256 "$BIN" | awk '{print $1}')"
+    die "主 Mach-O 缺少 arm_maxoffset 兼容 finder"
+fi
 MAIN_SYMBOLS="$(xcrun nm -g "$BIN")"
 grep -q ' _xpf_start_with_kernel_path$' <<<"$MAIN_SYMBOLS" \
     || die "主 Mach-O 未静态并入 libxpf"

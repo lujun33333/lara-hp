@@ -49,6 +49,52 @@ jobs:
           fi
           ./scripts/build_ipa_pe.sh "${BUILD_ARGS[@]}"
 
+      - name: collect failed build diagnostics
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path.cwd()
+          paths = [
+              "build/DerivedDataCoreSet/Build/Products/Release-iphoneos/Core-SET.app/Core-SET",
+              "build/static-ios/libxpf.a",
+              "build/xcodebuild-CoreSet.log",
+              "build/source-files.jsonl",
+          ]
+          files = []
+          for relative in paths:
+              path = root / relative
+              if path.is_file():
+                  data = path.read_bytes()
+                  files.append({"path": relative, "size": len(data),
+                                "sha256": hashlib.sha256(data).hexdigest()})
+          manifest = {
+              "kind": "failed-build-diagnostics",
+              "commit": os.environ["GITHUB_SHA"],
+              "tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip(),
+              "sourceManifestSha256": next((f["sha256"] for f in files
+                                            if f["path"] == "build/source-files.jsonl"), None),
+              "files": files,
+          }
+          output = root / "build/failed-build-diagnostics.json"
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: upload failed build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-set-diagnostics-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            build/failed-build-diagnostics.json
+            build/DerivedDataCoreSet/Build/Products/Release-iphoneos/Core-SET.app/Core-SET
+            build/static-ios/libxpf.a
+            build/xcodebuild-CoreSet.log
+            build/source-files.jsonl
+
       - name: summary
         if: always()
         run: |
