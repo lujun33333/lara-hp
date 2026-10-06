@@ -1133,12 +1133,10 @@ final class CoreSetLauncherViewController: UIViewController, AVAudioPlayerDelega
         particleEmitter.add(response, forKey: "q47.background.response")
     }
     @objc private func launchApplication() {
-        CoreSetGameTarget.openApplication { [weak self] result in
-            switch result {
-            case .opened: break
-            case .unavailable: self?.presentNotice("未检测到可打开的和平精英")
-            case .failed: self?.presentNotice("系统未能打开和平精英")
-            }
+        guard authorizationState.canLaunch else { presentNotice("授权未就绪，无法启动游戏"); return }
+        guard let coreSetRuntime else { presentNotice("悬浮宿主未接入，无法启动游戏"); return }
+        coreSetRuntime.launchGame { [weak self] error in
+            if let error { self?.presentNotice(error) }
         }
     }
 
