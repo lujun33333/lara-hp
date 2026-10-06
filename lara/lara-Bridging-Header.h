@@ -56,3 +56,5 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 NS_ASSUME_NONNULL_END
+#import "overlay/CoreSetIsolatedWriteProbe.h"
+#import "overlay/CoreSetKernelWriteProfile.h"

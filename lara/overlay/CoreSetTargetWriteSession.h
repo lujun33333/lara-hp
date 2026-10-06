@@ -23,10 +23,19 @@ typedef NS_ENUM(uint8_t, CoreSetTargetWriteAxis) {
 @property(nonatomic, readonly) BOOL mappedAliasReleased;
 @property(nonatomic, readonly) BOOL generationAdvanced;
 @property(nonatomic, readonly) BOOL noInFlight;
+@property(nonatomic, readonly) BOOL backendClean;
+@property(nonatomic, readonly) BOOL noUnresolvedState;
+@property(nonatomic, readonly) BOOL targetWriteAttempted;
+@property(nonatomic, readonly) BOOL resourcesReleased;
+// Complete transport cleanup is distinct from restoring previously written bytes.
 @property(nonatomic, readonly) BOOL complete;
+@property(nonatomic, readonly) BOOL mayReportRestored;
 - (instancetype)initWithReadTaskPortReleased:(BOOL)readTaskPortReleased
                          mappedAliasReleased:(BOOL)mappedAliasReleased
                           generationAdvanced:(BOOL)generationAdvanced
+                                backendClean:(BOOL)backendClean
+                           noUnresolvedState:(BOOL)noUnresolvedState
+                        targetWriteAttempted:(BOOL)targetWriteAttempted
                                   noInFlight:(BOOL)noInFlight;
 @end
 

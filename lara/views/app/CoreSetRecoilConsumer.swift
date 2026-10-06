@@ -21,7 +21,8 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
     func stop(_ token: CoreSetRequestToken,
               completion: @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) {
         let cleanup = writer.disconnect()
-        completion(token, cleanup.complete ? .restored : .failed(reason: "压枪写会话清理未确认"))
+        completion(token, cleanup.mayReportRestored ? .restored : .failed(reason:
+            cleanup.complete ? "压枪写会话已清理，目标原值恢复未验证" : "压枪写会话清理或未决状态未确认"))
     }
 
     func shutdownWriteSession() -> Bool { writer.disconnect().complete }

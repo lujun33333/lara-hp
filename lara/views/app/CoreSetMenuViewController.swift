@@ -51,6 +51,14 @@ private final class CoreSetMenuConsumer<Value: Equatable>: CoreSetFeatureConsume
 
 // Local presentation only. Reference geometry does not establish device pixel parity.
 final class CoreSetMenuViewController: UIViewController {
+    private weak var basicAimStatusLabel: UILabel?
+    private var basicAimStatus = "基础模式待配置"
+    func updateBasicAimStatus(_ status: String) {
+        basicAimStatus = status
+        if case .unavailable(let reason) = featureState.aim.availability {
+            basicAimStatusLabel?.text = reason
+        } else { basicAimStatusLabel?.text = status }
+    }
     var onClose: (() -> Void)?
     private(set) var featureState = CoreSetFeatureState()
     private var gameConsumers: [AnyKeyPath: AnyObject] = [:]
@@ -435,6 +443,29 @@ final class CoreSetMenuViewController: UIViewController {
             self.rebuildMenu()
             completion(states.allSatisfy { $0 == .notNeeded || $0 == .confirmed })
         }
+    }
+    func suspendAimConsumer(completion: @escaping (Bool) -> Void) {
+        precondition(Thread.isMainThread)
+        featureState.aim.suspend()
+        guard let token = featureState.aim.pendingStop else {
+            completion(featureState.aim.restoration == .notNeeded || featureState.aim.restoration == .confirmed); return
+        }
+        guard let consumer = gameConsumers[\CoreSetFeatureState.aim] as? CoreSetMenuConsumer<CoreSetAimSettings> else {
+            completion(false); return
+        }
+        consumer.stop(token) { [weak self] token, outcome in
+            DispatchQueue.main.async {
+                guard let self, self.featureState.aim.receiveStop(token, outcome: outcome) else { completion(false); return }
+                self.rebuildMenu()
+                completion(self.featureState.aim.restoration == .notNeeded ||
+                           self.featureState.aim.restoration == .confirmed)
+            }
+        }
+    }
+    @discardableResult
+    func resumeAimConsumer() -> Bool {
+        precondition(Thread.isMainThread)
+        let result = featureState.aim.resume(); refreshConsumerAvailability(); return result
     }
 
     @discardableResult
@@ -1934,24 +1965,25 @@ final class CoreSetMenuViewController: UIViewController {
             button.backgroundColor = selected ? accent : gray(41, 230)
             button.layer.cornerRadius = 5
             button.accessibilityHint = "仅切换本地场景参数预览，不影响游戏"
-            button.isEnabled = canApply(featureState.aim)
+            button.isEnabled = featureState.aim.phase != .applying && featureState.aim.phase != .active &&
+                controlAvailability(.basicAimScene, in: featureState.aim) == .ready
             button.accessibilityHint = button.isEnabled ? "请求场景消费者，生效需实际回执" : "场景消费者未接入，不能切换游戏场景"
             button.accessibilityTraits = selected ? [.button, .selected] : .button
             button.addTarget(self, action: #selector(selectPreviewScene(_:)), for: .touchUpInside)
             card.addSubview(button)
             x += scenarioWidths[index] + 6
         }
-        if previewSceneValue == 3 {
-            disabledRows(["水平速度", "垂直速度", "预判提前", "锁定门槛", "接管暂停"], in: card, y: 64)
-        } else if previewSceneValue != nil {
-            disabledRows(["锁定强度  强锁定 / 中锁定 / 轻锁定"], in: card, y: 64)
-        }
+        let note = previewSceneValue == 3 ? "自定义参数在目标筛选卡设置" : "预设参数固定；下方选择接管强度"
+        card.addSubview(label(note, size: 10, frame: CGRect(x: 12, y: 64, width: 299, height: 18), secondary: true))
     }
 
     @objc private func selectPreviewScene(_ sender: UIButton) {
         refreshBeforeInteraction()
-        guard scenarioValues.indices.contains(sender.tag), let scene = CoreSetAimScene(rawValue: scenarioValues[sender.tag]) else { return }
-        editGame(\.aim) { $0.scene = scene }
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active,
+              scenarioValues.indices.contains(sender.tag),
+              let scene = CoreSetAimScene(rawValue: scenarioValues[sender.tag]) else { return }
+        featureState.aim.updateDesired { $0.scene = scene }
+        rebuildMenu()
     }
 
     private func materialGroupValues(category: Int, item: Int) -> [Bool?] {
@@ -2145,6 +2177,169 @@ final class CoreSetMenuViewController: UIViewController {
         }
     }
 
+    @objc private func configureBasicAimTrigger(_ sender: UISegmentedControl) {
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active else { return }
+        guard (0...3).contains(sender.selectedSegmentIndex) else { return }
+        let modes: [CoreSetAimTrigger] = [.scopeOnly, .fireOnly, .either, .both]
+        featureState.aim.updateDesired { $0.trigger = modes[sender.selectedSegmentIndex] }
+        rebuildMenu()
+    }
+    @objc private func configureBasicAimRange(_ sender: UISlider) {
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active else { return }
+        featureState.aim.updateDesired {
+            switch sender.tag {
+            case 0: $0.circleSize.set(Int(sender.value.rounded()))
+            case 1: $0.custom.maximumDistance.set(Int(sender.value.rounded()))
+            case 2: $0.custom.strength.set(Int(sender.value.rounded()))
+            case 3: $0.custom.smoothing.set(Int(sender.value.rounded()))
+            case 4: $0.custom.horizontalSpeed.set(Int(sender.value.rounded()))
+            case 5: $0.custom.verticalSpeed.set(Int(sender.value.rounded()))
+            case 6: $0.custom.lockThreshold.set(Int(sender.value.rounded()))
+            case 7: $0.custom.confirmationFrames.set(Int(sender.value.rounded()))
+            case 8: $0.custom.takeoverPauseMilliseconds.set(Int(sender.value.rounded()))
+            default: break
+            }
+        }
+        rebuildMenu()
+    }
+    @objc private func configureBasicAimBots(_ sender: UISegmentedControl) {
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active else { return }
+        guard sender.selectedSegmentIndex >= 0 else { return }
+        featureState.aim.updateDesired { $0.includeBots = sender.selectedSegmentIndex == 1 }
+        rebuildMenu()
+    }
+    @objc private func configureBasicAimLock(_ sender: UISegmentedControl) {
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active,
+              sender.selectedSegmentIndex >= 0 else { return }
+        featureState.aim.updateDesired { $0.lockSameTarget = sender.selectedSegmentIndex == 1 }
+        rebuildMenu()
+    }
+    @objc private func configureBasicAimPoint(_ sender: UISegmentedControl) {
+        let values: [CoreSetAimPoint] = [.head, .hips]
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active,
+              values.indices.contains(sender.selectedSegmentIndex) else { return }
+        let point = values[sender.selectedSegmentIndex]
+        featureState.aim.updateDesired { $0.point = point }
+        rebuildMenu()
+    }
+    @objc private func configureBasicAimLockStrength(_ sender: UISegmentedControl) {
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active else { return }
+        let values: [CoreSetLockStrength] = [.strong, .medium, .light]
+        guard values.indices.contains(sender.selectedSegmentIndex) else { return }
+        featureState.aim.updateDesired { $0.lockStrength = values[sender.selectedSegmentIndex] }
+        rebuildMenu()
+    }
+    @objc private func startBasicAim() {
+        guard canApply(featureState.aim) else { return }
+        editGame(\.aim) { $0.enabled = true }
+    }
+    @objc private func stopBasicAim() {
+        guard let consumer = gameConsumers[\CoreSetFeatureState.aim] as? CoreSetMenuConsumer<CoreSetAimSettings>,
+              let token = featureState.aim.prepareStop() else { return }
+        consumer.stop(token) { [weak self] token, outcome in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                _ = self.featureState.aim.receiveStop(token, outcome: outcome)
+                self.rebuildMenu()
+            }
+        }
+    }
+    private func aimControls(in aim: UIView, filter: UIView, scenario: UIView) {
+        let state = featureState.aim.desired
+        let editable = featureState.aim.phase != .applying && featureState.aim.phase != .active
+        let custom = state.scene == .custom
+        let modes: [CoreSetAimTrigger] = [.scopeOnly, .fireOnly, .either, .both]
+        let trigger = UISegmentedControl(items: ["开镜", "开火", "任一", "同时"])
+        trigger.frame = CGRect(x: 335, y: 34, width: 303, height: 40)
+        trigger.selectedSegmentIndex = state.trigger.flatMap { modes.firstIndex(of: $0) } ?? UISegmentedControl.noSegment
+        trigger.isEnabled = editable
+        trigger.addTarget(self, action: #selector(configureBasicAimTrigger(_:)), for: .valueChanged)
+        aim.addSubview(trigger)
+        let point = UISegmentedControl(items: ["上身 fallback +30", "胯部 fallback +25"])
+        point.frame = CGRect(x: 20, y: 34, width: 300, height: 40)
+        point.selectedSegmentIndex = state.point == .head ? 0 : (state.point == .hips ? 1 : UISegmentedControl.noSegment)
+        point.isEnabled = editable
+        point.accessibilityHint = "原包当前可执行两种高度；胸部raw骨点不可达且未开放"
+        point.addTarget(self, action: #selector(configureBasicAimPoint(_:)), for: .valueChanged)
+        aim.addSubview(point)
+        let circle = UISlider(frame: CGRect(x: 145, y: 82, width: 493, height: 36))
+        circle.tag = 0; circle.minimumValue = 30; circle.maximumValue = 525
+        circle.value = Float(state.circleSize.value ?? 30); circle.isEnabled = editable
+        circle.addTarget(self, action: #selector(configureBasicAimRange(_:)), for: .valueChanged)
+        aim.addSubview(label("自瞄圈大小 \(state.circleSize.value.map(String.init) ?? "未选择")", size: 12,
+                             frame: CGRect(x: 20, y: 82, width: 120, height: 36)))
+        aim.addSubview(circle)
+        let bots = UISegmentedControl(items: ["不含人机", "含人机"])
+        bots.frame = CGRect(x: 20, y: 34, width: 135, height: 40)
+        bots.selectedSegmentIndex = state.includeBots.map { $0 ? 1 : 0 } ?? UISegmentedControl.noSegment
+        bots.isEnabled = editable
+        bots.addTarget(self, action: #selector(configureBasicAimBots(_:)), for: .valueChanged)
+        filter.addSubview(bots)
+        let lock = UISegmentedControl(items: ["最近目标", "锁定同目标"])
+        lock.frame = CGRect(x: 165, y: 34, width: 138, height: 40)
+        lock.selectedSegmentIndex = state.lockSameTarget.map { $0 ? 1 : 0 } ?? UISegmentedControl.noSegment
+        lock.isEnabled = editable
+        lock.addTarget(self, action: #selector(configureBasicAimLock(_:)), for: .valueChanged)
+        filter.addSubview(lock)
+        var rows: [(String, Int?, Float, Float, Int)] = []
+        if custom {
+            rows = [("距离", state.custom.maximumDistance.value, 10, 500, 1),
+                     ("强度", state.custom.strength.value, 5, 100, 2),
+                     ("平滑", state.custom.smoothing.value, 1, 10, 3),
+                     ("水平", state.custom.horizontalSpeed.value, 30, 720, 4),
+                     ("垂直", state.custom.verticalSpeed.value, 30, 720, 5),
+                     ("接管阈值", state.custom.lockThreshold.value, 5, 500, 6),
+                     ("确认帧", state.custom.confirmationFrames.value, 1, 6, 7),
+                     ("暂停 ms", state.custom.takeoverPauseMilliseconds.value, 50, 1000, 8)]
+        }
+        for (index, row) in rows.enumerated() {
+            let y = 82 + CGFloat(index) * 38
+            filter.addSubview(label(row.0 + " " + (row.1.map(String.init) ?? "未选择"),
+                size: 10, frame: CGRect(x: 12, y: y, width: 88, height: 34)))
+            let slider = UISlider(frame: CGRect(x: 102, y: y, width: 201, height: 34))
+            slider.tag = row.4; slider.minimumValue = row.2; slider.maximumValue = row.3
+            slider.value = Float(row.1 ?? Int(slider.minimumValue)); slider.isContinuous = false
+            slider.isEnabled = editable
+            slider.addTarget(self, action: #selector(configureBasicAimRange(_:)), for: .valueChanged)
+            filter.addSubview(slider)
+        }
+        if !custom {
+            let strength = UISegmentedControl(items: ["强", "中", "轻"])
+            strength.frame = CGRect(x: 12, y: 82, width: 299, height: 40)
+            let strengths: [CoreSetLockStrength] = [.strong, .medium, .light]
+            strength.selectedSegmentIndex = state.lockStrength.flatMap { strengths.firstIndex(of: $0) } ?? UISegmentedControl.noSegment
+            strength.isEnabled = editable
+            strength.addTarget(self, action: #selector(configureBasicAimLockStrength(_:)), for: .valueChanged)
+            scenario.addSubview(strength)
+        }
+        let configured = state.scene != nil && (state.scene != .custom ||
+            (state.custom.maximumDistance.value != nil && state.custom.strength.value != nil &&
+             state.custom.smoothing.value != nil && state.custom.horizontalSpeed.value != nil &&
+             state.custom.verticalSpeed.value != nil && state.custom.lockThreshold.value != nil &&
+             state.custom.confirmationFrames.value != nil && state.custom.takeoverPauseMilliseconds.value != nil)) &&
+             (state.scene == .custom || state.lockStrength != nil)
+        let supportedPoint = state.point == .head || state.point == .hips
+        let start = UIButton(type: .system)
+        start.frame = CGRect(x: 20, y: 126, width: 130, height: 40)
+        start.setTitle("启用自瞄", for: .normal)
+        start.isEnabled = editable && canApply(featureState.aim) && configured && state.trigger != nil &&
+            state.includeBots != nil && state.lockSameTarget != nil && supportedPoint && state.circleSize.value != nil
+        start.addTarget(self, action: #selector(startBasicAim), for: .touchUpInside)
+        aim.addSubview(start)
+        let stop = UIButton(type: .system)
+        stop.frame = CGRect(x: 160, y: 126, width: 105, height: 40)
+        stop.setTitle("关闭自瞄", for: .normal)
+        stop.isEnabled = featureState.aim.restoration == .required || featureState.aim.restoration == .pending
+        if case .failed = featureState.aim.restoration { stop.isEnabled = true }
+        stop.addTarget(self, action: #selector(stopBasicAim), for: .touchUpInside)
+        aim.addSubview(stop)
+        let text: String
+        if case .unavailable(let reason) = featureState.aim.availability { text = reason }
+        else { text = basicAimStatus }
+        let status = label(text, size: 10, frame: CGRect(x: 280, y: 122, width: 358, height: 54), secondary: true)
+        status.numberOfLines = 3; aim.addSubview(status); basicAimStatusLabel = status
+        content.contentSize.height = 735
+    }
     private func rebuildPage() {
         switch selectedPage {
         case 0:
@@ -2212,17 +2407,15 @@ final class CoreSetMenuViewController: UIViewController {
             let warning = card("预警设置", CGRect(x: 335, y: 0, width: 323, height: 360))
             disabledRows(["被瞄预警", "忽略人机", "被瞄预警范围", "预警文字调节"], in: warning, y: 34)
         case 5:
-            let aim = card("Core稳定自瞄", CGRect(x: 0, y: 0, width: 658, height: 160))
-            disabledRows(["自瞄总开关", "瞄准部位  头部 / 胸部 / 屁股", "预瞄标记圈",
-                          "触发模式  仅开镜 / 仅开火 / 开镜或开火 / 开镜且开火", "动态自瞄圈",
-                          "显示自瞄圈", "自瞄连接线", "自瞄圈大小"], in: aim, y: 34, columns: 2)
-            let filter = card("目标筛选", CGRect(x: 0, y: 188, width: 323, height: 220))
-            disabledRows(["倒地不瞄", "瞄准人机", "锁定同目标"], in: filter, y: 34)
-            if previewSceneValue == 3 {
-                disabledRows(["最大距离", "自瞄强度", "转动平滑", "接管确认帧数"], in: filter, y: 124)
-            }
-            let scenario = card("场景预设", CGRect(x: 335, y: 188, width: 323, height: 220))
+            let aim = card("Core稳定自瞄", CGRect(x: 0, y: 0, width: 658, height: 218))
+            disabledRows(["预瞄标记圈", "动态自瞄圈", "显示自瞄圈", "自瞄连接线"],
+                         in: aim, y: 172, columns: 4)
+            let filter = card("目标筛选", CGRect(x: 0, y: 246, width: 323, height: 440))
+            disabledRows(["倒地不瞄", "LOS掩体判断"], in: filter, y: 400)
+            let scenario = card("场景预设", CGRect(x: 335, y: 246, width: 323, height: 220))
             scenePreview(in: scenario)
+            disabledRows(["预判提前"], in: scenario, y: 140)
+            aimControls(in: aim, filter: filter, scenario: scenario)
         default:
             let recoil = card("Core智能压枪【非无后坐力】", CGRect(x: 0, y: 0, width: 658, height: 474))
             disabledRows(["启用压枪", "停火不压", "垂直补偿", "垂直补偿强度", "水平补偿", "水平补偿强度"], in: recoil, y: 34)

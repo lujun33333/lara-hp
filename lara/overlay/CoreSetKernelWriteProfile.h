@@ -18,6 +18,9 @@ NS_ASSUME_NONNULL_BEGIN
 @interface CoreSetKernelWriteProfileRegistry : NSObject
 + (BOOL)installAuditedProfile:(CoreSetKernelWriteProfile *)profile;
 + (BOOL)matchesCurrentKernel;
+// Read-only evidence. Observed offsets are not an audited profile and never
+// cause installation, exploit startup, or target-page mapping.
++ (NSDictionary<NSString *, id> *)diagnosticSnapshot;
 @end
 
 NS_ASSUME_NONNULL_END

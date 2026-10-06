@@ -223,17 +223,53 @@ static bool CSBoneStatesEqual(const CSBoneState &left, const CSBoneState &right)
 @end
 @implementation CoreSetBoneSegment @end
 
+@interface CoreSetWorldPoint ()
+@property(nonatomic) float x;
+@property(nonatomic) float y;
+@property(nonatomic) float z;
+@end
+@implementation CoreSetWorldPoint
++ (instancetype)pointWithX:(float)x y:(float)y z:(float)z {
+    CoreSetWorldPoint *point = [CoreSetWorldPoint new];
+    point.x = x; point.y = y; point.z = z; return point;
+}
+@end
+
+@interface CoreSetBoneWorldPoint ()
+@property(nonatomic) NSUInteger boneIndex;
+@property(nonatomic) NSUInteger boneCount;
+@property(nonatomic, strong) CoreSetWorldPoint *worldPosition;
+@property(nonatomic) CGPoint screenPoint;
+@end
+@implementation CoreSetBoneWorldPoint @end
+
+static CoreSetWorldPoint *CSWorldPoint(CSVector value) {
+    CoreSetWorldPoint *point = [CoreSetWorldPoint new];
+    point.x = value.x; point.y = value.y; point.z = value.z;
+    return point;
+}
+
 static NSArray<CoreSetBoneSegment *> *CSProjectBones(const CSBoneState &state,
-                                                     CSCamera camera, CGSize size) {
+                                                     CSCamera camera, CGSize size,
+                                                     NSArray<CoreSetBoneWorldPoint *> **worldPoints) {
+    if (worldPoints) *worldPoints = @[];
     CoreSet::Transform component = {};
     std::memcpy(&component, state.component.data(), state.component.size());
     CGPoint points[256] = {};
+    NSMutableArray<CoreSetBoneWorldPoint *> *captured = [NSMutableArray array];
     for (const CSBoneSample &sample : state.samples) {
         CoreSet::Transform bone = {};
         std::memcpy(&bone, sample.bytes.data(), sample.bytes.size());
         CSVector world = {0};
         if (!CoreSet::transformPoint(component, bone.translation, &world) ||
             !CSProject(camera, world, size, &points[sample.index])) return @[];
+        if (worldPoints) {
+            CoreSetBoneWorldPoint *point = [CoreSetBoneWorldPoint new];
+            point.boneIndex = sample.index; point.boneCount = state.array.count;
+            point.worldPosition = CSWorldPoint(world);
+            point.screenPoint = points[sample.index];
+            [captured addObject:point];
+        }
     }
     NSMutableArray<CoreSetBoneSegment *> *segments = [NSMutableArray arrayWithCapacity:14];
     for (unsigned edge = 0; edge < 28; edge += 2) {
@@ -242,11 +278,14 @@ static NSArray<CoreSetBoneSegment *> *CSProjectBones(const CSBoneState &state,
         segment.end = points[state.edges[edge + 1]];
         [segments addObject:segment];
     }
+    if (worldPoints) *worldPoints = [captured copy];
     return segments;
 }
 
 @interface CoreSetPlayerMark ()
 @property(nonatomic) uint64_t actorAddress;
+@property(nonatomic, strong, nullable) CoreSetWorldPoint *actorWorldPosition;
+@property(nonatomic, copy) NSArray<CoreSetBoneWorldPoint *> *boneWorldPoints;
 @property(nonatomic) uint8_t healthStatusCode;
 @property(nonatomic, copy, nullable) NSString *weaponName;
 @property(nonatomic) uint32_t weaponID;
@@ -284,14 +323,20 @@ static NSArray<CoreSetBoneSegment *> *CSProjectBones(const CSBoneState &state,
 @property(nonatomic) NSUInteger observedBotCount;
 @property(nonatomic) double cameraYawDegrees;
 @property(nonatomic) double cameraPitchDegrees;
+@property(nonatomic) double cameraRollDegrees;
 @property(nonatomic) double cameraFieldOfViewDegrees;
 @property(nonatomic) BOOL battleInputsPresent;
+@property(nonatomic, strong, nullable) CoreSetWorldPoint *cameraWorldPosition;
+@property(nonatomic, strong, nullable) CoreSetWorldPoint *localWorldPosition;
+@property(nonatomic) CGSize canvasSize;
 @property(nonatomic) uint64_t controllerAddress;
 @property(nonatomic) uint64_t localActorAddress;
 @property(nonatomic) BOOL localADS;
 @property(nonatomic) BOOL localFiring;
 @property(nonatomic) float controlPitchDegrees;
 @property(nonatomic) float controlYawDegrees;
+@property(nonatomic) float rotationInputPitch;
+@property(nonatomic) float rotationInputYaw;
 @property(nonatomic) double captureCompletedMonotonicSeconds;
 @end
 @implementation CoreSetPlayerSnapshot @end
@@ -455,14 +500,16 @@ BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor, double serverYawDegree
         !CSReadValue(session, generation, local + 0xb78, &localTeam) ||
         localTeam < 1 || localTeam > 100) return nil;
     uint8_t localADS = 0, localFiring = 0;
-    float controlRotation[2] = {0};
+    float controlRotation[2] = {0}, rotationInput[2] = {0};
     if (includeBattleInputs &&
         (local < 0x100000000ULL || local > 0x8000000000ULL - 0x2751 ||
-         controller < 0x100000000ULL || controller > 0x8000000000ULL - 0x628 ||
+         controller < 0x100000000ULL || controller > 0x8000000000ULL - 0x830 ||
          !CSReadValue(session, generation, local + 0x1848, &localADS) ||
          !CSReadValue(session, generation, local + 0x2750, &localFiring) ||
          !CSRead(session, generation, controller + 0x620, controlRotation, sizeof(controlRotation)) ||
+         !CSRead(session, generation, controller + 0x828, rotationInput, sizeof(rotationInput)) ||
          !std::isfinite(controlRotation[0]) || !std::isfinite(controlRotation[1]) ||
+         !std::isfinite(rotationInput[0]) || !std::isfinite(rotationInput[1]) ||
          std::fabs(controlRotation[0]) > 360 || std::fabs(controlRotation[1]) > 360)) return nil;
     NSMutableArray<CoreSetPlayerMark *> *marks = [NSMutableArray array];
     NSMutableArray<CoreSetGrenadeMark *> *grenadeMarks = [NSMutableArray array];
@@ -603,6 +650,8 @@ BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor, double serverYawDegree
                                                    &namePointer, &nameRaw, &playerName)) return nil;
             CoreSetPlayerMark *mark = [CoreSetPlayerMark new];
             mark.actorAddress = actor; mark.bot = ai != 0;
+            if (includeBattleInputs) mark.actorWorldPosition = CSWorldPoint(position);
+            mark.boneWorldPoints = @[];
             mark.healthStatusCode = status;
             mark.playerName = playerName; mark.teamID = team;
             mark.health = health; mark.maximumHealth = maximum;
@@ -623,14 +672,19 @@ BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor, double serverYawDegree
                     mark.warningServerYawDegrees = @(yaw);
             }
             mark.boneSegments = @[];
-            if (onScreen && (ai ? botBones : playerBones) &&
-                (boneDistanceLimit == 0 || distance <= boneDistanceLimit)) {
+            const bool wantsDrawBones = (ai ? botBones : playerBones) &&
+                (boneDistanceLimit == 0 || distance <= boneDistanceLimit);
+            if (onScreen && (wantsDrawBones || includeBattleInputs)) {
                 if (observedBones.size() >= CSMaxBoneActors) return nil;
                 CSBoneState bones;
                 bool present = false;
                 if (!CSReadBoneState(session, generation, actor, &bones, &present)) return nil;
                 if (present) {
-                    mark.boneSegments = CSProjectBones(bones, camera, size);
+                    NSArray<CoreSetBoneWorldPoint *> *worldPoints = @[];
+                    NSArray<CoreSetBoneSegment *> *segments = CSProjectBones(bones, camera, size,
+                        includeBattleInputs ? &worldPoints : nullptr);
+                    if (wantsDrawBones) mark.boneSegments = segments;
+                    if (includeBattleInputs) mark.boneWorldPoints = worldPoints;
                     observedBones.push_back({actor, std::move(bones)});
                 }
             }
@@ -746,12 +800,14 @@ BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor, double serverYawDegree
     }
     if (includeBattleInputs) {
         uint8_t adsAfter = 0, firingAfter = 0;
-        float rotationAfter[2] = {0};
+        float rotationAfter[2] = {0}, rotationInputAfter[2] = {0};
         if (!CSReadValue(session, generation, local + 0x1848, &adsAfter) ||
             !CSReadValue(session, generation, local + 0x2750, &firingAfter) ||
             !CSRead(session, generation, controller + 0x620, rotationAfter, sizeof(rotationAfter)) ||
+            !CSRead(session, generation, controller + 0x828, rotationInputAfter, sizeof(rotationInputAfter)) ||
             adsAfter != localADS || firingAfter != localFiring ||
-            std::memcmp(controlRotation, rotationAfter, sizeof(controlRotation)) != 0) return nil;
+            std::memcmp(controlRotation, rotationAfter, sizeof(controlRotation)) != 0 ||
+            std::memcmp(rotationInput, rotationInputAfter, sizeof(rotationInput)) != 0) return nil;
     }
     if (!session.ready || session.generation != generation) return nil;
     CoreSetPlayerSnapshot *snapshot = [CoreSetPlayerSnapshot new];
@@ -759,15 +815,21 @@ BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor, double serverYawDegree
     snapshot.imageBase = base; snapshot.snapshotID = [NSUUID UUID];
     snapshot.cameraYawDegrees = camera.rotation.y;
     snapshot.cameraPitchDegrees = camera.rotation.x;
+    snapshot.cameraRollDegrees = camera.rotation.z;
     snapshot.cameraFieldOfViewDegrees = camera.fov;
     snapshot.battleInputsPresent = includeBattleInputs;
+    snapshot.canvasSize = size;
     if (includeBattleInputs) {
+        snapshot.cameraWorldPosition = CSWorldPoint(camera.location);
+        snapshot.localWorldPosition = CSWorldPoint(localPosition);
         snapshot.controllerAddress = controller;
         snapshot.localActorAddress = local;
         snapshot.localADS = localADS != 0;
         snapshot.localFiring = localFiring != 0;
         snapshot.controlPitchDegrees = controlRotation[0];
         snapshot.controlYawDegrees = controlRotation[1];
+        snapshot.rotationInputPitch = rotationInput[0];
+        snapshot.rotationInputYaw = rotationInput[1];
     }
     snapshot.captureCompletedMonotonicSeconds = CACurrentMediaTime();
     snapshot.marks = [marks copy];

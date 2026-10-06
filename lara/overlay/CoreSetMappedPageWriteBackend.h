@@ -9,6 +9,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) BOOL ready;
 @property(nonatomic, readonly) BOOL pendingCleanup;
 @property(nonatomic, readonly) BOOL aliasesReleased;
+// Does not connect, start the exploit, map a page, or write target data.
+- (NSDictionary<NSString *, id> *)diagnosticSnapshot;
 - (instancetype)initWithReadSession:(CoreSetReadSession *)readSession;
 - (BOOL)connectForController:(uint64_t)controller;
 - (BOOL)matchesPID:(int32_t)pid imageBase:(uint64_t)imageBase

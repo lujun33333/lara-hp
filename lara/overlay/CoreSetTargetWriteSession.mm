@@ -2,6 +2,8 @@
 #import "CoreSetReadSession.h"
 #import "CoreSetMappedPageWriteBackend.h"
 #include "CoreSetTargetWriteContract.h"
+#include "CoreSetTargetWriteCleanupContract.h"
+#include "CoreSetTargetWriteReadLease.h"
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -10,13 +12,26 @@
 - (instancetype)initWithReadTaskPortReleased:(BOOL)readTaskPortReleased
                          mappedAliasReleased:(BOOL)mappedAliasReleased
                           generationAdvanced:(BOOL)generationAdvanced
+                                backendClean:(BOOL)backendClean
+                           noUnresolvedState:(BOOL)noUnresolvedState
+                        targetWriteAttempted:(BOOL)targetWriteAttempted
                                   noInFlight:(BOOL)noInFlight {
     if ((self = [super init])) {
         _readTaskPortReleased = readTaskPortReleased;
         _mappedAliasReleased = mappedAliasReleased;
         _generationAdvanced = generationAdvanced;
         _noInFlight = noInFlight;
-        _complete = readTaskPortReleased && mappedAliasReleased && generationAdvanced && noInFlight;
+        _backendClean = backendClean;
+        _noUnresolvedState = noUnresolvedState;
+        _targetWriteAttempted = targetWriteAttempted;
+        CoreSet::TargetWriteCleanupReceipt receipt {
+            (bool)readTaskPortReleased, (bool)mappedAliasReleased,
+            (bool)generationAdvanced, (bool)noInFlight, (bool)backendClean,
+            (bool)noUnresolvedState, (bool)targetWriteAttempted
+        };
+        _resourcesReleased = receipt.resourcesReleased();
+        _complete = receipt.complete();
+        _mayReportRestored = receipt.mayReportRestored();
     }
     return self;
 }
@@ -42,6 +57,7 @@
     BOOL _pendingCleanup;
     BOOL _backendBound;
     BOOL _stopped;
+    BOOL _targetWriteAttempted;
 }
 @end
 
@@ -96,11 +112,16 @@
                 completedBytes:0 reason:@"active request/snapshot authority unavailable"];
         }
         if (![_readSession connect] || _readSession.processID != pid ||
-            _readSession.imageBase != imageBase || _readSession.generation != generation) {
+            _readSession.imageBase != imageBase || !_readSession.generation) {
             _pendingCleanup = _backendBound;
             return [[CoreSetTargetWriteResult alloc] initWithCommitted:NO pending:_pendingCleanup
                 completedBytes:0 reason:@"target read identity changed"];
         }
+        // Request generation belongs to the captured snapshot's read owner and
+        // is revalidated by authority. This independent reader has its own lease;
+        // coincidentally equal generation numbers do not bind different owners.
+        const uint64_t readGeneration = _readSession.generation;
+        const CoreSet::TargetWriteReadLease independentReadLease {pid, imageBase, readGeneration};
         float rotation[2] = {0};
         memcpy(rotation, newValue.bytes, length);
         if (!std::isfinite(rotation[0]) || (length == 8 && !std::isfinite(rotation[1])))
@@ -112,7 +133,7 @@
                 completedBytes:0 reason:@"verified mapped-page kernel profile unavailable or binding stale"];
         }
         _backendBound = YES;
-        if (![_backend matchesPID:pid imageBase:imageBase generation:generation controller:controller]) {
+        if (![_backend matchesPID:pid imageBase:imageBase generation:readGeneration controller:controller]) {
             _pendingCleanup = YES;
             return [[CoreSetTargetWriteResult alloc] initWithCommitted:NO pending:YES
                 completedBytes:0 reason:@"mapped-page binding changed"];
@@ -139,21 +160,27 @@
                 current.axis == lease.axis &&
                 current.requestToken == lease.requestToken &&
                 current.snapshotID == lease.snapshotID && _generation == writeGeneration &&
+                independentReadLease.matches(_readSession.ready, _readSession.processID,
+                    _readSession.imageBase, _readSession.generation) &&
                 [_authority authorizesPID:pid imageBase:imageBase generation:generation
                     controller:controller lane:lane slot:slot axis:axis
                     requestToken:requestToken snapshotID:snapshotID] &&
-                [_backend matchesPID:pid imageBase:imageBase generation:generation controller:controller];
+                [_backend matchesPID:pid imageBase:imageBase generation:readGeneration controller:controller];
         };
         auto read = [&](uint64_t address, void *buffer, size_t length) -> size_t {
             size_t completed = 0;
             NSString *error = nil;
-            return [_readSession readAt:address to:buffer length:length generation:generation
+            return [_readSession readAt:address to:buffer length:length generation:readGeneration
                 completedBytes:&completed error:&error] ? completed : 0;
         };
         auto write = [&](uint64_t address, const void *buffer, size_t length) -> size_t {
-            return address == controller + offset && length == expectedOld.length ?
-                [_backend writeControllerSlot:slot axis:axis controller:controller
-                                        bytes:buffer length:length] : 0;
+            const bool matchesSlot = address == controller + offset && length == expectedOld.length;
+            if (!matchesSlot) return 0;
+            // A failed/partial backend attempt can still have changed target bytes.
+            // Disconnect never restores those bytes, so do not claim restoration.
+            _targetWriteAttempted = YES;
+            return [_backend writeControllerSlot:slot axis:axis controller:controller
+                                        bytes:buffer length:length];
         };
         auto result = _gate.transact(lease, oldBytes, newBytes, identity, read, write);
         _pendingCleanup = result.pending || _backend.pendingCleanup;
@@ -179,6 +206,8 @@
         return [[CoreSetTargetWriteCleanupResult alloc]
             initWithReadTaskPortReleased:readCleanup.taskPortReleased
             mappedAliasReleased:mappedReleased generationAdvanced:advanced
+            backendClean:backendClean noUnresolvedState:!_pendingCleanup
+            targetWriteAttempted:_targetWriteAttempted
             noInFlight:drained];
     }
 }

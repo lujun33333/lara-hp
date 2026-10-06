@@ -38,9 +38,18 @@ enum CoreSetField: Hashable {
     case warningEnabled, warningIgnoreBots, warningRange, warningTextSize
     case localAimCircle, localAimCircleSize, localAimPreviewLine, localAimPreviewMarker
     case localAimDynamicCircle, localAimPreviewBots, localAimPreviewDistance
+    case basicAimEnabled, basicAimTrigger, basicAimDistance, basicAimRadius, basicAimBots
+    case basicAimScene, basicAimStrength, basicAimSmoothing, basicAimHorizontalSpeed
+    case basicAimVerticalSpeed, basicAimLockSameTarget, basicAimPoint
+    case basicAimLockThreshold, basicAimConfirmationFrames, basicAimTakeoverPause
 
     static func required(for capability: CoreSetCapability) -> Set<CoreSetField> {
         switch capability {
+        case .aimControl: return [.basicAimEnabled, .basicAimTrigger, .basicAimDistance, .basicAimRadius,
+                                  .basicAimBots, .basicAimScene, .basicAimStrength, .basicAimSmoothing,
+                                  .basicAimHorizontalSpeed, .basicAimVerticalSpeed, .basicAimLockSameTarget,
+                                  .basicAimPoint, .basicAimLockThreshold, .basicAimConfirmationFrames,
+                                  .basicAimTakeoverPause]
         case .frameScheduling: return [.framesPerSecond]
         case .localAimDisplay: return [.localAimCircle, .localAimCircleSize,
                                        .localAimPreviewLine, .localAimPreviewMarker,
@@ -94,7 +103,7 @@ enum CoreSetApplyOutcome<Value: Equatable> {
     case failed(reason: String)
 }
 
-enum CoreSetStopOutcome { case restored, failed(reason: String) }
+enum CoreSetStopOutcome { case restored, stopped(reason: String), failed(reason: String) }
 
 protocol CoreSetFeatureConsumer: AnyObject {
     associatedtype State: Equatable
@@ -261,6 +270,10 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         switch outcome {
         case .restored:
             mayHaveEffects = false; restoration = .confirmed; phase = .stopped; actual = nil
+        case .stopped:
+            // No continued action remains. The dynamic view angle was not rolled
+            // back; confirmed here means the stop barrier, not byte restoration.
+            mayHaveEffects = false; restoration = .notNeeded; phase = .stopped; actual = nil
         case .failed(let reason): restoration = .failed(reason); phase = .failed(reason)
         }
         return true
@@ -595,7 +608,7 @@ struct CoreSetAimSettings: Equatable {
     var custom = CoreSetAimCustomSettings()
     var showCustomControls: Bool { scene == .custom }
     var showLockStrength: Bool { scene != nil && scene != .custom }
-    // Switching scenes preserves custom values; preset-derived values remain unresolved.
+    // Switching scenes preserves custom values. Preset rows 0/1/2 are fixed-hash Core v1.7 values.
 }
 
 // A local HUD preview only. This state never changes aimControl or target memory.

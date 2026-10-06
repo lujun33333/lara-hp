@@ -177,6 +177,8 @@ final class CoreSetRuntimeCoordinator {
     private var stopping = false
     private var stopReceiptsPending = false
     private var submittedGeneration: UInt64?
+    private var aimSuspendedForHost = false
+    private var activateAfterAimStop = false
     private let frameComposer = CoreSetFrameComposer()
     var localFrameDidConsume: ((CoreSetLocalFrameReceipt) -> Void)?
     private(set) var lastStopResult: CoreSetHUDStopResult?
@@ -205,7 +207,10 @@ final class CoreSetRuntimeCoordinator {
         precondition(Thread.isMainThread)
         return host.restoreRenderFPS()
     }
-    func refreshPlayerAvailability() { menu.refreshConsumerAvailability() }
+    func refreshPlayerAvailability() {
+        menu.refreshConsumerAvailability()
+        menu.updateBasicAimStatus(aimConsumer?.status ?? "基础自瞄未绑定")
+    }
     func invalidateAimDisplayObservation() {
         precondition(Thread.isMainThread)
         aimDisplayConsumer?.invalidateFrame()
@@ -233,7 +238,7 @@ final class CoreSetRuntimeCoordinator {
         if let frameRateConsumer { _ = menu.bindGameConsumer(frameRateConsumer, to: \.frameRate) }
         radarConsumer = CoreSetRadarConsumer(coordinator: self)
         if let radarConsumer { _ = menu.bindGameConsumer(radarConsumer, to: \.radar) }
-        aimConsumer = CoreSetAimConsumer()
+        aimConsumer = CoreSetAimConsumer(coordinator: self)
         if let aimConsumer { _ = menu.bindGameConsumer(aimConsumer, to: \.aim) }
         aimDisplayConsumer = CoreSetAimDisplayConsumer(coordinator: self)
         if let aimDisplayConsumer { _ = menu.bindGameConsumer(aimDisplayConsumer, to: \.aimDisplay) }
@@ -275,6 +280,15 @@ final class CoreSetRuntimeCoordinator {
 
     func activate() {
         guard !stopping, let scene else { return }
+        if aimSuspendedForHost {
+            guard menu.resumeAimConsumer() else {
+                activateAfterAimStop = true
+                publishStatus()
+                return
+            }
+            aimSuspendedForHost = false
+        }
+        activateAfterAimStop = false
         if !host.localSurfacesReady {
             if remoteHostingAdapter == nil, laramgr.shared.rcready,
                let process = laramgr.shared.sbProc {
@@ -304,9 +318,20 @@ final class CoreSetRuntimeCoordinator {
     }
 
     func deactivate() {
-        guard !stopping else { return }
-        host.setApplicationActive(false)
-        hostChanged()
+        guard !stopping, !aimSuspendedForHost else { return }
+        aimSuspendedForHost = true
+        menu.suspendAimConsumer { [weak self] confirmed in
+            guard let self, !self.stopping else { return }
+            if self.activateAfterAimStop, confirmed {
+                self.activateAfterAimStop = false
+                guard self.menu.resumeAimConsumer() else { self.publishStatus(); return }
+                self.aimSuspendedForHost = false
+                self.activate()
+                return
+            }
+            self.host.setApplicationActive(false)
+            self.hostChanged()
+        }
     }
 
     func toggleMenu() { requestVisibility(!host.panelVisible) }
@@ -322,6 +347,20 @@ final class CoreSetRuntimeCoordinator {
     private func hostChanged() {
         if !stopping, host.localSurfacesReady, let scene,
            submittedGeneration != host.generation {
+            if submittedGeneration != nil, !aimSuspendedForHost {
+                aimSuspendedForHost = true
+                menu.suspendAimConsumer { [weak self] confirmed in
+                    guard let self, !self.stopping, confirmed else { return }
+                    _ = self.menu.resumeAimConsumer()
+                    self.aimSuspendedForHost = false
+                    if self.activateAfterAimStop {
+                        self.activateAfterAimStop = false
+                        self.activate()
+                        return
+                    }
+                    self.publishStatus()
+                }
+            }
             for expired in frameComposer.reset(to: host.generation) {
                 aimDisplayConsumer?.consumed(expired)
                 localFrameDidConsume?(expired)

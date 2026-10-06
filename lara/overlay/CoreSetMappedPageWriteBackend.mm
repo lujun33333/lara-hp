@@ -63,6 +63,32 @@ static BOOL CSVerifiedKernelProfile(void) {
 - (BOOL)pendingCleanup { @synchronized (self) { return _pendingCleanup; } }
 - (BOOL)aliasesReleased { @synchronized (self) { return _aliasesReleased; } }
 
+- (NSDictionary<NSString *, id> *)diagnosticSnapshot {
+    @synchronized (self) {
+        NSMutableDictionary<NSString *, id> *result =
+            [[CoreSetKernelWriteProfileRegistry diagnosticSnapshot] mutableCopy];
+        NSMutableArray<NSString *> *failures = [result[@"failureReasons"] mutableCopy];
+        const BOOL readReady = _readSession.ready;
+        const BOOL identityMatches = _ready && readReady &&
+            _readSession.processID == _pid && _readSession.imageBase == _imageBase &&
+            _readSession.generation == _generation;
+        const BOOL kernelShapeValid = CSVerifiedKernelProfile();
+        const BOOL backendReady = _ready && [self identityValid];
+        if (!readReady) [failures addObject:@"target_read_session_not_ready"];
+        if (!kernelShapeValid) [failures addObject:@"mapped_backend_kernel_gate_rejected"];
+        if (!_ready) [failures addObject:@"target_binding_not_created"];
+        else if (!identityMatches || !backendReady) [failures addObject:@"target_binding_stale"];
+        if (_pendingCleanup) [failures addObject:@"mapped_cleanup_pending"];
+        result[@"readSessionReady"] = @(readReady);
+        result[@"readIdentityMatches"] = @(identityMatches);
+        result[@"backendReady"] = @(backendReady);
+        result[@"pendingCleanup"] = @(_pendingCleanup);
+        result[@"aliasesReleased"] = @(_aliasesReleased);
+        result[@"failureReasons"] = failures;
+        return result;
+    }
+}
+
 - (BOOL)identityValid {
     if (!_ready || _pendingCleanup || !CSVerifiedKernelProfile() || !_readSession.ready ||
         _readSession.processID != _pid || _readSession.imageBase != _imageBase ||

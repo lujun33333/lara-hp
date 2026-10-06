@@ -105,4 +105,45 @@ static CoreSetKernelWriteProfile *sProfile;
             [offsets isEqualToDictionary:sProfile.offsets];
     }
 }
++ (NSDictionary<NSString *, id> *)diagnosticSnapshot {
+    @synchronized (self) {
+        const BOOL nativeReady = ds_is_ready();
+        NSString *osBuild = CSKernelSysctl(@"kern.osversion");
+        NSString *device = CSKernelSysctl(@"hw.machine");
+        // CSCurrentKernelUUID only reads an already-ready kernel transport.
+        NSUUID *uuid = nativeReady ? CSCurrentKernelUUID() : nil;
+        NSDictionary *observed = CSCurrentOffsets();
+        NSMutableArray<NSString *> *failures = [NSMutableArray array];
+        if (!nativeReady) [failures addObject:@"kernel_transport_not_ready"];
+        if (!osBuild) [failures addObject:@"os_build_unavailable"];
+        if (!device) [failures addObject:@"device_identifier_unavailable"];
+        if (!uuid) [failures addObject:@"kernel_uuid_unavailable"];
+        if (!sProfile) [failures addObject:@"audited_profile_not_installed"];
+        if (getpagesize() != 0x4000) [failures addObject:@"page_size_unsupported"];
+        if (!kernel_base || (kernel_base & 0x3fff) != 0 || t1sz_boot >= 64)
+            [failures addObject:@"kernel_shape_invalid"];
+        NSMutableArray<NSString *> *offsetMismatches = [NSMutableArray array];
+        if (sProfile) {
+            if (uuid && ![uuid isEqual:sProfile.kernelUUID]) [failures addObject:@"kernel_uuid_mismatch"];
+            if (osBuild && ![osBuild isEqualToString:sProfile.osBuild]) [failures addObject:@"os_build_mismatch"];
+            if (device && ![device isEqualToString:sProfile.device]) [failures addObject:@"device_identifier_mismatch"];
+            for (NSString *key in observed) {
+                if (![observed[key] isEqual:sProfile.offsets[key]]) [offsetMismatches addObject:key];
+            }
+            if (offsetMismatches.count) [failures addObject:@"kernel_offsets_mismatch"];
+        }
+        return @{
+            @"schemaVersion": @1, @"readOnly": @YES,
+            @"kernelTransportReady": @(nativeReady),
+            @"osBuild": osBuild ?: (id)[NSNull null],
+            @"deviceIdentifier": device ?: (id)[NSNull null],
+            @"kernelUUID": uuid.UUIDString ?: (id)[NSNull null],
+            @"profileInstalled": @(sProfile != nil),
+            @"profileMatches": @([self matchesCurrentKernel]),
+            @"observedOffsetsAudited": @NO, @"observedOffsets": observed,
+            @"offsetMismatchKeys": [offsetMismatches sortedArrayUsingSelector:@selector(compare:)],
+            @"failureReasons": failures
+        };
+    }
+}
 @end
