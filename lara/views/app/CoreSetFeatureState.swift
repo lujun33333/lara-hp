@@ -118,12 +118,14 @@ extension CoreSetFeatureConsumer {
     var supportedFields: Set<CoreSetField> { [] }
 }
 
-private final class CoreSetConsumerBinding<Value: Equatable> {
+// The binding stores only erased metadata; State equality is enforced by bind.
+// No generic metadata is needed in its isolated deinitializer.
+private final class CoreSetConsumerBinding {
     let id = UUID()
     weak var owner: AnyObject?
     let currentAvailability: () -> CoreSetAvailability
     let supportedFields: () -> Set<CoreSetField>
-    init<Consumer: CoreSetFeatureConsumer>(_ consumer: Consumer) where Consumer.State == Value {
+    init<Consumer: CoreSetFeatureConsumer>(_ consumer: Consumer) {
         owner = consumer
         currentAvailability = { [weak consumer] in
             consumer?.availability ?? .unavailable(reason: "Consumer released")
@@ -146,7 +148,7 @@ struct CoreSetFeatureChannel<Value: Equatable> {
     private(set) var suspended = false
     // Tracks possible effects even after a failed/lost apply acknowledgement.
     private var mayHaveEffects = false
-    private var binding: CoreSetConsumerBinding<Value>?
+    private var binding: CoreSetConsumerBinding?
 
     init(capability: CoreSetCapability, desired: Value) {
         self.capability = capability
