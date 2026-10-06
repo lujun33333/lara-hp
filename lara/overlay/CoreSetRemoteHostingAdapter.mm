@@ -4,7 +4,7 @@
 #import <QuartzCore/QuartzCore.h>
 #include <cstring>
 #include <cmath>
-extern int proc_name(int pid, void *buffer, uint32_t buffersize);
+extern "C" int proc_name(int pid, void *buffer, uint32_t buffersize);
 
 static NSError *CSHostError(NSInteger code, NSString *message) {
     return [NSError errorWithDomain:@"CoreSetRemoteHosting" code:code
