@@ -172,7 +172,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 - (BOOL)createSide:(CoreSetRemoteHostSide *)side level:(double)level {
     if (![self identityValid] || !side.context || !side.source ||
         !std::isfinite(level)) return NO;
-    uint64_t workspace = 0, clsWindow = CSClass(_process, "UIWindow");
+    uint64_t workspace = 0, scene = 0, clsWindow = CSClass(_process, "UIWindow");
     uint64_t clsHost = CSClass(_process, "CALayerHost");
     uint64_t clsWorkspace = CSClass(_process, "SBMainWorkspace");
     uint64_t clsColor = CSClass(_process, "UIColor");
@@ -180,7 +180,8 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
         !CSMainInvocation(_process, clsWorkspace, CSSel(_process, "sharedInstance"),
                           nullptr, 0, &workspace) || !workspace ||
         !CSMainInvocation(_process, workspace, CSSel(_process, "mainWindowScene"),
-                          nullptr, 0, &side.scene) || !side.scene) return NO;
+                          nullptr, 0, &scene) || !scene) return NO;
+    side.scene = scene;
     uint64_t windowAllocation = 0, layerAllocation = 0;
     if (!CSMessage(_process, clsWindow, CSSel(_process, "alloc"), 0, 0, &windowAllocation) ||
         !windowAllocation) return NO;
@@ -209,10 +210,13 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     if (!(frame.size.width > 0 && frame.size.height > 0)) return NO;
     BOOL disabled = NO;
     uint64_t clearColor = 0;
+    uint64_t windowLayer = 0;
+    const uint32_t context = side.context;
+    const uint64_t layer = side.layer;
     if (!CSMainInvocation(_process, clsColor, CSSel(_process, "clearColor"),
                           nullptr, 0, &clearColor) || !clearColor ||
         !CSMainInvocation(_process, side.window, CSSel(_process, "setWindowScene:"),
-                          &side.scene, sizeof(side.scene), nullptr) ||
+                          &scene, sizeof(scene), nullptr) ||
         !CSMainInvocation(_process, side.window, CSSel(_process, "setFrame:"),
                           &frame, sizeof(frame), nullptr) ||
         !CSMainInvocation(_process, side.window, CSSel(_process, "setWindowLevel:"),
@@ -224,13 +228,15 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
         !CSMainInvocation(_process, side.window, CSSel(_process, "setBackgroundColor:"),
                           &clearColor, sizeof(clearColor), nullptr) ||
         !CSMainInvocation(_process, side.window, CSSel(_process, "layer"),
-                          nullptr, 0, &side.windowLayer) || !side.windowLayer ||
+                          nullptr, 0, &windowLayer) || !windowLayer) return NO;
+    side.windowLayer = windowLayer;
+    if (
         !CSMainInvocation(_process, side.layer, CSSel(_process, "setFrame:"),
                           &frame, sizeof(frame), nullptr) ||
         !CSMainInvocation(_process, side.layer, CSSel(_process, "setContextId:"),
-                          &side.context, sizeof(side.context), nullptr) ||
+                          &context, sizeof(context), nullptr) ||
         !CSMainInvocation(_process, side.windowLayer, CSSel(_process, "addSublayer:"),
-                          &side.layer, sizeof(side.layer), nullptr) ||
+                          &layer, sizeof(layer), nullptr) ||
         !CSMainInvocation(_process, side.window, CSSel(_process, "setHidden:"),
                           &disabled, sizeof(disabled), nullptr) ||
         !CSMainInvocation(_process, CSClass(_process, "CATransaction"),
@@ -251,7 +257,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
         if (error) *error = CSHostError(2, @"Local window context is unavailable");
         return NO;
     }
-    CoreSetRemoteHostSide **slot = surface == CoreSetHUDSurfaceMenu ? &_menu : &_draw;
+    CoreSetRemoteHostSide * __strong *slot = surface == CoreSetHUDSurfaceMenu ? &_menu : &_draw;
     if (*slot) {
         BOOL unchanged = (*slot).source == window && (*slot).context == context &&
             [self sideObserved:*slot];
@@ -275,7 +281,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
         if (error) *error = CSHostError(5, @"Main-thread serialized cleanup required");
         return NO;
     }
-    CoreSetRemoteHostSide **slot = surface == CoreSetHUDSurfaceMenu ? &_menu : &_draw;
+    CoreSetRemoteHostSide * __strong *slot = surface == CoreSetHUDSurfaceMenu ? &_menu : &_draw;
     CoreSetRemoteHostSide *side = *slot;
     if (!side) return YES;
     if (side.source != window) {
