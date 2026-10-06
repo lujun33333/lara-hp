@@ -20,6 +20,11 @@ private struct CoreSetDirectoryPresentation: Equatable {
 
 // Retains the actual consumer. FeatureChannel itself deliberately uses weak ownership.
 private final class CoreSetMenuConsumer<Value: Equatable>: CoreSetFeatureConsumer {
+    // Swift 6.3's EarlyPerfInliner crashes in this generic isolated destructor.
+    // Keep actor isolation and normal stored-property cleanup; skip only its SIL optimization.
+    @_optimize(none)
+    deinit {}
+
     typealias State = Value
     let capability: CoreSetCapability
     private let readiness: () -> CoreSetAvailability
