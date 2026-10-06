@@ -750,13 +750,11 @@ final class CoreSetMenuViewController: UIViewController {
             caption.minimumScaleFactor = 0.72
             row.addSubview(caption)
             let parts = title.components(separatedBy: "  ")
-            if ranges[title] != nil {
+            if let range = ranges[title] {
                 caption.frame = CGRect(x: 0, y: 0, width: width * 0.45, height: height - 2)
                 let slider = UISlider(frame: CGRect(x: width * 0.46, y: 0, width: width * 0.50, height: height - 2))
-                if let range = ranges[title] {
-                    slider.minimumValue = range.0
-                    slider.maximumValue = range.1
-                }
+                slider.minimumValue = range.0
+                slider.maximumValue = range.1
                 slider.isEnabled = false
                 // A neutral rail carries no claimed live/default value or thumb position.
                 slider.thumbTintColor = .clear

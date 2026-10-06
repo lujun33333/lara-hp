@@ -106,7 +106,7 @@ final class CoreSetAdjustmentConsumer: CoreSetFeatureConsumer {
                 canvasSize: canvas.size) == true { return }
             pendingStop = nil
         }
-        completion(token, coordinator?.lastStopResult?.complete == true ? .restored :
+        completion(token, coordinator?.lastStopResult?.complete.boolValue == true ? .restored :
             .failed(reason: "样式恢复未获确认"))
     }
 }

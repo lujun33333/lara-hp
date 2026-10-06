@@ -293,7 +293,7 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
                 canvasSize: canvas.size) == true { return }
             pendingStop = nil
         }
-        completion(token, coordinator?.lastStopResult?.complete == true
+        completion(token, coordinator?.lastStopResult?.complete.boolValue == true
             ? .restored : .failed(reason: "物资 lane 清空未获确认"))
     }
 
