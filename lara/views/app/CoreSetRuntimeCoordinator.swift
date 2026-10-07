@@ -162,6 +162,8 @@ private final class CoreSetFrameComposer {
 // One scene owns one menu and its authoritative FeatureState. Infrastructure
 // readiness never binds or enables any game feature consumer.
 final class CoreSetRuntimeCoordinator {
+    static let userCancelledLaunchReason = "启动已取消，正在退出 HUD"
+    static let sceneEndedLaunchReason = "窗口会话已结束，启动已取消"
     private static var retained: [UUID: CoreSetRuntimeCoordinator] = [:]
     private let identity = UUID()
     private weak var scene: UIWindowScene?
@@ -195,6 +197,7 @@ final class CoreSetRuntimeCoordinator {
     private var activateAfterAimStop = false
     private var gameLaunchEpoch: UInt64 = 0
     private var gameLaunchPending = false
+    private var pendingLaunchCompletion: ((String?) -> Void)?
     private var returnToLocalPending = false
     private var exitHUDRestorationPending = false
     private var remoteCleanupFailed = false
@@ -369,6 +372,7 @@ final class CoreSetRuntimeCoordinator {
         }
         gameLaunchPending = true
         gameLaunchEpoch &+= 1
+        pendingLaunchCompletion = completion
         let epoch = gameLaunchEpoch
         gameLaunchStatus = "正在准备跨应用悬浮窗"
         publishStatus()
@@ -474,6 +478,8 @@ final class CoreSetRuntimeCoordinator {
     private func finishGameLaunch(epoch: UInt64, error: String?, completion: @escaping (String?) -> Void) {
         guard gameLaunchCurrent(epoch) else { return }
         gameLaunchPending = false
+        let finishedCompletion = pendingLaunchCompletion
+        pendingLaunchCompletion = nil
         gameLaunchStatus = error ?? "跨应用画面已回读；触控待真机验收"
         NSLog("Core-SET: game launch host epoch=%llu result=%@", epoch, gameLaunchStatus ?? "unknown")
         if let scene, scene.activationState != .foregroundActive {
@@ -483,7 +489,7 @@ final class CoreSetRuntimeCoordinator {
             aimSuspendedForHost = false
         }
         publishStatus()
-        completion(error)
+        (finishedCompletion ?? completion)(error)
     }
 
     private func prepareLocalHosting(epoch: UInt64, completion: @escaping (String?) -> Void) {
@@ -785,9 +791,20 @@ final class CoreSetRuntimeCoordinator {
     // panel alone leaves the source windows and remote mirror installed.
     private func exitHostedHUD() {
         precondition(Thread.isMainThread)
-        guard !stopping, !gameLaunchPending, !returnToLocalPending,
+        guard !stopping, !returnToLocalPending,
               remoteHostingAdapter != nil || localHostingAdapter != nil else { return }
         returnToLocalPending = true
+        if gameLaunchPending {
+            // WZ cancels the current launch generation before HUD teardown.
+            // Complete the launcher request exactly once; late open/readback
+            // callbacks fail gameLaunchCurrent(epoch) and cannot republish.
+            gameLaunchEpoch &+= 1
+            gameLaunchPending = false
+            let pendingCompletion = pendingLaunchCompletion
+            pendingLaunchCompletion = nil
+            gameLaunchStatus = Self.userCancelledLaunchReason
+            pendingCompletion?(gameLaunchStatus)
+        }
         exitHUDRestorationPending = true
         menu.setHostedExitAvailable(false)
         let group = DispatchGroup()
@@ -804,6 +821,7 @@ final class CoreSetRuntimeCoordinator {
             guard gameStopped, hostStopped, !self.host.cleanupPending,
                   self.host.installRemoteHostingAdapter(nil) else {
                 self.remoteCleanupFailed = true
+                self.gameLaunchStatus = "HUD 退出清理未确认"
                 self.publishStatus()
                 NSLog("Core-SET: hosted input stage=exit-hud cleanupConfirmed=0")
                 return
@@ -815,6 +833,7 @@ final class CoreSetRuntimeCoordinator {
             self.exitHUDRestorationPending = !channelsResumed
             self.aimSuspendedForHost = false
             self.activateAfterAimStop = false
+            self.gameLaunchStatus = channelsResumed ? "HUD 已退出" : "HUD 功能恢复未确认"
             if self.scene?.activationState == .foregroundActive { self.activate() }
             self.publishStatus()
             NSLog("Core-SET: hosted input stage=exit-hud cleanupConfirmed=1 channelsResumed=%d",
@@ -966,7 +985,10 @@ final class CoreSetRuntimeCoordinator {
         if stopping, let result = lastStopResult { return result }
         gameLaunchEpoch &+= 1
         gameLaunchPending = false
+        let pendingCompletion = pendingLaunchCompletion
+        pendingLaunchCompletion = nil
         stopping = true
+        pendingCompletion?(Self.sceneEndedLaunchReason)
         performanceEpoch = UUID()
         performanceTimer?.cancel()
         performanceTimer = nil

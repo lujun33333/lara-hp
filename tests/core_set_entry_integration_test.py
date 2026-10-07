@@ -219,6 +219,23 @@ need(verify, "host.confirmHostedReadbackAsync", ".milliseconds(1200)",
 assert verify.index("host.confirmHostedReadbackAsync") < verify.index("self.showHostedMenuAndOpenGame")
 need(swift(coordinator, "showHostedMenuAndOpenGame"),
      "stage=menu-visible confirmed=%d panel=%d hosted=%d")
+exit_hud = swift(coordinator, "exitHostedHUD")
+need(exit_hud, "returnToLocalPending = true", "if gameLaunchPending",
+     "gameLaunchEpoch &+= 1", "gameLaunchPending = false",
+     "pendingLaunchCompletion = nil", "pendingCompletion?(gameLaunchStatus)",
+     "gameLaunchStatus = Self.userCancelledLaunchReason",
+     "suspendGameConsumers", "suspendMenuHostConsumer")
+assert exit_hud.index("returnToLocalPending = true") < exit_hud.index("pendingCompletion?(gameLaunchStatus)")
+assert exit_hud.index("gameLaunchEpoch &+= 1") < exit_hud.index("suspendMenuHostConsumer")
+finish_launch = swift(coordinator, "finishGameLaunch")
+need(finish_launch, "guard gameLaunchCurrent(epoch)", "let finishedCompletion = pendingLaunchCompletion",
+     "pendingLaunchCompletion = nil", "(finishedCompletion ?? completion)(error)")
+need(swift(coordinator, "launchGame"), "pendingLaunchCompletion = completion")
+need(swift(coordinator, "stop"), "let pendingCompletion = pendingLaunchCompletion",
+     "pendingLaunchCompletion = nil", "pendingCompletion?(Self.sceneEndedLaunchReason)")
+need(swift(launcher, "launchApplication"),
+     "error != CoreSetRuntimeCoordinator.userCancelledLaunchReason",
+     "error != CoreSetRuntimeCoordinator.sceneEndedLaunchReason")
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
 need(remote_adapter, "kCoreSetRemoteDrawLevel = 10000009.0", "kCoreSetRemoteMenuLevel = 10000010.0",
      "registerBothSurfacesAsync:", "createSide:menu level:kCoreSetRemoteMenuLevel",
@@ -228,6 +245,7 @@ open_game = swift(coordinator, "showHostedMenuAndOpenGame")
 need(open_game, "host.hostedRegistrationReceipt", "requestMenuVisibility(true)",
      "guard confirmed, panelVisible, hosted",
      "CoreSetGameTarget.openApplication", "self.host.confirmHostedReadbackAsync")
+assert open_game.count("gameLaunchCurrent(epoch)") >= 3, "late open/readback callbacks must not revive cancelled launch"
 assert open_game.index("host.hostedRegistrationReceipt") < open_game.index("CoreSetGameTarget.openApplication") < open_game.index("self.host.confirmHostedReadbackAsync")
 assert "CoreSetGameTarget.openApplication" not in swift(launcher, "launchApplication")
 need(swift(launcher, "launchApplication"), "coreSetRuntime.launchGame")

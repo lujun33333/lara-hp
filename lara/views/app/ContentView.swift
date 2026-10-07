@@ -1167,7 +1167,10 @@ final class CoreSetLauncherViewController: UIViewController, AVAudioPlayerDelega
         guard authorizationState.canLaunch else { presentNotice("授权未就绪，无法启动游戏"); return }
         guard let coreSetRuntime else { presentNotice("悬浮宿主未接入，无法启动游戏"); return }
         coreSetRuntime.launchGame { [weak self] error in
-            if let error { self?.presentNotice(error) }
+            if let error, error != CoreSetRuntimeCoordinator.userCancelledLaunchReason,
+               error != CoreSetRuntimeCoordinator.sceneEndedLaunchReason {
+                self?.presentNotice(error)
+            }
         }
     }
 
