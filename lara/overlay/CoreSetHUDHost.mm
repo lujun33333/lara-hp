@@ -263,10 +263,23 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (BOOL)hostedInputMonitorArmed { return _inputArmed.load() && (_touchClient != NULL || _bkInputRegistered); }
 - (BOOL)foregroundInputProbeConfirmed { return _foregroundAXInputObserved.load(); }
 - (BOOL)armForegroundInputProbe {
-    if (!NSThread.isMainThread || !_running || _adapter || !_foreground) return NO;
+    if (!NSThread.isMainThread || _adapter || !_foreground ||
+        UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return NO;
     if (!self.hostedInputMonitorArmed && ![self startInputMonitor]) return NO;
     _foregroundProbeEnabled.store(true);
     return YES;
+}
+- (BOOL)detachUnhostedSourcesAfterProbeFailure {
+    if (!NSThread.isMainThread || _adapter || _menuRegistered || _drawRegistered ||
+        _menuCleanupNeeded || _drawCleanupNeeded || _hostedAsyncStopPending ||
+        _hostedReadbackInFlight) return NO;
+    const CoreSetHUDStopResult stopped = [self stop];
+    const BOOL detached = stopped.complete && !_menuWindow && !_drawWindow &&
+        !_drawCanvas && !_panel && !_floating;
+    const BOOL armed = detached && [self armForegroundInputProbe];
+    NSLog(@"Core-SET: hosted input stage=foreground-probe-reset sourcesDetached=%d monitorArmed=%d",
+          detached, armed);
+    return detached;
 }
 - (NSString *)hostingDiagnosticSnapshot {
     const NSInteger sceneState = _menuWindow.windowScene
@@ -846,7 +859,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     return armed;
 }
 - (BOOL)startInputMonitor {
-    if (!NSThread.isMainThread || !_running || _touchClient || _bkInputRegistered) return NO;
+    if (!NSThread.isMainThread || _touchClient || _bkInputRegistered) return NO;
     if (gCoreSetHostedInputOwner && gCoreSetHostedInputOwner != self) {
         NSLog(@"Core-SET: hosted input monitor armed=0 reason=another-owner"); return NO;
     }
@@ -1264,7 +1277,13 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     [_metal setVisible:_activeBackend == CoreSetHUDBackendMetal];
 }
 - (void)setApplicationActive:(BOOL)active {
-    if (!NSThread.isMainThread || !_running || _foreground == active) return;
+    if (!NSThread.isMainThread || _foreground == active) return;
+    if (!_running) {
+        _foreground = active;
+        _foregroundProbeEnabled.store(active && _inputArmed.load());
+        if (!active) _foregroundAXInputObserved.store(false);
+        return;
+    }
     const uint64_t previousGeneration = self.generation;
     // WZ retains the passive HID subscription across foreground/background.
     // invalidateFrames below cancels queued pointers; foreground routing is

@@ -72,6 +72,10 @@ typedef struct CoreSetHUDStopResult {
 // validates only the parser/provider in the foreground, not game touch.
 @property(nonatomic, readonly) BOOL foregroundInputProbeConfirmed;
 - (BOOL)armForegroundInputProbe;
+// Before either hosting tier registers, remove both high-level source windows
+// after a failed foreground probe. The passive monitor is rearmed without a
+// UIWindow so a later ordinary launcher tap can retry without restarting.
+- (BOOL)detachUnhostedSourcesAfterProbeFailure;
 // Uses the next serialized background readback when the current receipt is
 // stale. Completion is on the main thread and tied to this host generation.
 - (void)confirmHostedReadbackAsync:(void (^)(BOOL observed))completion;
