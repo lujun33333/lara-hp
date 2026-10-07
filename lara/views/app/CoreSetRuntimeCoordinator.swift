@@ -182,6 +182,7 @@ final class CoreSetRuntimeCoordinator {
     private var gameLaunchEpoch: UInt64 = 0
     private var gameLaunchPending = false
     private var gameLaunchStatus: String?
+    private var kernelOffsetsRunning = false
     private let frameComposer = CoreSetFrameComposer()
     var localFrameDidConsume: ((CoreSetLocalFrameReceipt) -> Void)?
     private(set) var lastStopResult: CoreSetHUDStopResult?
@@ -351,14 +352,62 @@ final class CoreSetRuntimeCoordinator {
             finishGameLaunch(epoch: epoch, error: "内核环境正在初始化，请稍后重试", completion: completion)
             return
         }
-        if !manager.dsready { offsets_init() }
+        guard !kernelOffsetsRunning else {
+            finishGameLaunch(epoch: epoch, error: "当前设备内核偏移仍在解析，请稍后重试", completion: completion)
+            return
+        }
+        if !manager.dsready {
+            init_offsets()
+            offsets_init()
+        }
         manager.run { [weak self] ready in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
             guard ready else {
                 self.finishGameLaunch(epoch: epoch, error: "内核环境初始化失败，无法建立跨应用悬浮窗", completion: completion)
                 return
             }
-            self.prepareSpringBoardHosting(epoch: epoch, completion: completion)
+            self.prepareKernelOffsets(epoch: epoch, completion: completion)
+        }
+    }
+
+    private func prepareKernelOffsets(epoch: UInt64, completion: @escaping (String?) -> Void) {
+        guard gameLaunchCurrent(epoch) else { return }
+        guard let scene, scene.activationState == .foregroundActive else {
+            finishGameLaunch(epoch: epoch, error: "场景已失活，已取消当前设备内核偏移解析", completion: completion)
+            return
+        }
+        let manager = laramgr.shared
+        if manager.hasOffsets {
+            prepareSpringBoardHosting(epoch: epoch, completion: completion)
+            return
+        }
+        kernelOffsetsRunning = true
+        gameLaunchStatus = "正在获取并解析当前设备内核偏移"
+        NSLog("Core-SET: game launch epoch=%llu stage=kernel-offsets start", epoch)
+        publishStatus()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let fetched = fetchkcache()
+            let loaded = fetched && dlkcache()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.kernelOffsetsRunning = false
+                manager.hasOffsets = loaded
+                NSLog("Core-SET: game launch epoch=%llu stage=kernel-offsets fetched=%d resolved=%d",
+                      epoch, fetched ? 1 : 0, loaded ? 1 : 0)
+                guard self.gameLaunchCurrent(epoch) else { return }
+                guard loaded else {
+                    self.finishGameLaunch(epoch: epoch,
+                        error: fetched ? "当前设备内核偏移解析失败" : "当前设备 kernelcache 获取失败",
+                        completion: completion)
+                    return
+                }
+                self.prepareSpringBoardHosting(epoch: epoch, completion: completion)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(180)) { [weak self] in
+            guard let self, self.gameLaunchCurrent(epoch), self.kernelOffsetsRunning else { return }
+            self.finishGameLaunch(epoch: epoch,
+                error: "当前设备内核偏移解析超时；后台任务结束前请勿重试", completion: completion)
         }
     }
 
@@ -395,14 +444,24 @@ final class CoreSetRuntimeCoordinator {
             finishGameLaunch(epoch: epoch, error: "SpringBoard 远程会话正在初始化，请稍后重试", completion: completion)
             return
         }
+        gameLaunchStatus = "正在初始化 SpringBoard 远程会话"
+        NSLog("Core-SET: game launch epoch=%llu stage=springboard-rc start", epoch)
+        publishStatus()
         manager.rcinit(process: "SpringBoard", migbypass: false) { [weak self] success in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
+            NSLog("Core-SET: game launch epoch=%llu stage=springboard-rc ready=%d",
+                  epoch, success ? 1 : 0)
             guard success, let process = manager.sbProc else {
                 let detail = manager.rcLastError ?? "远程调用初始化失败"
                 self.finishGameLaunch(epoch: epoch, error: "SpringBoard 托管不可用：\(detail)", completion: completion)
                 return
             }
             self.rebuildHostedWindows(process: process, epoch: epoch, completion: completion)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(180)) { [weak self] in
+            guard let self, self.gameLaunchCurrent(epoch), manager.rcrunning else { return }
+            self.finishGameLaunch(epoch: epoch,
+                error: "SpringBoard 远程会话初始化超时；后台任务结束前请勿重试", completion: completion)
         }
     }
 

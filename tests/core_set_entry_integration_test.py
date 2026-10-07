@@ -140,8 +140,11 @@ need(submit, "consumeFrame:frame", "} else {", "host->_lastConsumedSequence = fr
 assert submit.index("consumeFrame:frame") < submit.index("host->_lastConsumedSequence = frame.sequence")
 assert not re.search(r"smoba|UnityFramework|wzhud_|wzesp_", coordinator)
 launch = swift(coordinator, "launchGame")
-need(launch, "axDeviceSupportStatus()", "if !manager.dsready { offsets_init() }", "manager.run", "prepareSpringBoardHosting")
-assert launch.index("axDeviceSupportStatus()") < launch.index("offsets_init()") < launch.index("manager.run")
+need(launch, "axDeviceSupportStatus()", "init_offsets()", "offsets_init()", "manager.run", "prepareKernelOffsets")
+assert launch.index("axDeviceSupportStatus()") < launch.index("init_offsets()") < launch.index("offsets_init()") < launch.index("manager.run") < launch.index("prepareKernelOffsets")
+kernel_offsets = swift(coordinator, "prepareKernelOffsets")
+need(kernel_offsets, "fetchkcache()", "fetched && dlkcache()", "manager.hasOffsets = loaded", "prepareSpringBoardHosting", ".seconds(180)")
+assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && dlkcache()") < kernel_offsets.index("manager.hasOffsets = loaded") < kernel_offsets.index("guard loaded else") < kernel_offsets.rindex("prepareSpringBoardHosting")
 hosting = swift(coordinator, "rebuildHostedWindows")
 need(hosting, "suspendAimConsumer", "host.stop()", "installRemoteHostingAdapter(adapter)",
      "host.startLocal(in: scene", "host.crossApplicationHosted")
