@@ -140,7 +140,8 @@ need(submit, "consumeFrame:frame", "} else {", "host->_lastConsumedSequence = fr
 assert submit.index("consumeFrame:frame") < submit.index("host->_lastConsumedSequence = frame.sequence")
 assert not re.search(r"smoba|UnityFramework|wzhud_|wzesp_", coordinator)
 launch = swift(coordinator, "launchGame")
-need(launch, "axDeviceSupportStatus()", "manager.run", "prepareSpringBoardHosting")
+need(launch, "axDeviceSupportStatus()", "if !manager.dsready { offsets_init() }", "manager.run", "prepareSpringBoardHosting")
+assert launch.index("axDeviceSupportStatus()") < launch.index("offsets_init()") < launch.index("manager.run")
 hosting = swift(coordinator, "rebuildHostedWindows")
 need(hosting, "suspendAimConsumer", "host.stop()", "installRemoteHostingAdapter(adapter)",
      "host.startLocal(in: scene", "host.crossApplicationHosted")

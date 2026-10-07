@@ -351,6 +351,7 @@ final class CoreSetRuntimeCoordinator {
             finishGameLaunch(epoch: epoch, error: "内核环境正在初始化，请稍后重试", completion: completion)
             return
         }
+        if !manager.dsready { offsets_init() }
         manager.run { [weak self] ready in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
             guard ready else {
