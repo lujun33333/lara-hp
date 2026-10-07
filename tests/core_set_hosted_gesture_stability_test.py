@@ -126,9 +126,14 @@ assert 'cleanupCapable=%d' in ax_callback
 active = body(host, "- (void)setApplicationActive:")
 assert "[self disarmHostedInput]" not in active
 assert "[self invalidateFrames]" in active
-assert "[self setPanelVisible:NO]" in active, "remote panel must collapse on background transition"
+assert "[self setPanelVisible:NO]" not in active, "WZ preserves panel visibility across app switch"
 toggle = body(host, "- (void)togglePanel")
-assert "reason=remote-UIKit-panel-toggle" in toggle
+assert "reason=remote-UIKit-panel-toggle" not in toggle
+assert "[self togglePanelFromHostedPointer]" in toggle
+assert "source=UIKit control=host.floating" in toggle
+assert "usesDirectSourceInteraction" not in body(host, "- (void)dragFloating:")
+assert "source=UIKit control=host.floating phase=%ld" in body(host, "- (void)dragFloating:")
+assert "stage=dispatch source=HID control=%@" in end_gate
 assert "[self togglePanelFromHostedPointer]" in end_gate
 assert "[self disarmHostedInput]" in body(host, "- (CoreSetHUDStopResult)stop") or \
        "[self disarmHostedInput]" in body(host, "- (void)stopHostedAsync:")

@@ -655,19 +655,15 @@ final class CoreSetRuntimeCoordinator {
             rollbackGameLaunch(epoch: epoch, error: "跨应用双窗口未通过读回", completion: completion)
             return
         }
-        // Safety adaptation: WZ expands the panel before opening the game,
-        // but this device lost ordinary taps under that full system source.
-        // Wait for a parsed background floating-control touch to expand it.
-        menu.requestMenuVisibility(false) { [weak self] confirmed in
+        // WZ expands its already hosted menu before opening the target app.
+        menu.requestMenuVisibility(true) { [weak self] confirmed in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
             let panelVisible = self.host.panelVisible
-            let floatingReady = self.host.floatingControlReady
             let hosted = self.host.hostedRegistrationReceipt
-            NSLog("Core-SET: game launch epoch=%llu stage=floating-ready confirmed=%d panel=%d floating=%d hosted=%d",
-                  epoch, confirmed ? 1 : 0, panelVisible ? 1 : 0,
-                  floatingReady ? 1 : 0, hosted ? 1 : 0)
-            guard confirmed, !panelVisible, floatingReady, hosted else {
-                self.rollbackGameLaunch(epoch: epoch, error: "游戏内浮球显示未确认", completion: completion)
+            NSLog("Core-SET: game launch epoch=%llu stage=menu-visible confirmed=%d panel=%d hosted=%d",
+                  epoch, confirmed ? 1 : 0, panelVisible ? 1 : 0, hosted ? 1 : 0)
+            guard confirmed, panelVisible, hosted else {
+                self.rollbackGameLaunch(epoch: epoch, error: "游戏内菜单显示未确认", completion: completion)
                 return
             }
             guard !self.aimSuspendedForHost || self.menu.resumeAimConsumer() else {

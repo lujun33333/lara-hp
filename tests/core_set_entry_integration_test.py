@@ -218,15 +218,15 @@ need(verify, "host.confirmHostedReadbackAsync", ".milliseconds(1200)",
      "self.host.confirmHostedReadbackAsync", "guard observed else")
 assert verify.index("host.confirmHostedReadbackAsync") < verify.index("self.showHostedMenuAndOpenGame")
 need(swift(coordinator, "showHostedMenuAndOpenGame"),
-     "stage=floating-ready confirmed=%d panel=%d floating=%d hosted=%d")
+     "stage=menu-visible confirmed=%d panel=%d hosted=%d")
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
 need(remote_adapter, "kCoreSetRemoteDrawLevel = 10000009.0", "kCoreSetRemoteMenuLevel = 10000010.0",
      "registerBothSurfacesAsync:", "createSide:menu level:kCoreSetRemoteMenuLevel",
      "createSide:draw level:kCoreSetRemoteDrawLevel")
 assert "createSide:side level:window.windowLevel" not in remote_adapter
 open_game = swift(coordinator, "showHostedMenuAndOpenGame")
-need(open_game, "host.hostedRegistrationReceipt", "requestMenuVisibility(false)",
-     "host.floatingControlReady", "guard confirmed, !panelVisible, floatingReady, hosted",
+need(open_game, "host.hostedRegistrationReceipt", "requestMenuVisibility(true)",
+     "guard confirmed, panelVisible, hosted",
      "CoreSetGameTarget.openApplication", "self.host.confirmHostedReadbackAsync")
 assert open_game.index("host.hostedRegistrationReceipt") < open_game.index("CoreSetGameTarget.openApplication") < open_game.index("self.host.confirmHostedReadbackAsync")
 assert "CoreSetGameTarget.openApplication" not in swift(launcher, "launchApplication")

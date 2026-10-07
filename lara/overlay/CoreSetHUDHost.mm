@@ -666,7 +666,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     if ([identifier isEqualToString:@"host.floating"]) {
         if (!floatingDragged) [self togglePanelFromHostedPointer];
         dispatched = YES;
-        NSLog(@"Core-SET: hosted input stage=actual capability=floatingDrag confirmed=%d",
+        NSLog(@"Core-SET: hosted input stage=actual source=HID capability=floatingDrag confirmed=%d",
               floatingDragged ? 1 : 0);
     } else if (consumer) {
         CGPoint menuPoint = [_menuController.view convertPoint:[self menuWindowPointFromFixedSurface:point] fromView:_menuWindow];
@@ -674,8 +674,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
             phase:CoreSetHostedPointerPhaseEnded atPoint:menuPoint];
     }
     // Dispatch is not an apply receipt; existing menu/channel callbacks own it.
-    NSLog(@"Core-SET: hosted input stage=dispatch control=%@ dispatched=%d generation=%llu",
-          identifier, dispatched, (unsigned long long)generation);
+    NSLog(@"Core-SET: hosted input stage=dispatch source=HID control=%@ dispatched=%d generation=%llu",
+           identifier, dispatched, (unsigned long long)generation);
 }
 - (void)invalidatePendingTouchActions {
     const uint64_t next = _pendingTouchGeneration.fetch_add(1) + 1;
@@ -1192,16 +1192,9 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     if (directHosted && !floatingInitialized && !_panelVisible) [self layoutSurfaces];
 }
 - (void)togglePanel {
-    const BOOL remote = _adapter &&
-        !([_adapter respondsToSelector:@selector(usesDirectSourceInteraction)] &&
-          [_adapter usesDirectSourceInteraction]);
-    if (!_foreground && remote) {
-        // On a remote mirror, UIKit delivery is not a verified physical touch
-        // receipt. Only a parsed HID Begin/End locked to the bubble may expand
-        // the full-screen panel while the game owns the foreground.
-        NSLog(@"Core-SET: hosted input stage=drop reason=remote-UIKit-panel-toggle");
-        return;
-    }
+    if (!_running) return;
+    NSLog(@"Core-SET: hosted input stage=dispatch source=UIKit control=host.floating panelBefore=%d",
+          _panelVisible);
     [self togglePanelFromHostedPointer];
 }
 - (void)togglePanelFromHostedPointer {
@@ -1225,9 +1218,11 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 }
 - (void)dragFloating:(UIPanGestureRecognizer *)gesture {
     if (!_running) return;
-    if (!_foreground && _adapter &&
-        !([_adapter respondsToSelector:@selector(usesDirectSourceInteraction)] &&
-          [_adapter usesDirectSourceInteraction])) return;
+    if (gesture.state == UIGestureRecognizerStateBegan ||
+        gesture.state == UIGestureRecognizerStateEnded ||
+        gesture.state == UIGestureRecognizerStateCancelled)
+        NSLog(@"Core-SET: hosted input stage=gesture source=UIKit control=host.floating phase=%ld",
+              (long)gesture.state);
     if (gesture.state == UIGestureRecognizerStateBegan) _dragOrigin = _floatingCenter;
     if (gesture.state == UIGestureRecognizerStateChanged || gesture.state == UIGestureRecognizerStateEnded) {
         CGPoint delta = [gesture translationInView:_menuWindow.rootViewController.view];
@@ -1259,14 +1254,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     // invalidateFrames below cancels queued pointers; foreground routing is
     // gated by _foreground in drainPendingTouchActionsOnQueue/handleHostedPointer.
     _foreground = active;
-    if (!active && _adapter &&
-        !([_adapter respondsToSelector:@selector(usesDirectSourceInteraction)] &&
-          [_adapter usesDirectSourceInteraction]) && _panelVisible) {
-        // Safety adaptation for an unverified remote input path. Do not leave
-        // a full panel covering the phone across an app switch.
-        [self setPanelVisible:NO];
-        NSLog(@"Core-SET: hosted input stage=remote-panel-collapsed reason=background-transition");
-    }
     _menuWindow.backgroundPassThrough = NO;
     _menuWindow.userInteractionEnabled = YES;
     [self invalidateFrames]; [self selectBackend]; [self layoutSurfaces]; [self publishState];
