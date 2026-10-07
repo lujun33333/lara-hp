@@ -179,24 +179,10 @@ need(aim_consumer, "var supportedFields: Set<CoreSetField> { [] }",
      "自瞄目标写能力未验证，未执行目标写入")
 need(feature_state, "case basicAimScene")
 need(launch, "axDeviceSupportStatus()", "init_offsets()", "offsets_init()", "manager.run", "prepareKernelOffsets")
-need(launch, "foregroundInputProbeConfirmed", "host.hostedInputMonitorArmed")
-assert launch.index("foregroundInputProbeConfirmed") < launch.index("init_offsets()")
-assert launch.index("foregroundInputProbeConfirmed") < launch.index("gameLaunchPending = true")
-need(launch, "foregroundProbeSourcesDetached", "host.startLocal(in: scene, menuController: menu)",
-     "menu.requestMenuVisibility(false)", "self.launchGame(completion: completion)")
-need(swift(coordinator, "activate"), "if foregroundProbeSourcesDetached", "host.armForegroundInputProbe()")
-need(swift(coordinator, "deactivate"),
-     "if foregroundProbeSourcesDetached { host.setApplicationActive(false) }")
-failure = swift(coordinator, "rejectForegroundProbe")
-need(failure, "host.whenHostedReadbackIdle", "self.host.stopHostedAsync",
-     "self.host.installRemoteHostingAdapter(nil)", "self.host.detachUnhostedSourcesAfterProbeFailure()",
-     "let detached = host.detachUnhostedSourcesAfterProbeFailure()")
-assert failure.index("self.host.stopHostedAsync") < failure.index("self.host.installRemoteHostingAdapter(nil)")
-assert failure.index("self.host.installRemoteHostingAdapter(nil)") < failure.index("self.host.detachUnhostedSourcesAfterProbeFailure()")
-detach = objc(host, "detachUnhostedSourcesAfterProbeFailure")
-need(detach, "_adapter", "_menuRegistered", "_drawRegistered", "[self stop]",
-     "!_menuWindow && !_drawWindow", "[self armForegroundInputProbe]")
-assert detach.index("[self stop]") < detach.index("[self armForegroundInputProbe]")
+for forbidden in ("foregroundInputProbeConfirmed", "foregroundProbeSourcesDetached",
+                  "rejectForegroundProbe", "armForegroundInputProbe", ".milliseconds(120)"):
+    assert forbidden not in launch + header + host, forbidden
+assert launch.index("axDeviceSupportStatus()") < launch.index("gameLaunchPending = true") < launch.index("init_offsets()")
 stop_body = objc(host, "stop")
 need(stop_body, "[self invalidateFrames]", "_drawRegistered = NO; _menuRegistered = NO;")
 assert stop_body.index("_drawWindow.hidden = YES; _menuWindow.hidden = YES;") < stop_body.index("[CATransaction flush];")

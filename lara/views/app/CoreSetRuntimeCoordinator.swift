@@ -195,8 +195,6 @@ final class CoreSetRuntimeCoordinator {
     private var activateAfterAimStop = false
     private var gameLaunchEpoch: UInt64 = 0
     private var gameLaunchPending = false
-    private var foregroundProbeDecisionPending = false
-    private var foregroundProbeSourcesDetached = false
     private var returnToLocalPending = false
     private var exitHUDRestorationPending = false
     private var remoteCleanupFailed = false
@@ -325,14 +323,6 @@ final class CoreSetRuntimeCoordinator {
             aimSuspendedForHost = false
         }
         activateAfterAimStop = false
-        if foregroundProbeSourcesDetached {
-            // The normal launcher is the only window owner until a later
-            // foreground AX touch proves the passive parser can run.
-            host.setApplicationActive(true)
-            _ = host.armForegroundInputProbe()
-            hostChanged()
-            return
-        }
         if (remoteHostingAdapter != nil || localHostingAdapter != nil),
            host.localSurfacesReady, !gameLaunchPending {
             // Keep WZ's registered source contexts across app foregrounding.
@@ -355,10 +345,6 @@ final class CoreSetRuntimeCoordinator {
             menu.requestMenuVisibility(false) { [weak self] _ in self?.publishStatus() }
         }
         host.setApplicationActive(true)
-        if remoteHostingAdapter == nil && localHostingAdapter == nil &&
-           !host.armForegroundInputProbe() {
-            NSLog("Core-SET: hosted input stage=foreground-probe armed=0")
-        }
         hostChanged()
     }
 
@@ -380,46 +366,6 @@ final class CoreSetRuntimeCoordinator {
         let support = axDeviceSupportStatus()
         guard support.isSupported else {
             completion("当前设备不支持跨应用悬浮窗：\(support.reason ?? support.identifier)"); return
-        }
-        guard host.foregroundInputProbeConfirmed else {
-            guard !foregroundProbeDecisionPending else {
-                completion("正在核对前台触摸，请稍后"); return
-            }
-            foregroundProbeDecisionPending = true
-            guard host.hostedInputMonitorArmed || host.armForegroundInputProbe() else {
-                rejectForegroundProbe("前台 AX 触摸监听未就绪，已停止跨应用窗口启动", completion: completion)
-                return
-            }
-            // UIKit TouchUpInside and the passive HID callback may arrive on
-            // adjacent main-run-loop turns for the same physical launch tap.
-            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
-                guard let self else { completion("窗口会话已结束"); return }
-                guard self.host.foregroundInputProbeConfirmed else {
-                    self.rejectForegroundProbe("AX 前台触摸未通过核对，已阻止跨应用窗口启动", completion: completion)
-                    return
-                }
-                self.foregroundProbeDecisionPending = false
-                self.launchGame(completion: completion)
-            }
-            return
-        }
-        if foregroundProbeSourcesDetached {
-            guard !host.cleanupPending, host.startLocal(in: scene, menuController: menu) else {
-                completion("前台触摸已确认，但本地源窗口重建失败"); return
-            }
-            foregroundProbeSourcesDetached = false
-            host.setApplicationActive(true)
-            hostChanged()
-            menu.requestMenuVisibility(false) { [weak self] confirmed in
-                guard let self else { completion("窗口会话已结束"); return }
-                guard confirmed, self.host.floatingControlReady else {
-                    self.foregroundProbeDecisionPending = true
-                    self.rejectForegroundProbe("本地浮球恢复未确认，已撤下源窗口", completion: completion)
-                    return
-                }
-                self.launchGame(completion: completion)
-            }
-            return
         }
         gameLaunchPending = true
         gameLaunchEpoch &+= 1
@@ -733,10 +679,12 @@ final class CoreSetRuntimeCoordinator {
                 self.rollbackGameLaunch(epoch: epoch, error: "场景已失活，未发起游戏启动", completion: completion)
                 return
             }
-            guard self.host.armHostedInput() else {
-                self.rollbackGameLaunch(epoch: epoch, error: "游戏内触控监听未就绪，已停止启动", completion: completion)
-                return
-            }
+            // WZ records the HID monitor result but does not make it a launch
+            // prerequisite. A missing monitor remains visible in diagnostics;
+            // the dual-window and game-open receipts still decide this chain.
+            let inputArmed = self.host.armHostedInput()
+            NSLog("Core-SET: game launch epoch=%llu stage=input-monitor armed=%d",
+                  epoch, inputArmed ? 1 : 0)
             NSLog("Core-SET: game launch epoch=%llu stage=open-url targetBundle=%@",
                   epoch, CoreSetGameTarget.bundleIdentifier)
             CoreSetGameTarget.openApplication { [weak self] result in
@@ -837,42 +785,6 @@ final class CoreSetRuntimeCoordinator {
         }
     }
 
-    private func rejectForegroundProbe(_ error: String,
-                                       completion: @escaping (String?) -> Void) {
-        precondition(Thread.isMainThread)
-        if remoteHostingAdapter != nil || localHostingAdapter != nil {
-            returnToLocalPending = true
-            host.whenHostedReadbackIdle { [weak self] in
-                guard let self else { completion("窗口会话已结束"); return }
-                self.host.stopHostedAsync { [weak self] result in
-                    guard let self else { completion("窗口会话已结束"); return }
-                    self.returnToLocalPending = false
-                    self.foregroundProbeDecisionPending = false
-                    guard result.complete.boolValue, !self.host.cleanupPending,
-                          self.host.installRemoteHostingAdapter(nil) else {
-                        self.remoteCleanupFailed = true
-                        self.publishStatus()
-                        completion("\(error)；远端清理未确认，已保留句柄")
-                        return
-                    }
-                    self.remoteHostingAdapter = nil
-                    self.localHostingAdapter = nil
-                    self.menu.setHostedExitAvailable(false)
-                    let detached = self.host.detachUnhostedSourcesAfterProbeFailure()
-                    self.foregroundProbeSourcesDetached = detached
-                    self.hostChanged()
-                    completion(detached ? error : "\(error)；本地源窗口清理未确认")
-                }
-            }
-            return
-        }
-        let detached = host.detachUnhostedSourcesAfterProbeFailure()
-        foregroundProbeSourcesDetached = detached
-        foregroundProbeDecisionPending = false
-        hostChanged()
-        completion(detached ? error : "\(error)；本地源窗口清理未确认")
-    }
-
     // The visible "退出 HUD" control must own actual stop receipts. Hiding the
     // panel alone leaves the source windows and remote mirror installed.
     private func exitHostedHUD() {
@@ -915,7 +827,6 @@ final class CoreSetRuntimeCoordinator {
     }
 
     func deactivate() {
-        if foregroundProbeSourcesDetached { host.setApplicationActive(false) }
         guard !stopping, !aimSuspendedForHost else { return }
         aimSuspendedForHost = true
         menu.suspendAimConsumer { [weak self] confirmed in

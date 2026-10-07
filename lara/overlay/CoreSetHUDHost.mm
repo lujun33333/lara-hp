@@ -194,9 +194,10 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     std::atomic_uint_fast64_t _pendingTouchGeneration;
     BOOL _pendingTouchDrainInFlight;
     std::atomic_bool _inputArmed;
-    std::atomic_bool _foregroundProbeEnabled;
-    std::atomic_bool _foregroundAXInputObserved;
     std::atomic_uint_fast64_t _hidCallbacks;
+    std::atomic_uint_fast64_t _hidTypeVendor;
+    std::atomic_uint_fast64_t _hidTypeDigitizer;
+    std::atomic_uint_fast64_t _hidTypeOther;
     std::atomic_uint_fast64_t _axParsed;
     std::atomic_uint_fast64_t _axClassMissing;
     std::atomic_uint_fast64_t _axFactoryNil;
@@ -232,9 +233,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         _hostedOrientation = UIInterfaceOrientationPortrait;
         _touchPointerID = -1;
         _inputArmed.store(false);
-        _foregroundProbeEnabled.store(false);
-        _foregroundAXInputObserved.store(false);
         _hidCallbacks.store(0); _axParsed.store(0);
+        _hidTypeVendor.store(0); _hidTypeDigitizer.store(0); _hidTypeOther.store(0);
         _axClassMissing.store(0); _axFactoryNil.store(0);
         _axHandMissing.store(0); _axPathsMissing.store(0); _axException.store(0);
         _pendingTouchGeneration.store(1);
@@ -261,26 +261,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (BOOL)hostedRegistrationReceipt { return [self hasHostedRegistrationReceipt]; }
 - (CGSize)logicalCanvasSize { return _drawCanvas ? _drawCanvas.bounds.size : CGSizeZero; }
 - (BOOL)hostedInputMonitorArmed { return _inputArmed.load() && (_touchClient != NULL || _bkInputRegistered); }
-- (BOOL)foregroundInputProbeConfirmed { return _foregroundAXInputObserved.load(); }
-- (BOOL)armForegroundInputProbe {
-    if (!NSThread.isMainThread || _adapter || !_foreground ||
-        UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return NO;
-    if (!self.hostedInputMonitorArmed && ![self startInputMonitor]) return NO;
-    _foregroundProbeEnabled.store(true);
-    return YES;
-}
-- (BOOL)detachUnhostedSourcesAfterProbeFailure {
-    if (!NSThread.isMainThread || _adapter || _menuRegistered || _drawRegistered ||
-        _menuCleanupNeeded || _drawCleanupNeeded || _hostedAsyncStopPending ||
-        _hostedReadbackInFlight) return NO;
-    const CoreSetHUDStopResult stopped = [self stop];
-    const BOOL detached = stopped.complete && !_menuWindow && !_drawWindow &&
-        !_drawCanvas && !_panel && !_floating;
-    const BOOL armed = detached && [self armForegroundInputProbe];
-    NSLog(@"Core-SET: hosted input stage=foreground-probe-reset sourcesDetached=%d monitorArmed=%d",
-          detached, armed);
-    return detached;
-}
 - (NSString *)hostingDiagnosticSnapshot {
     const NSInteger sceneState = _menuWindow.windowScene
         ? _menuWindow.windowScene.activationState : -1;
@@ -746,11 +726,17 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (void)receiveHostedHIDEvent:(CoreSetIOHIDEventRef)event {
     if (!_inputArmed.load() || !event) return;
     const uint64_t callbacks = _hidCallbacks.fetch_add(1) + 1;
+    const uint32_t eventType = (!_bkInputRegistered && _hidEventGetType)
+        ? _hidEventGetType(event) : UINT32_MAX;
+    if (eventType == 1) _hidTypeVendor.fetch_add(1);
+    else if (eventType == 11) _hidTypeDigitizer.fetch_add(1);
+    else _hidTypeOther.fetch_add(1);
     if (callbacks <= 8 || callbacks % 64 == 0)
-        NSLog(@"Core-SET: hosted input stage=callback count=%llu provider=%s type=%u cleanupCapable=%d",
+        NSLog(@"Core-SET: hosted input stage=callback count=%llu provider=%s type=%u vendor=%llu digitizer=%llu other=%llu cleanupCapable=%d",
               (unsigned long long)callbacks, _bkInputRegistered ? "BKSHID" : "IOHID",
-              (!_bkInputRegistered && _hidEventGetType)
-                  ? _hidEventGetType(event) : UINT32_MAX,
+              eventType, (unsigned long long)_hidTypeVendor.load(),
+              (unsigned long long)_hidTypeDigitizer.load(),
+              (unsigned long long)_hidTypeOther.load(),
               _touchClient && _hidCanUnschedule);
     // AX decodes the HID pointer while the callback owns it. Only value types
     // enter the serial queue; the IOHIDEventRef is never retained asynchronously.
@@ -785,14 +771,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         if (phase < 0) return;
         const CGPoint point = representation.location;
         if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
-        if (_foregroundProbeEnabled.load()) {
-            if (phase == CoreSetHostedPointerPhaseBegan && pointerID >= 0) {
-                _foregroundAXInputObserved.store(true);
-                NSLog(@"Core-SET: hosted input stage=foreground-probe validAX=1 provider=%s",
-                      _bkInputRegistered ? "BKSHID" : "IOHID");
-            }
-            return;
-        }
         if (phase == CoreSetHostedPointerPhaseCancelled) {
             [self invalidatePendingTouchActions];
             dispatch_async(dispatch_get_main_queue(), ^{ [self resetHostedPointer]; });
@@ -859,7 +837,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     return armed;
 }
 - (BOOL)startInputMonitor {
-    if (!NSThread.isMainThread || _touchClient || _bkInputRegistered) return NO;
+    if (!NSThread.isMainThread || !_running || _touchClient || _bkInputRegistered) return NO;
     if (gCoreSetHostedInputOwner && gCoreSetHostedInputOwner != self) {
         NSLog(@"Core-SET: hosted input monitor armed=0 reason=another-owner"); return NO;
     }
@@ -997,8 +975,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 }
 - (void)disarmHostedInput {
     _inputArmed.store(false);
-    _foregroundProbeEnabled.store(false);
-    _foregroundAXInputObserved.store(false);
     [self invalidatePendingTouchActions];
     _bkInputRegistered = NO;
     NSArray *cancelledWaiters = [_hostedReadbackWaiters copy];
@@ -1277,19 +1253,12 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     [_metal setVisible:_activeBackend == CoreSetHUDBackendMetal];
 }
 - (void)setApplicationActive:(BOOL)active {
-    if (!NSThread.isMainThread || _foreground == active) return;
-    if (!_running) {
-        _foreground = active;
-        _foregroundProbeEnabled.store(active && _inputArmed.load());
-        if (!active) _foregroundAXInputObserved.store(false);
-        return;
-    }
+    if (!NSThread.isMainThread || !_running || _foreground == active) return;
     const uint64_t previousGeneration = self.generation;
     // WZ retains the passive HID subscription across foreground/background.
     // invalidateFrames below cancels queued pointers; foreground routing is
     // gated by _foreground in drainPendingTouchActionsOnQueue/handleHostedPointer.
     _foreground = active;
-    _foregroundProbeEnabled.store(active && _inputArmed.load());
     if (!active && _adapter &&
         !([_adapter respondsToSelector:@selector(usesDirectSourceInteraction)] &&
           [_adapter usesDirectSourceInteraction]) && _panelVisible) {
