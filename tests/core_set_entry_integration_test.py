@@ -148,10 +148,13 @@ kernel_offsets = swift(coordinator, "prepareKernelOffsets")
 need(kernel_offsets, "fetchkcache()", "fetched && dlkcache()", "manager.hasOffsets = loaded", "prepareSpringBoardHosting", ".seconds(180)")
 assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && dlkcache()") < kernel_offsets.index("manager.hasOffsets = loaded") < kernel_offsets.index("guard loaded else") < kernel_offsets.rindex("prepareSpringBoardHosting")
 hosting = swift(coordinator, "rebuildHostedWindows")
-need(hosting, "suspendAimConsumer", "host.stop()", "installRemoteHostingAdapter(adapter)",
-     "host.startLocal(in: scene", "host.crossApplicationHosted", ".milliseconds(1200)",
-     "let observed = self.host.crossApplicationHosted", "guard observed else")
+need(hosting, "suspendAimConsumer", "suspendMenuHostConsumer", "host.stop()",
+      "resumeMenuHostConsumer()", "installRemoteHostingAdapter(adapter)",
+      "host.startLocal(in: scene", "host.crossApplicationHosted", ".milliseconds(1200)",
+      "let observed = self.host.crossApplicationHosted", "guard observed else")
+assert hosting.index("suspendMenuHostConsumer") < hosting.index("host.stop()") < hosting.index("host.startLocal(in: scene") < hosting.index("resumeMenuHostConsumer()")
 assert hosting.index("let observed = self.host.crossApplicationHosted") < hosting.index("self.showHostedMenuAndOpenGame")
+need(swift(coordinator, "showHostedMenuAndOpenGame"), "stage=menu-visible confirmed=%d panel=%d hosted=%d")
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
 need(remote_adapter, "kCoreSetRemoteDrawLevel = 10000009.0", "kCoreSetRemoteMenuLevel = 10000010.0",
      "surface == CoreSetHUDSurfaceMenu", "createSide:side level:remoteLevel")

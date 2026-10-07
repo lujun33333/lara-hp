@@ -485,36 +485,49 @@ final class CoreSetRuntimeCoordinator {
                 self.finishGameLaunch(epoch: epoch, error: "目标动作停止或场景状态未确认", completion: completion)
                 return
             }
-            let oldWindows = self.host.stop()
-            guard oldWindows.complete.boolValue, !self.host.cleanupPending else {
-                self.finishGameLaunch(epoch: epoch, error: "旧窗口清理未确认，已停止游戏启动", completion: completion)
-                return
-            }
-            self.remoteHostingAdapter = nil
-            guard self.host.installRemoteHostingAdapter(adapter),
-                  self.host.startLocal(in: scene, menuController: self.menu),
-                  self.host.crossApplicationHosted else {
-                let detail = self.host.lastError?.localizedDescription ?? "双窗口注册或读回失败"
-                self.restoreLocalAfterHostingFailure()
-                self.finishGameLaunch(epoch: epoch, error: "SpringBoard 托管失败：\(detail)", completion: completion)
-                return
-            }
-            self.remoteHostingAdapter = adapter
-            self.host.setApplicationActive(true)
-            self.hostChanged()
-            self.gameLaunchStatus = "跨应用双窗口已注册，正在复核"
-            self.publishStatus()
-            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1200)) { [weak self] in
+            self.menu.suspendMenuHostConsumer { [weak self] hostStopped in
                 guard let self, self.gameLaunchCurrent(epoch) else { return }
-                let observed = self.host.crossApplicationHosted
-                NSLog("Core-SET: game launch epoch=%llu stage=dual-host observed=%d",
-                      epoch, observed ? 1 : 0)
-                guard observed else {
-                    self.restoreLocalAfterHostingFailure()
-                    self.finishGameLaunch(epoch: epoch, error: "跨应用双窗口延迟读回失败", completion: completion)
+                guard hostStopped else {
+                    self.finishGameLaunch(epoch: epoch, error: "旧菜单宿主停止回执未确认", completion: completion)
                     return
                 }
-                self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
+                let oldWindows = self.host.stop()
+                guard oldWindows.complete.boolValue, !self.host.cleanupPending else {
+                    self.finishGameLaunch(epoch: epoch, error: "旧窗口清理未确认，已停止游戏启动", completion: completion)
+                    return
+                }
+                self.remoteHostingAdapter = nil
+                guard self.host.installRemoteHostingAdapter(adapter),
+                      self.host.startLocal(in: scene, menuController: self.menu),
+                      self.host.crossApplicationHosted else {
+                    let detail = self.host.lastError?.localizedDescription ?? "双窗口注册或读回失败"
+                    _ = self.menu.resumeMenuHostConsumer()
+                    self.restoreLocalAfterHostingFailure()
+                    self.finishGameLaunch(epoch: epoch, error: "SpringBoard 托管失败：\(detail)", completion: completion)
+                    return
+                }
+                guard self.menu.resumeMenuHostConsumer() else {
+                    self.restoreLocalAfterHostingFailure()
+                    self.finishGameLaunch(epoch: epoch, error: "新菜单宿主状态恢复未确认", completion: completion)
+                    return
+                }
+                self.remoteHostingAdapter = adapter
+                self.host.setApplicationActive(true)
+                self.hostChanged()
+                self.gameLaunchStatus = "跨应用双窗口已注册，正在复核"
+                self.publishStatus()
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1200)) { [weak self] in
+                    guard let self, self.gameLaunchCurrent(epoch) else { return }
+                    let observed = self.host.crossApplicationHosted
+                    NSLog("Core-SET: game launch epoch=%llu stage=dual-host observed=%d",
+                          epoch, observed ? 1 : 0)
+                    guard observed else {
+                        self.restoreLocalAfterHostingFailure()
+                        self.finishGameLaunch(epoch: epoch, error: "跨应用双窗口延迟读回失败", completion: completion)
+                        return
+                    }
+                    self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
+                }
             }
         }
     }
@@ -526,7 +539,11 @@ final class CoreSetRuntimeCoordinator {
         }
         menu.requestMenuVisibility(true) { [weak self] confirmed in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
-            guard confirmed, self.host.panelVisible, self.host.crossApplicationHosted else {
+            let panelVisible = self.host.panelVisible
+            let hosted = self.host.crossApplicationHosted
+            NSLog("Core-SET: game launch epoch=%llu stage=menu-visible confirmed=%d panel=%d hosted=%d",
+                  epoch, confirmed ? 1 : 0, panelVisible ? 1 : 0, hosted ? 1 : 0)
+            guard confirmed, panelVisible, hosted else {
                 self.restoreLocalAfterHostingFailure()
                 self.finishGameLaunch(epoch: epoch, error: "游戏内菜单显示未确认", completion: completion)
                 return
