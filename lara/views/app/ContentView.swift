@@ -454,6 +454,13 @@ final class CoreSetLauncherViewController: UIViewController, AVAudioPlayerDelega
             connector.add(draw, forKey: "homeConnectorDraw")
             connectorLayers.append(connector)
             view.layer.addSublayer(connector)
+            #if AX_LOCAL_TEST_AUTH_BYPASS
+            if index == 5 {
+                button.isHidden = true
+                hit.isHidden = true
+                connector.isHidden = true
+            }
+            #endif
         }
         hudButton.addTarget(self, action: #selector(toggleMenu), for: .touchUpInside)
         breathingRing.isUserInteractionEnabled = false
@@ -911,10 +918,14 @@ final class CoreSetLauncherViewController: UIViewController, AVAudioPlayerDelega
         case .failed: authorizationValue = "获取失败"
         case .unverified: authorizationValue = "未激活"
         #if AX_LOCAL_TEST_AUTH_BYPASS
-        case .localTesting: authorizationValue = "本地测试"
+        case .localTesting: authorizationValue = ""
         #endif
         }
+        #if AX_LOCAL_TEST_AUTH_BYPASS
+        expiryLabel.accessibilityLabel = "设备信息"
+        #else
         expiryLabel.accessibilityLabel = authorizationState.statusText
+        #endif
         expiryLabel.accessibilityValue = menuRequestedVisible ? "本地菜单已打开" : "本地菜单已关闭"
         layoutAuthorizationPill()
     }
@@ -1004,9 +1015,16 @@ final class CoreSetLauncherViewController: UIViewController, AVAudioPlayerDelega
         let width = expiryLabel.bounds.width
         guard width > 0 else { return }
         let middle = width / 2
-        let widths = [max(40, middle - 25), max(40, width - (middle + 12) - 12)]
         let name = axDeviceSupportStatus().marketingName
+        #if AX_LOCAL_TEST_AUTH_BYPASS
+        let widths: [CGFloat] = [max(40, width - 26), 0]
+        let texts = ["\(name.isEmpty ? "iPhone" : name) · iOS \(UIDevice.current.systemVersion)", ""]
+        authorizationGradient.isHidden = true
+        pillIndicator.isHidden = true
+        #else
+        let widths = [max(40, middle - 25), max(40, width - (middle + 12) - 12)]
         let texts = ["\(name.isEmpty ? "iPhone" : name) · iOS \(UIDevice.current.systemVersion)", "授权至：\(authorizationValue)"]
+        #endif
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         pillBackground.frame = expiryLabel.bounds
