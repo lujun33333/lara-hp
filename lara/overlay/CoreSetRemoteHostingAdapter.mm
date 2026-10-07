@@ -1,9 +1,13 @@
 #import "CoreSetRemoteHostingAdapter.h"
 #import "../kexploit/TaskRop/RemoteCall.h"
+#import "../kexploit/darksword.h"
+#import "../kexploit/offsets.h"
+#import "../kexploit/utils.h"
 #import <objc/message.h>
 #import <QuartzCore/QuartzCore.h>
 #include <cstring>
 #include <cmath>
+#include <cerrno>
 extern "C" int proc_name(int pid, void *buffer, uint32_t buffersize);
 static const double kCoreSetRemoteDrawLevel = 10000009.0;
 static const double kCoreSetRemoteMenuLevel = 10000010.0;
@@ -96,13 +100,14 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     uint64_t _hostGeneration;
     pid_t _pid;
     BOOL _busy;
+    BOOL _loggedKernelNameFallback;
 }
 - (instancetype)initWithRemoteCall:(RemoteCall *)remoteCall {
     if ((self = [super init])) { _process = remoteCall; _pid = remoteCall.pid; }
     return self;
 }
 - (uint64_t)hostGeneration { return _hostGeneration; }
-- (BOOL)sessionIdentityReady { return [self identityValid]; }
+- (BOOL)sessionIdentityReady { return self.sessionIdentityFailureReason == nil; }
 - (BOOL)cleanupPending {
     @synchronized (_process) {
         return (_menu && (!_menu.observed || ![self sideObserved:_menu])) ||
@@ -120,12 +125,49 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     if ((_menu || _draw) && !self.bothSurfacesObserved) return;
     _hostGeneration = generation;
 }
-- (BOOL)identityValid {
-    if (!_process || _pid <= 0 || _process.pid != _pid ||
-        _process.trojanMem == 0 || _process.trojanMemIsStackFallback) return NO;
-    char name[256] = {};
-    return proc_name(_pid, name, sizeof(name)) > 0 && strcmp(name, "SpringBoard") == 0;
+- (NSString * _Nullable)sessionIdentityFailureReason {
+    if (!_process) return @"RemoteCall 会话缺失";
+    NSMutableArray<NSString *> *failures = [NSMutableArray array];
+    const pid_t currentPid = _process.pid;
+    if (_pid <= 0) [failures addObject:[NSString stringWithFormat:@"初始 RemoteCall.pid=%d", _pid]];
+    if (currentPid != _pid) {
+        [failures addObject:[NSString stringWithFormat:@"RemoteCall.pid 已变化：%d→%d", _pid, currentPid]];
+    }
+    if (_process.trojanMem == 0) [failures addObject:@"RemoteCall.trojanMem=0"];
+    if (_process.trojanMemIsStackFallback) {
+        [failures addObject:@"RemoteCall.stackFallback=1（当前托管路径不支持）"];
+    }
+    if (_pid > 0) {
+        char name[256] = {};
+        errno = 0;
+        const int length = proc_name(_pid, name, sizeof(name));
+        const int nameError = errno;
+        name[sizeof(name) - 1] = '\0';
+        if (length <= 0) {
+            // proc_name may be unavailable to a sandboxed app even after the
+            // RemoteCall target has been found through the kernel proc list.
+            // Recheck that list and its PID instead of dropping the identity gate.
+            const uint64_t kernelProc = ds_is_ready() && off_proc_p_pid
+                ? proc_find_by_name("SpringBoard") : 0;
+            const int kernelPid = kernelProc
+                ? (int32_t)ds_kread32(kernelProc + off_proc_p_pid) : 0;
+            if (!kernelProc || kernelPid != _pid) {
+                [failures addObject:[NSString stringWithFormat:
+                    @"proc_name(pid=%d)=%d errno=%d；内核 SpringBoard.pid=%d",
+                    _pid, length, nameError, kernelPid]];
+            } else if (!_loggedKernelNameFallback) {
+                _loggedKernelNameFallback = YES;
+                NSLog(@"Core-SET: SpringBoard identity source=kernel proc list pid=%d; proc_name=%d errno=%d",
+                      _pid, length, nameError);
+            }
+        } else if (strcmp(name, "SpringBoard") != 0) {
+            [failures addObject:[NSString stringWithFormat:@"proc_name(pid=%d)=%s，预期 SpringBoard",
+                                 _pid, name]];
+        }
+    }
+    return failures.count ? [failures componentsJoinedByString:@"；"] : nil;
 }
+- (BOOL)identityValid { return self.sessionIdentityFailureReason == nil; }
 - (BOOL)sideObserved:(CoreSetRemoteHostSide *)side {
     if (!side || !side.source || !side.window || !side.layer || !side.windowLayer ||
         !side.context || !side.scene || ![self identityValid]) return NO;

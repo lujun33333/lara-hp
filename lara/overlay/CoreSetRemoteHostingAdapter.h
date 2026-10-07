@@ -10,6 +10,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) BOOL bothSurfacesObserved;
 @property(nonatomic, readonly) BOOL cleanupPending;
 @property(nonatomic, readonly) BOOL sessionIdentityReady;
+@property(nonatomic, copy, readonly, nullable) NSString *sessionIdentityFailureReason;
 @property(nonatomic, readonly) uint64_t hostGeneration;
 - (instancetype)initWithRemoteCall:(RemoteCall *)remoteCall NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;

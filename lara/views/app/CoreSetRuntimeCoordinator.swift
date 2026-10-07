@@ -472,8 +472,10 @@ final class CoreSetRuntimeCoordinator {
             return
         }
         let adapter = CoreSetRemoteHostingAdapter(remoteCall: process)
-        guard adapter.sessionIdentityReady else {
-            finishGameLaunch(epoch: epoch, error: "SpringBoard 会话身份未通过核对", completion: completion)
+        if let reason = adapter.sessionIdentityFailureReason {
+            let detail = "SpringBoard 会话身份未通过核对：\(reason)"
+            globallogger.log("Core-SET: \(detail)")
+            finishGameLaunch(epoch: epoch, error: detail, completion: completion)
             return
         }
         aimSuspendedForHost = true
