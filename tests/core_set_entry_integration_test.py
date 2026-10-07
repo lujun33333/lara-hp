@@ -160,10 +160,10 @@ assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && 
 local = swift(coordinator, "prepareLocalHosting")
 need(local, "CoreSetLocalHostingAdapter()", "adapter.available", "installHostedWindows(adapter: adapter, localMode: true")
 remote = swift(coordinator, "rebuildHostedWindows")
-need(remote, "host.transitionToRemoteHostingAdapter(adapter)", "installHostedWindows(adapter: adapter, localMode: false")
+need(remote, "host.transition(toRemoteHostingAdapter: adapter)", "installHostedWindows(adapter: adapter, localMode: false")
 assert "stopHostedAsync" not in swift(coordinator, "fallbackToSpringBoardAfterLocalFailure")
 hosting = swift(coordinator, "installHostedWindows")
-need(hosting, "suspendAimConsumer", "host.attachHostingAdapter(adapter)", "verifyHostedWindows")
+need(hosting, "suspendAimConsumer", "host.attach(adapter)", "verifyHostedWindows")
 assert "host.stop()" not in hosting and "suspendMenuHostConsumer" not in hosting
 assert "CoreSetHostedInputCalibration" not in host
 attach = objc(host[host.index("@implementation CoreSetHUDHost {"):], "attachHostingAdapter")

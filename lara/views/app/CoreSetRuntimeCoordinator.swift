@@ -229,7 +229,14 @@ final class CoreSetRuntimeCoordinator {
     }
     func refreshPlayerAvailability() {
         menu.refreshConsumerAvailability()
-        menu.updateBasicAimStatus(aimConsumer?.status ?? "基础自瞄未绑定")
+        if let availability = aimConsumer?.availability {
+            switch availability {
+            case .unavailable(let reason): menu.updateBasicAimStatus(reason)
+            case .ready: menu.updateBasicAimStatus("基础自瞄消费端已就绪")
+            }
+        } else {
+            menu.updateBasicAimStatus("基础自瞄未绑定")
+        }
     }
     func invalidateAimDisplayObservation() {
         precondition(Thread.isMainThread)
@@ -543,7 +550,7 @@ final class CoreSetRuntimeCoordinator {
         if localHostingAdapter != nil && host.localSurfacesReady {
             host.whenHostedReadbackIdle { [weak self] in
                 guard let self, self.gameLaunchCurrent(epoch) else { return }
-                self.host.transitionToRemoteHostingAdapter(adapter) { [weak self] registered in
+                self.host.transition(toRemoteHostingAdapter: adapter) { [weak self] registered in
                     guard let self, self.gameLaunchCurrent(epoch) else { return }
                     guard registered else {
                         self.rollbackGameLaunch(epoch: epoch,
@@ -588,7 +595,7 @@ final class CoreSetRuntimeCoordinator {
             // the menu host consumer here would also stop those windows.
             if localMode { self.localHostingAdapter = adapter as? CoreSetLocalHostingAdapter }
             else { self.remoteHostingAdapter = adapter as? CoreSetRemoteHostingAdapter }
-            self.host.attachHostingAdapter(adapter) { [weak self] registered in
+            self.host.attach(adapter) { [weak self] registered in
                 guard let self, self.gameLaunchCurrent(epoch) else { return }
                 guard registered else {
                     self.hostedInstallFailed(localMode: localMode, epoch: epoch,
