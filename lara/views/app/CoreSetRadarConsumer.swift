@@ -35,11 +35,13 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
         session.ready && session.capabilities == 1 && coordinator?.playerCanvas != nil
             ? .ready : .unavailable(reason: "目标只读会话或本地绘制宿主未就绪")
     }
-    var supportedFields: Set<CoreSetField> {
-        guard availability == .ready else { return [] }
+    var configurableFields: Set<CoreSetField> {
         return [.radarEnabled, .radarShowDistance, .radarDetectionDistance,
                 .radarRadius, .radarX, .radarY, .warningEnabled,
                 .warningIgnoreBots, .warningRange, .warningTextSize]
+    }
+    var supportedFields: Set<CoreSetField> {
+        availability == .ready ? configurableFields : []
     }
 
     private func probeTarget() {
@@ -68,7 +70,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
         precondition(Thread.isMainThread)
         guard !stopped, availability == .ready, accepts(request.desired), revision < UInt64.max else {
-            completion(request.token, .unavailable(reason: "雷达只读会话或字段未获静态支持")); return
+            completion(request.token, .notApplied(reason: "雷达只读会话或字段未获静态支持")); return
         }
         refresh?.invalidate(); refresh = nil
         revision += 1

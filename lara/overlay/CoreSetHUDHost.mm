@@ -679,8 +679,18 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 }
 - (void)invalidatePendingTouchActions {
     const uint64_t next = _pendingTouchGeneration.fetch_add(1) + 1;
+    __weak CoreSetHUDHost *weakSelf = self;
     dispatch_async(_pendingTouchSerialQueue, ^{
-        self->_pendingTouchActions.reset(next);
+        CoreSetHUDHost *host = weakSelf;
+        if (!host || next != host->_pendingTouchGeneration.load()) return;
+        host->_pendingTouchActions.reset(next);
+        // Place cancellation in the same serial-to-main ordering as delivery.
+        // A later generation must never be cleared by this queued callback.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            CoreSetHUDHost *current = weakSelf;
+            if (current && next == current->_pendingTouchGeneration.load())
+                [current resetHostedPointer];
+        });
     });
 }
 - (void)drainPendingTouchActionsOnQueue {
@@ -717,7 +727,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         }
         dispatch_async(host ? host->_pendingTouchSerialQueue : dispatch_get_main_queue(), ^{
             if (!host) return;
-            if (expired) host->_pendingTouchActions.discardAll();
+            if (expired && generation == host->_pendingTouchGeneration.load())
+                host->_pendingTouchActions.discardAll();
             host->_pendingTouchDrainInFlight = NO;
             [host drainPendingTouchActionsOnQueue];
         });
@@ -758,7 +769,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         if (!paths.count) return;
         if (paths.count != 1) {
             [self invalidatePendingTouchActions];
-            dispatch_async(dispatch_get_main_queue(), ^{ [self resetHostedPointer]; });
             return;
         }
         const int64_t pointerID = (int64_t)paths.firstObject.pathIdentity;
@@ -773,7 +783,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
         if (phase == CoreSetHostedPointerPhaseCancelled) {
             [self invalidatePendingTouchActions];
-            dispatch_async(dispatch_get_main_queue(), ^{ [self resetHostedPointer]; });
             return;
         }
         const uint64_t parsed = _axParsed.fetch_add(1) + 1;

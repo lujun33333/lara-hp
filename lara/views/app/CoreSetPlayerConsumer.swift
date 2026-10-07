@@ -29,11 +29,15 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     }
 
     var availability: CoreSetAvailability {
-        session.ready && session.capabilities == 1
-            ? .ready : .unavailable(reason: "目标 build/UUID 的只读会话未就绪")
+        guard session.ready && session.capabilities == 1 else {
+            return .unavailable(reason: "目标 build/UUID 的只读会话未就绪")
+        }
+        return coordinator?.playerCanvas != nil ? .ready :
+            .unavailable(reason: "本地绘制画布未就绪")
     }
-    var supportedFields: Set<CoreSetField> {
-        guard availability == .ready else { return [] }
+    // These fields can be staged before the target starts; application still
+    // requires the live read lease, canvas and matching renderer receipt.
+    var configurableFields: Set<CoreSetField> {
         return [.actor(.player, .box), .actor(.player, .ray), .actor(.player, .distance),
                 .actor(.player, .bones), .actor(.player, .weapon),
                 .actor(.player, .count),
@@ -44,6 +48,9 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 .actor(.bot, .information),
                 .hideBots, .drawingDistance, .boneDistance,
                 .backIndicator, .backStyle, .backSize, .grenadeWarning]
+    }
+    var supportedFields: Set<CoreSetField> {
+        availability == .ready ? configurableFields : []
     }
 
     private func probeTarget() {
@@ -75,7 +82,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         precondition(Thread.isMainThread)
         guard !stopped, availability == .ready, accepts(request.desired),
               revision < UInt64.max else {
-            completion(request.token, .unavailable(reason: "目标只读会话或字段未获静态支持")); return
+            completion(request.token, .notApplied(reason: "目标只读会话或字段未获静态支持")); return
         }
         refresh?.invalidate(); refresh = nil
         revision += 1

@@ -34,6 +34,11 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
     var availability: CoreSetAvailability {
         coordinator?.playerCanvas != nil ? .ready : .unavailable(reason: "本地 HUD 画布未就绪")
     }
+    var configurableFields: Set<CoreSetField> {
+        [.localAimCircle, .localAimCircleSize, .localAimPreviewLine,
+         .localAimPreviewMarker, .localAimDynamicCircle, .localAimPreviewBots,
+         .localAimPreviewDistance]
+    }
     var supportedFields: Set<CoreSetField> {
         guard availability == .ready else { return [] }
         var fields: Set<CoreSetField> = [.localAimCircle, .localAimCircleSize]
@@ -183,18 +188,18 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         precondition(Thread.isMainThread)
         guard availability == .ready, let canvas = coordinator?.playerCanvas,
               revision < UInt64.max else {
-            completion(request.token, .unavailable(reason: "本地 HUD 画布未就绪")); return
+            completion(request.token, .notApplied(reason: "本地 HUD 画布未就绪")); return
         }
         if (request.desired.circleVisible == true || needsTarget(request.desired)) &&
             radius(request.desired, canvas: canvas.size) == nil {
-            completion(request.token, .unavailable(reason: "请先选择本地预览圈大小")); return
+            completion(request.token, .notApplied(reason: "请先选择本地预览圈大小")); return
         }
         if request.desired.dynamicCircle == true && request.desired.circleVisible != true {
-            completion(request.token, .unavailable(reason: "动态预览圈需先开启本地圈")); return
+            completion(request.token, .notApplied(reason: "动态预览圈需先开启本地圈")); return
         }
         if needsTarget(request.desired) &&
             (!preview.ready || request.desired.maximumDistance.value == nil) {
-            completion(request.token, .unavailable(reason: "只读目标候选或预览筛选尚未就绪")); return
+            completion(request.token, .notApplied(reason: "只读目标候选或预览筛选尚未就绪")); return
         }
         refresh?.invalidate(); refresh = nil
         revision += 1

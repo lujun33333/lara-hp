@@ -93,6 +93,9 @@ struct CoreSetApplyRequest<Value: Equatable> {
 // report .applied from a menu callback or from host-window readiness alone.
 enum CoreSetApplyOutcome<Value: Equatable> {
     case applied(observed: Value)
+    // A synchronous rejection before creating any new effects. An unavailable
+    // receipt after submission is deliberately not equivalent to this outcome.
+    case notApplied(reason: String)
     case unavailable(reason: String)
     case failed(reason: String)
 }
@@ -104,12 +107,15 @@ protocol CoreSetFeatureConsumer: AnyObject {
     var capability: CoreSetCapability { get }
     var availability: CoreSetAvailability { get }
     var supportedFields: Set<CoreSetField> { get }
+    // Local desired-state editing is separate from live apply capability.
+    var configurableFields: Set<CoreSetField> { get }
     func apply(_ request: CoreSetApplyRequest<State>, completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void)
     func stop(_ token: CoreSetRequestToken, completion: @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void)
 }
 
 extension CoreSetFeatureConsumer {
     var supportedFields: Set<CoreSetField> { [] }
+    var configurableFields: Set<CoreSetField> { supportedFields }
 }
 
 private final class CoreSetConsumerBinding<Value: Equatable> {
@@ -117,12 +123,14 @@ private final class CoreSetConsumerBinding<Value: Equatable> {
     weak var owner: AnyObject?
     let currentAvailability: () -> CoreSetAvailability
     let supportedFields: () -> Set<CoreSetField>
+    let configurableFields: () -> Set<CoreSetField>
     init<Consumer: CoreSetFeatureConsumer>(_ consumer: Consumer) where Consumer.State == Value {
         owner = consumer
         currentAvailability = { [weak consumer] in
             consumer?.availability ?? .unavailable(reason: "Consumer released")
         }
         supportedFields = { [weak consumer] in consumer?.supportedFields ?? [] }
+        configurableFields = { [weak consumer] in consumer?.configurableFields ?? [] }
     }
 }
 
@@ -132,6 +140,7 @@ struct CoreSetFeatureChannel<Value: Equatable> {
     private(set) var actual: Value?
     private(set) var availability: CoreSetAvailability = .unavailable(reason: "No consumer attached")
     private(set) var supportedFields: Set<CoreSetField> = []
+    private(set) var configurableFields: Set<CoreSetField> = []
     private(set) var phase: CoreSetActualPhase = .unknown
     private(set) var restoration: CoreSetRestoration = .notNeeded
     private(set) var generation = UUID()
@@ -170,6 +179,19 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         }
         return binding?.currentAvailability() ?? .unavailable(reason: "Consumer released")
     }
+    var canStageDesired: Bool {
+        guard binding?.owner != nil, !suspended, pendingStop == nil,
+              restoration != .pending else { return false }
+        if case .failed = restoration { return false }
+        return true
+    }
+    func fieldConfigurationAvailability(_ field: CoreSetField) -> CoreSetAvailability {
+        guard CoreSetField.required(for: capability).contains(field),
+              binding?.configurableFields().contains(field) == true else {
+            return .unavailable(reason: "该配置字段尚未接入")
+        }
+        return canStageDesired ? .ready : .unavailable(reason: "配置会话正在停止或恢复待确认")
+    }
     mutating func updateDesired(_ edit: (inout Value) -> Void) { edit(&desired) }
 
     // Binding requires a live consumer of this state type and exact capability.
@@ -186,6 +208,7 @@ struct CoreSetFeatureChannel<Value: Equatable> {
     mutating func refreshAvailability() {
         let value = binding?.currentAvailability() ?? .unavailable(reason: "No consumer attached")
         supportedFields = binding?.supportedFields() ?? []
+        configurableFields = binding?.configurableFields() ?? []
         let missing = CoreSetField.required(for: capability).subtracting(supportedFields)
         availability = value == .ready && !missing.isEmpty
             ? .unavailable(reason: "Only \(supportedFields.count) of \(supportedFields.count + missing.count) controls supported")
@@ -229,6 +252,15 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         case .applied(let observed):
             guard binding?.currentAvailability() == .ready else { refreshAvailability(); return false }
             actual = observed; phase = .active
+        case .notApplied(let reason):
+            availability = .unavailable(reason: reason)
+            if actual == nil {
+                mayHaveEffects = false; restoration = .notNeeded; phase = .failed(reason)
+            } else {
+                // The previous observed state can still have effects. Keep its
+                // stop obligation even though this new request changed nothing.
+                phase = .active
+            }
         case .unavailable(let reason): availability = .unavailable(reason: reason); phase = .failed(reason)
         case .failed(let reason): phase = .failed(reason)
         }

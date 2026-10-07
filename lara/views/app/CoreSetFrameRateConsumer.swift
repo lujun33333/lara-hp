@@ -12,16 +12,19 @@ final class CoreSetFrameRateConsumer: CoreSetFeatureConsumer {
         coordinator?.frameRateReady == true ? .ready :
             .unavailable(reason: "当前 CA 事件驱动宿主没有可回读的固定 FPS 调度器")
     }
+    var configurableFields: Set<CoreSetField> { [.framesPerSecond] }
     var supportedFields: Set<CoreSetField> {
-        availability == .ready ? [.framesPerSecond] : []
+        availability == .ready ? configurableFields : []
     }
     func apply(_ request: CoreSetApplyRequest<State>,
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
         precondition(Thread.isMainThread)
         guard availability == .ready,
               let value = request.desired.framesPerSecond.value,
-              (30...144).contains(value),
-              coordinator?.applyFrameRate(value) == true else {
+              (30...144).contains(value) else {
+            completion(request.token, .notApplied(reason: "FPS 调度器或所选参数未就绪")); return
+        }
+        guard coordinator?.applyFrameRate(value) == true else {
             completion(request.token, .unavailable(reason: "FPS 调度器设置或实际读回未确认")); return
         }
         completion(request.token, .applied(observed: request.desired))

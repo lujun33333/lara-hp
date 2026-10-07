@@ -111,6 +111,43 @@ assert not re.search(r"NSLog\([^;]*point\.[xy]", ax_callback, re.S)
 assert "[self invalidatePendingTouchActions]" in ax_callback
 assert "_pendingTouchActions.enqueue" in ax_callback
 assert "_pendingTouchSerialQueue" in ax_callback
+
+
+def check_pending_invalidation(source: str) -> None:
+    invalidation = body(source, "- (void)invalidatePendingTouchActions")
+    assert invalidation.index("_pendingTouchGeneration.fetch_add(1)") < invalidation.index(
+        "dispatch_async(_pendingTouchSerialQueue"
+    )
+    assert invalidation.index("_pendingTouchActions.reset(next)") < invalidation.index(
+        "dispatch_async(dispatch_get_main_queue()"
+    ) < invalidation.index("[current resetHostedPointer]")
+    assert invalidation.index("next != host->_pendingTouchGeneration.load()") < invalidation.index(
+        "_pendingTouchActions.reset(next)"
+    )
+    assert "next == current->_pendingTouchGeneration.load()" in invalidation
+    callback = body(source[source.index("@implementation CoreSetHUDHost {"):],
+                    "- (void)receiveHostedHIDEvent:")
+    assert "^{ [self resetHostedPointer]; }" not in callback
+
+
+implementation = host[host.index("@implementation CoreSetHUDHost {"):]
+check_pending_invalidation(implementation)
+for missing_gate in ("next == current->_pendingTouchGeneration.load()",
+                     "next != host->_pendingTouchGeneration.load()",
+                     "_pendingTouchActions.reset(next)"):
+    try:
+        check_pending_invalidation(implementation.replace(missing_gate, "REMOVED_GATE"))
+    except (AssertionError, ValueError):
+        pass
+    else:
+        raise AssertionError("pending cancellation negative control accepted: " + missing_gate)
+
+drain = body(implementation, "- (void)drainPendingTouchActionsOnQueue")
+assert "if (expired && generation == host->_pendingTouchGeneration.load())" in drain
+assert drain.index("if (expired && generation == host->_pendingTouchGeneration.load())") < drain.index(
+    "host->_pendingTouchActions.discardAll()"
+)
+
 assert "CoreSetHostedInputCalibration" not in host
 assert "IOHIDEventGetTimeStamp" not in host
 assert "BKSHIDEventRegisterEventCallback" in body(

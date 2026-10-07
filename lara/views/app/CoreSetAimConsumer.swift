@@ -15,7 +15,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
 
     func apply(_ request: CoreSetApplyRequest<State>,
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
-        completion(request.token, .unavailable(reason: "自瞄目标写能力未验证，未执行目标写入"))
+        completion(request.token, .notApplied(reason: "自瞄目标写能力未验证，未执行目标写入"))
     }
 
     func stop(_ token: CoreSetRequestToken,

@@ -29,21 +29,24 @@ private final class CoreSetMenuConsumer<Value: Equatable>: CoreSetFeatureConsume
     let capability: CoreSetCapability
     private let readiness: () -> CoreSetAvailability
     private let fields: () -> Set<CoreSetField>
+    private let configurationFields: () -> Set<CoreSetField>
     private let applyBody: (CoreSetApplyRequest<Value>, @escaping (CoreSetRequestToken, CoreSetApplyOutcome<Value>) -> Void) -> Void
     private let stopBody: (CoreSetRequestToken, @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) -> Void
     var availability: CoreSetAvailability { readiness() }
     var supportedFields: Set<CoreSetField> { fields() }
+    var configurableFields: Set<CoreSetField> { configurationFields() }
     init<C: CoreSetFeatureConsumer>(_ consumer: C) where C.State == Value {
         capability = consumer.capability
         readiness = { consumer.availability }
         fields = { consumer.supportedFields }
+        configurationFields = { consumer.configurableFields }
         applyBody = { consumer.apply($0, completion: $1) }
         stopBody = { consumer.stop($0, completion: $1) }
     }
     init(capability: CoreSetCapability, readiness: @escaping () -> CoreSetAvailability,
          apply: @escaping (CoreSetApplyRequest<Value>, @escaping (CoreSetRequestToken, CoreSetApplyOutcome<Value>) -> Void) -> Void,
          stop: @escaping (CoreSetRequestToken, @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) -> Void) {
-        self.capability = capability; self.readiness = readiness; fields = { [] }
+        self.capability = capability; self.readiness = readiness; fields = { [] }; configurationFields = { [] }
         applyBody = apply; stopBody = stop
     }
     func apply(_ request: CoreSetApplyRequest<Value>, completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<Value>) -> Void) {
@@ -73,6 +76,10 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     }
     private(set) var featureState = CoreSetFeatureState()
     private var gameConsumers: [AnyKeyPath: AnyObject] = [:]
+    private var stagedConfigurationPaths: Set<AnyKeyPath> = []
+    private var stagedConfigurationReadiness: [AnyKeyPath: Bool] = [:]
+    private let configurationFeedbackLabel = UILabel()
+    private var configurationFeedback = "配置选择须等待消费者回执后才生效"
     private var hostConsumer: CoreSetMenuConsumer<CoreSetMenuHostSettings>?
     private var hostChannel = CoreSetFeatureChannel(capability: .hostWindow, desired: CoreSetMenuHostSettings())
     private var appearanceConsumer: CoreSetMenuConsumer<CoreSetMenuAppearance>?
@@ -96,6 +103,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         case theme, player(ColorRole), bot(ColorRole), material(Int)
     }
     private final class ColorButton: UIButton { var colorTarget: ColorTarget? }
+    private final class UnavailableInfoButton: UIButton { weak var explainedView: UIView? }
     private var editingColorTarget: ColorTarget?
     private let floatingThemeKey = "DSESPThemeColorV1"
     private let floatingThemeValues = [6, 4, 1, 0, 2, 3, 5]
@@ -158,7 +166,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         case backStyle, previewScene, materialGroup, allMaterialGroups
         case aimTrigger, aimPoint, aimRange, aimBots, aimLock, aimLockStrength
         case aimStart, aimStop, contentScroll, materialScroll
-        case colorEditor, colorRed, colorGreen, colorBlue, colorAlpha, colorApply, colorCancel
+        case colorEditor, colorRed, colorGreen, colorBlue, colorAlpha, colorApply, colorCancel, unavailableInfo
         var allowsDrag: Bool { self == .contentScroll || self == .materialScroll || isSlider }
         var isSlider: Bool {
             switch self {
@@ -191,6 +199,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private var hostedScrollOffset = CGPoint.zero
     private var hostedDispatchControlID: String?
     private var hostedSliderID: String?
+    private weak var trackingUIKitSlider: UISlider?
     private var hostedSliderOriginalValue: Float = 0
     private var hostedColorOverlay: UIView?
     private var hostedColorCard: UIView?
@@ -200,6 +209,15 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private var hostedColorCancelButton: UIButton?
     private var hostedColorTarget: ColorTarget?
     private func registerHosted(_ view: UIView, _ action: HostedAction) {
+        // UIKit sliders also commit on release; rebuilding on each valueChanged
+        // would destroy the control while the finger is still tracking it.
+        if let slider = view as? UISlider,
+           ![.colorRed, .colorGreen, .colorBlue, .colorAlpha].contains(action) {
+            slider.isContinuous = false
+            slider.addTarget(self, action: #selector(beginUIKitSliderTracking(_:)), for: .touchDown)
+            slider.addTarget(self, action: #selector(endUIKitSliderTracking(_:)),
+                             for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        }
         let id = "p\(selectedPage).\(action.rawValue).\(view.tag).\(hostedEntries.count)"
         hostedEntries.append(HostedEntry(view: view, identifier: id, action: action))
     }
@@ -322,6 +340,10 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     }
 
     private func rebuildMenu(preservingCurrentOffset: Bool = true) {
+        if (hostedPointerID != nil && hostedDispatchControlID == nil) || trackingUIKitSlider != nil {
+            homeStatusNeedsRebuild = true
+            return
+        }
         if preservingCurrentOffset { pageContentOffsets[selectedPage] = content.contentOffset }
         hostedPointerID = nil
         homeStatusNeedsRebuild = false
@@ -397,6 +419,15 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             x: min(max(0, offset.x), max(0, content.contentSize.width - content.bounds.width)),
             y: min(max(0, offset.y), max(0, content.contentSize.height - content.bounds.height)))
         registerHostedColorEditor()
+        configurationFeedbackLabel.frame = CGRect(x: 170, y: 1, width: 620, height: 14)
+        configurationFeedbackLabel.font = font(10)
+        configurationFeedbackLabel.textColor = gray(255, 80)
+        configurationFeedbackLabel.adjustsFontSizeToFitWidth = true
+        configurationFeedbackLabel.minimumScaleFactor = 0.7
+        configurationFeedbackLabel.text = configurationFeedback
+        configurationFeedbackLabel.accessibilityLabel = configurationFeedback
+        panel.addSubview(configurationFeedbackLabel)
+        installUnavailableFeedback(in: panel)
     }
 
     @objc private func selectPage(_ sender: UIButton) {
@@ -454,7 +485,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         defer {
             if phase == .ended || phase == .cancelled {
                 if hostedPointerID == identifier { hostedPointerID = nil }
-                if homeStatusNeedsRebuild && hostedPointerID == nil && selectedPage == 0 {
+                if homeStatusNeedsRebuild && hostedPointerID == nil {
                     rebuildMenu()
                 }
             }
@@ -603,9 +634,63 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         case .colorEditor: return showHostedColorEditor(button)
         case .colorApply: return applyHostedColorEditor()
         case .colorCancel: dismissHostedColorEditor(); return true
+        case .unavailableInfo: explainUnavailable(button)
         default: return false
         }
         return true // Invocation only. Original FeatureChannel owns the actual receipt.
+    }
+
+    private func showConfigurationFeedback(_ message: String) {
+        configurationFeedback = message
+        configurationFeedbackLabel.text = message
+        configurationFeedbackLabel.accessibilityLabel = message
+    }
+
+    @objc private func beginUIKitSliderTracking(_ sender: UISlider) { trackingUIKitSlider = sender }
+    @objc private func endUIKitSliderTracking(_ sender: UISlider) {
+        guard trackingUIKitSlider === sender else { return }
+        trackingUIKitSlider = nil
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.trackingUIKitSlider == nil, self.hostedPointerID == nil,
+                  self.homeStatusNeedsRebuild else { return }
+            self.rebuildMenu()
+        }
+    }
+
+    @objc private func explainUnavailable(_ sender: UIButton) {
+        let title = sender.accessibilityLabel ?? sender.currentTitle ?? "该控件"
+        let reason = sender.accessibilityHint ?? "功能尚未接入，未执行操作"
+        showConfigurationFeedback("\(title)：尚未生效；\(reason)")
+        NSLog("Core-SET: hosted input stage=unavailable control=%@ configured=0 confirmed=0",
+              hostedDispatchControlID ?? "UIKit")
+    }
+
+    // Keep unsupported actions fail-closed, while both UIKit and hosted input
+    // can reach an explanation instead of silently falling through to scrolling.
+    private func installUnavailableFeedback(in container: UIView) {
+        for child in container.subviews {
+            if container.subviews.contains(where: { ($0 as? UnavailableInfoButton)?.explainedView === child }) { continue }
+            let disabledControl = (child as? UIControl).map { !$0.isEnabled } ?? false
+            let disabledRow = child.isAccessibilityElement && child.accessibilityTraits.contains(.notEnabled)
+            if disabledControl || disabledRow {
+                let info = UnavailableInfoButton(type: .custom)
+                info.explainedView = child
+                info.frame = child.frame
+                info.accessibilityLabel = child.accessibilityLabel ?? (child as? UIButton)?.currentTitle ??
+                    container.subviews.compactMap { ($0 as? UILabel)?.text }.first ?? "该控件"
+                var reason = child.accessibilityHint ?? "功能尚未接入，原版运行值未验证"
+                if selectedPage == 5, case .unavailable(let value) = featureState.aim.availability {
+                    reason += "；\(value)"
+                } else if selectedPage == 6, case .unavailable(let value) = featureState.recoil.availability {
+                    reason = value
+                }
+                info.accessibilityHint = reason
+                info.addTarget(self, action: #selector(explainUnavailable(_:)), for: .touchUpInside)
+                child.isAccessibilityElement = false
+                container.addSubview(info)
+                registerHosted(info, .unavailableInfo)
+            } else { installUnavailableFeedback(in: child) }
+        }
     }
 
     private func registerHostedColorEditor() {
@@ -728,16 +813,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         return true
     }
     private func canStage<Value: Equatable>(_ channel: CoreSetFeatureChannel<Value>) -> Bool {
-        var current = channel
-        current.refreshAvailability()
-        return canApply(current) || ((current.availability == .ready || current.canApplySupportedSubset) && !current.suspended &&
-            current.pendingStop == nil && current.pendingApply != nil && current.phase == .applying)
+        channel.canStageDesired
     }
-    // A page-level receipt requires every control. Individual controls also
-    // expose their exact support status for UI and future consumers.
+    // Editing permission is a local schema declaration. This does not change
+    // fieldAvailability or the live prepareApply/receipt gates.
     private func controlAvailability<Value: Equatable>(_ field: CoreSetField,
         in channel: CoreSetFeatureChannel<Value>) -> CoreSetAvailability {
-        channel.fieldAvailability(field)
+        channel.fieldConfigurationAvailability(field)
     }
     @discardableResult
     private func updateConsumerAvailability() -> Bool {
@@ -766,6 +848,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     func refreshConsumerAvailability() {
         precondition(Thread.isMainThread)
         if updateConsumerAvailability(), isViewLoaded { rebuildMenu() }
+        applyStagedConfigurations()
     }
     func invalidateLocalAimDisplayAfterHostReset() {
         precondition(Thread.isMainThread)
@@ -793,24 +876,61 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         updateConsumerAvailability()
         guard canStage(featureState[keyPath: path]), gameConsumers[path] != nil else { rebuildMenu(); return }
         featureState[keyPath: path].updateDesired(edit)
-        if featureState[keyPath: path].pendingApply == nil { applyGame(path) }
+        stagedConfigurationPaths.insert(path)
+        showConfigurationFeedback("配置已记录；尚未生效，等待消费者就绪及回执")
+        NSLog("Core-SET: hosted input stage=desired control=%@ capability=%@ configured=1 confirmed=0",
+              hostedDispatchControlID ?? "UIKit", featureState[keyPath: path].capability.rawValue)
+        if canApply(featureState[keyPath: path]) && featureState[keyPath: path].pendingApply == nil {
+            applyGame(path)
+        } else { rebuildMenu() }
+    }
+
+    private func applyStagedConfigurations() {
+        guard hostedPointerID == nil else { return }
+        func apply<Value: Equatable>(_ path: WritableKeyPath<CoreSetFeatureState, CoreSetFeatureChannel<Value>>) {
+            guard stagedConfigurationPaths.contains(path) else { return }
+            let ready = canApply(featureState[keyPath: path])
+            let wasReady = stagedConfigurationReadiness[path] ?? false
+            stagedConfigurationReadiness[path] = ready
+            // Incomplete parameters do not create a repeated submit loop while
+            // the runtime remains ready. A new edit or a readiness edge retries.
+            guard ready && !wasReady else { return }
+            applyGame(path)
+        }
+        apply(\.frameRate); apply(\.player); apply(\.materials); apply(\.adjustments)
+        apply(\.radar); apply(\.aimDisplay)
     }
 
     private func applyGame<Value: Equatable>(_ path: WritableKeyPath<CoreSetFeatureState, CoreSetFeatureChannel<Value>>) {
         guard let consumer = gameConsumers[path] as? CoreSetMenuConsumer<Value>,
               let request = featureState[keyPath: path].prepareApply() else { return }
+        stagedConfigurationPaths.remove(path)
+        stagedConfigurationReadiness.removeValue(forKey: path)
         let hostedSource = hostedDispatchControlID ?? "UIKit"
+        showConfigurationFeedback("已提交配置；等待消费者实际回执")
         rebuildMenu()
         consumer.apply(request) { [weak self] token, outcome in
             DispatchQueue.main.async {
                 guard let self, self.featureState[keyPath: path].receive(token, outcome: outcome) else { return }
+                switch outcome {
+                case .notApplied, .unavailable:
+                    self.stagedConfigurationPaths.insert(path)
+                    self.stagedConfigurationReadiness[path] = self.canApply(self.featureState[keyPath: path])
+                case .applied, .failed: break
+                }
                 let channel = self.featureState[keyPath: path]
                 NSLog("Core-SET: hosted input stage=actual control=%@ capability=%@ confirmed=%d",
                       hostedSource, channel.capability.rawValue,
                       channel.isDesiredConfirmed ? 1 : 0)
+                if channel.isDesiredConfirmed { self.showConfigurationFeedback("配置已获消费者回执") }
+                else if case .unavailable(let reason) = channel.availability {
+                    self.showConfigurationFeedback("配置已记录；尚未生效：\(reason)")
+                } else if case .failed(let reason) = channel.phase {
+                    self.showConfigurationFeedback("配置已记录；应用失败：\(reason)")
+                } else { self.showConfigurationFeedback("配置已记录；尚未确认生效") }
                 self.rebuildMenu()
                 if self.featureState[keyPath: path].desired != request.desired,
-                   self.featureState[keyPath: path].phase == .active { self.applyGame(path) }
+                   self.canApply(self.featureState[keyPath: path]) { self.applyGame(path) }
             }
         }
     }
@@ -818,6 +938,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     // Session/scene teardown calls this; hiding the panel alone does not stop game effects.
     func suspendGameConsumers(completion: @escaping (Bool) -> Void) {
         precondition(Thread.isMainThread)
+        stagedConfigurationPaths.removeAll()
+        stagedConfigurationReadiness.removeAll()
         let group = DispatchGroup()
         func stop<Value: Equatable>(_ path: WritableKeyPath<CoreSetFeatureState, CoreSetFeatureChannel<Value>>) {
             featureState[keyPath: path].suspend()
@@ -975,7 +1097,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             } else { complete(token, .restored) }
         }
         appearanceConsumer = CoreSetMenuConsumer(capability: .localRendering, readiness: readiness, apply: { [weak self] request, complete in
-            guard let self, self.viewIfLoaded?.window != nil else { complete(request.token, .unavailable(reason: "Local menu is not attached")); return }
+            guard let self, self.viewIfLoaded?.window != nil else { complete(request.token, .notApplied(reason: "Local menu is not attached")); return }
             let value = request.desired
             UserDefaults.standard.set(value.theme == .light, forKey: self.themeKey)
             UserDefaults.standard.set([value.accent.red, value.accent.green, value.accent.blue, 1], forKey: self.accentKey)
@@ -992,7 +1114,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         if let consumer = appearanceConsumer { _ = appearanceChannel?.bind(consumer) }
         directoryConsumer = CoreSetMenuConsumer(capability: .localRendering, readiness: readiness, apply: { [weak self] request, complete in
             guard let self, self.selectedPage == 2, self.viewIfLoaded?.window != nil else {
-                complete(request.token, .unavailable(reason: "Directory preview is not visible")); return
+                complete(request.token, .notApplied(reason: "Directory preview is not visible")); return
             }
             self.rebuildMenu()
             guard let observed = self.observeDirectory(), observed == request.desired else {
@@ -1420,7 +1542,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 caption.frame.size.width = max(0, box.frame.minX - 8)
                 if let scope = playerScope,
                    let toggle = playerToggle(title: title, scope: scope) {
-                    let ready = canApply(featureState.player) &&
+                    let ready = canStage(featureState.player) &&
                         controlAvailability(toggle.field, in: featureState.player) == .ready
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
@@ -1454,7 +1576,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                     button.accessibilityHint = "仅本地 HUD 圈；不启动自瞄控制、不写目标游戏"
                     button.addTarget(self, action: #selector(toggleLocalAimCircle(_:)), for: .touchUpInside)
                     registerHosted(button, .localAimCircle)
-                    box.backgroundColor = button.isSelected ? accent : .clear
+                    box.backgroundColor = observed ? accent : (value == true ? accent.withAlphaComponent(0.35) : .clear)
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
                     row.addSubview(button)
@@ -1486,9 +1608,12 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                     button.accessibilityValue = button.isSelected ? "本地已显示" :
                         (value == true ? "待重新应用" : (value == false ? "关闭" : "未选择"))
                     button.accessibilityHint = "仅真实只读预选目标的本地 HUD 装饰；不启动自瞄"
+                    if !button.isEnabled {
+                        button.accessibilityHint = "先设置本地圈大小和预览距离；动态圈还需开启本地圈，且尚未生效"
+                    }
                     button.addTarget(self, action: #selector(toggleLocalAimPreviewField(_:)), for: .touchUpInside)
                     registerHosted(button, .localAimPreviewField)
-                    box.backgroundColor = button.isSelected ? accent : .clear
+                    box.backgroundColor = button.isSelected ? accent : (value == true ? accent.withAlphaComponent(0.35) : .clear)
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
                     row.addSubview(button)
@@ -1751,8 +1876,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         refreshBeforeInteraction()
         guard canStage(featureState.aimDisplay),
               controlAvailability(.localAimCircle, in: featureState.aimDisplay) == .ready else { return }
-        let current = featureState.aimDisplay.actual?.circleVisible == true &&
-            featureState.aimDisplay.phase == .active
+        let current = featureState.aimDisplay.desired.circleVisible == true
         guard current || featureState.aimDisplay.desired.circleSize.value != nil else { return }
         editGame(\.aimDisplay) { $0.circleVisible = !current }
     }
@@ -1771,10 +1895,10 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             (sender.tag == 1 ? .localAimPreviewMarker :
              (sender.tag == 2 ? .localAimDynamicCircle : .localAimPreviewBots))
         guard controlAvailability(field, in: featureState.aimDisplay) == .ready else { return }
-        let observed = featureState.aimDisplay.actual
-        let current = sender.tag == 0 ? observed?.connectionLine :
-            (sender.tag == 1 ? observed?.preaimMarker :
-             (sender.tag == 2 ? observed?.dynamicCircle : observed?.includeBots))
+        let desired = featureState.aimDisplay.desired
+        let current = sender.tag == 0 ? desired.connectionLine :
+            (sender.tag == 1 ? desired.preaimMarker :
+             (sender.tag == 2 ? desired.dynamicCircle : desired.includeBots))
         editGame(\.aimDisplay) { state in
             switch sender.tag {
             case 0: state.connectionLine = !(current ?? false)
@@ -2164,7 +2288,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         case .material: return materialEditingReady &&
             (gameConsumers[\CoreSetFeatureState.materials] == nil ||
              controlAvailability(.materialColor, in: featureState.materials) == .ready)
-        case .player, .bot: return canApply(featureState.adjustments) }
+        case .player, .bot: return canStage(featureState.adjustments) }
     }
     private func colorField(_ role: ColorRole) -> CoreSetColorField {
         switch role { case .name: return .name; case .ray: return .ray
@@ -2184,7 +2308,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         case .player, .bot: return canStage(featureState.adjustments) }
     }
     private var materialEditingReady: Bool {
-        if gameConsumers[\CoreSetFeatureState.materials] != nil { return canApply(featureState.materials) }
+        if gameConsumers[\CoreSetFeatureState.materials] != nil { return canStage(featureState.materials) }
         return localDirectoryReady
     }
     private var materialGroupEditingReady: Bool {
@@ -2296,7 +2420,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             button.layer.borderWidth = selected ? 1.5 : 1
             button.layer.borderColor = (selected ? accent : gray(50, 215)).cgColor
             button.accessibilityLabel = "背敌样式 \(index + 1)"
-            button.isEnabled = canApply(featureState.player) &&
+            button.isEnabled = canStage(featureState.player) &&
                 controlAvailability(.backStyle, in: featureState.player) == .ready
             button.accessibilityHint = button.isEnabled ? "请求玩家绘制消费者，生效需实际回执" : "玩家绘制消费者未接入，样式不可应用"
             button.accessibilityTraits = selected ? [.button, .selected] : .button
@@ -2403,9 +2527,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             button.backgroundColor = selected ? accent : gray(41, 230)
             button.layer.cornerRadius = 5
             button.accessibilityHint = "仅切换本地场景参数预览，不影响游戏"
-            button.isEnabled = featureState.aim.phase != .applying && featureState.aim.phase != .active &&
-                controlAvailability(.basicAimScene, in: featureState.aim) == .ready
-            button.accessibilityHint = button.isEnabled ? "请求场景消费者，生效需实际回执" : "场景消费者未接入，不能切换游戏场景"
+            button.isEnabled = featureState.aim.phase != .applying && featureState.aim.phase != .active
+            button.accessibilityHint = "仅编辑本地场景参数；自瞄消费者未验证，尚未生效"
             button.accessibilityTraits = selected ? [.button, .selected] : .button
             button.addTarget(self, action: #selector(selectPreviewScene(_:)), for: .touchUpInside)
             registerHosted(button, .previewScene)
@@ -2422,6 +2545,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
               scenarioValues.indices.contains(sender.tag),
               let scene = CoreSetAimScene(rawValue: scenarioValues[sender.tag]) else { return }
         featureState.aim.updateDesired { $0.scene = scene }
+        showConfigurationFeedback("场景配置已记录；自瞄消费者未验证，尚未生效")
         rebuildMenu()
     }
 
@@ -2542,6 +2666,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
 
     private func refreshRadarRangeRows() {
         guard selectedPage == 4, radarRangeRows.bounds.width > 0 else { return }
+        if hostedPointerID != nil || trackingUIKitSlider != nil { homeStatusNeedsRebuild = true; return }
         guard let canvas = featureState.radar.desired.placement.canvas else { return }
         guard radarRangeCanvas != canvas || radarRangeRows.subviews.isEmpty else { return }
         if radarRangeCanvas != nil {
@@ -2593,6 +2718,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             }
             radarRangeRows.addSubview(row)
         }
+        installUnavailableFeedback(in: radarRangeRows)
     }
 
     private func statusText(_ value: String?) -> String {
@@ -2690,12 +2816,26 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             default: break
             }
         }
+        // The same explicit size/distance selection also configures the
+        // independent local HUD preview; aimControl is never applied here.
+        if sender.tag == 0,
+           controlAvailability(.localAimCircleSize, in: featureState.aimDisplay) == .ready {
+            editGame(\.aimDisplay) { $0.circleSize.set(Int(sender.value.rounded())) }
+        } else if sender.tag == 1,
+                  controlAvailability(.localAimPreviewDistance, in: featureState.aimDisplay) == .ready {
+            editGame(\.aimDisplay) { $0.maximumDistance.set(Int(sender.value.rounded())) }
+        } else {
+            showConfigurationFeedback("参数配置已记录；自瞄消费者未验证，尚未生效")
+        }
         rebuildMenu()
     }
     @objc private func configureBasicAimBots(_ sender: UISegmentedControl) {
         guard featureState.aim.phase != .applying && featureState.aim.phase != .active else { return }
         guard sender.selectedSegmentIndex >= 0 else { return }
         featureState.aim.updateDesired { $0.includeBots = sender.selectedSegmentIndex == 1 }
+        if controlAvailability(.localAimPreviewBots, in: featureState.aimDisplay) == .ready {
+            editGame(\.aimDisplay) { $0.includeBots = sender.selectedSegmentIndex == 1 }
+        }
         rebuildMenu()
     }
     @objc private func configureBasicAimLock(_ sender: UISegmentedControl) {
@@ -2824,6 +2964,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         start.setTitle("启用自瞄", for: .normal)
         start.isEnabled = editable && canApply(featureState.aim) && configured && state.trigger != nil &&
             state.includeBots != nil && state.lockSameTarget != nil && supportedPoint && state.circleSize.value != nil
+        start.accessibilityHint = "自瞄目标写消费者未验证；仅记录本地参数，未启用自瞄"
         start.addTarget(self, action: #selector(startBasicAim), for: .touchUpInside)
         registerHosted(start, .aimStart)
         aim.addSubview(start)
@@ -2832,6 +2973,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         stop.setTitle("关闭自瞄", for: .normal)
         stop.isEnabled = featureState.aim.restoration == .required || featureState.aim.restoration == .pending
         if case .failed = featureState.aim.restoration { stop.isEnabled = true }
+        stop.accessibilityHint = "当前没有已启动的自瞄会话；未执行目标操作"
         stop.addTarget(self, action: #selector(stopBasicAim), for: .touchUpInside)
         registerHosted(stop, .aimStop)
         aim.addSubview(stop)
@@ -2894,6 +3036,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             let weight = card("粗细调节", CGRect(x: 0, y: 252, width: 658, height: 232))
             disabledRows(["射线粗细", "骨骼粗细", "物资字体"], in: weight, y: 34)
         case 4:
+            if featureState.radar.desired.placement.canvas == nil {
+                let screen = view.window?.screen ?? UIScreen.main
+                let canvas = CoreSetRadarCanvas(nativeWidth: Double(screen.nativeBounds.width),
+                    nativeHeight: Double(screen.nativeBounds.height), displayWidth: Double(view.bounds.width),
+                    displayHeight: Double(view.bounds.height))
+                featureState.radar.updateDesired { $0.placement.refreshCanvas(canvas) }
+            }
             let radar = card("雷达设置", CGRect(x: 0, y: 0, width: 323, height: 360))
             disabledRows(["雷达", "显示距离米数", "探测距离"], in: radar, y: 34)
             radarRangeRows.frame = CGRect(x: 12, y: 124, width: radar.bounds.width - 24, height: 90)

@@ -15,7 +15,7 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
 
     func apply(_ request: CoreSetApplyRequest<State>,
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
-        completion(request.token, .unavailable(reason: "压枪公式未闭合，未执行目标写入"))
+        completion(request.token, .notApplied(reason: "压枪公式未闭合，未执行目标写入"))
     }
 
     func stop(_ token: CoreSetRequestToken,

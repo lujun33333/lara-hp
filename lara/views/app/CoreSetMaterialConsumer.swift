@@ -1,8 +1,9 @@
 import UIKit
 
 // Name-matched material marks have their own read-only session and render lane.
-// Opened-crate state remains unsupported; armed filtering uses the independently
-// reread local WeaponID in this collector's target identity lease.
+// Opened-crate semantics remain unproven; filtering currently uses only the
+// observed escape-box children heuristic. Armed filtering independently rereads
+// local WeaponID within this collector's target identity lease.
 final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
     typealias State = CoreSetMaterialSettings
     let capability = CoreSetCapability.materialFiltering
@@ -31,14 +32,19 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
     }
 
     var availability: CoreSetAvailability {
-        session.ready && session.capabilities == 1
-            ? .ready : .unavailable(reason: "目标 build/UUID 的物资只读会话未就绪")
+        guard session.ready && session.capabilities == 1 else {
+            return .unavailable(reason: "目标 build/UUID 的物资只读会话未就绪")
+        }
+        return coordinator?.playerCanvas != nil ? .ready :
+            .unavailable(reason: "本地绘制画布未就绪")
     }
-    var supportedFields: Set<CoreSetField> {
-        guard availability == .ready else { return [] }
+    var configurableFields: Set<CoreSetField> {
         return [.materialEnabled, .hideWhileArmed, .metroArmor, .hideOpenedCrates,
                 .showCrateLevel, .vehicleStatus, .materialDistance,
                 .materialColor, .materialGroupSelection]
+    }
+    var supportedFields: Set<CoreSetField> {
+        availability == .ready ? configurableFields : []
     }
 
     private func probeTarget() {
@@ -71,7 +77,7 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
         precondition(Thread.isMainThread)
         guard !stopped, availability == .ready, accepts(request.desired), revision < UInt64.max else {
-            completion(request.token, .unavailable(reason: "物资只读会话或字段未获静态支持")); return
+            completion(request.token, .notApplied(reason: "物资只读会话或字段未获静态支持")); return
         }
         refresh?.invalidate(); refresh = nil
         revision += 1
@@ -266,7 +272,7 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
             if receipt.acceptedByLocalRenderer {
                 pending.1(pending.0, .applied(observed: settings))
                 refresh?.invalidate(); refresh = nil
-                if settings.enabled == true {
+                if settings.enabled == true || settings.metroArmor == true {
                     refresh = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in self?.capture() }
                 }
             } else {

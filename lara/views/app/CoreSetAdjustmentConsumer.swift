@@ -21,6 +21,14 @@ final class CoreSetAdjustmentConsumer: CoreSetFeatureConsumer {
             (coordinator?.playerStyleReady == true || coordinator?.materialStyleReady == true)
             ? .ready : .unavailable(reason: "目标只读绘制 lane 或本地宿主未就绪")
     }
+    var configurableFields: Set<CoreSetField> {
+        [.actorColor(.player, .name), .actorColor(.player, .ray),
+         .actorColor(.player, .distance), .actorColor(.player, .bone),
+         .actorColor(.player, .team), .actorColor(.bot, .name),
+         .actorColor(.bot, .ray), .actorColor(.bot, .distance),
+         .actorColor(.bot, .bone), .actorColor(.bot, .team),
+         .rayThickness, .boneThickness, .materialFontSize]
+    }
     var supportedFields: Set<CoreSetField> {
         guard availability == .ready else { return [] }
         var result: Set<CoreSetField> = []
@@ -52,7 +60,7 @@ final class CoreSetAdjustmentConsumer: CoreSetFeatureConsumer {
         precondition(Thread.isMainThread)
         guard availability == .ready, accepts(request.desired), revision < UInt64.max,
               let canvas = coordinator?.playerCanvas else {
-            completion(request.token, .unavailable(reason: "绘制字段或本地宿主未就绪")); return
+            completion(request.token, .notApplied(reason: "绘制字段或本地宿主未就绪")); return
         }
         revision += 1
         let id = UUID()
