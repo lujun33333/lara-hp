@@ -24,6 +24,7 @@ final class CoreSetAimPreviewConsumer {
     private let worker = DispatchQueue(label: "coreset.aim.preview.read", qos: .userInitiated)
     private var probe: Timer?
     private var stopped = false
+    private(set) var lastCaptureDiagnostic = "尚未采集只读候选快照"
 
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
@@ -33,6 +34,7 @@ final class CoreSetAimPreviewConsumer {
     }
 
     var ready: Bool { !stopped && session.ready && session.capabilities == 1 }
+    var unavailableDiagnostic: String { stopped ? "只读候选会话已停止" : session.lastConnectDiagnostic }
     func matchesIdentity(_ expected: (generation: UInt64, pid: Int32, base: UInt64)) -> Bool {
         ready && session.generation == expected.generation &&
             session.processID == expected.pid && session.imageBase == expected.base
@@ -57,10 +59,14 @@ final class CoreSetAimPreviewConsumer {
         guard ready, radius.isFinite, radius > 2,
               canvas.width.isFinite, canvas.height.isFinite,
               canvas.width > 0, canvas.height > 0,
-              (10...500).contains(maximumDistance) else { completion(nil); return }
+              (10...500).contains(maximumDistance) else {
+            lastCaptureDiagnostic = ready ? "preview-canvas-or-filter-invalid" : unavailableDiagnostic
+            completion(nil); return
+        }
         let generation = session.generation, pid = session.processID, base = session.imageBase
         worker.async { [weak self] in
             guard let self else { return }
+            let failureSequence = self.session.readFailureSequence
             let snapshot = CoreSetPlayerCollector.capture(self.session, canvasSize: canvas,
                 playerBones: true, botBones: true, boneDistanceLimit: Double(maximumDistance),
                 includeOffscreen: false, includeRadar: false, includeBattleInputs: false,
@@ -68,6 +74,9 @@ final class CoreSetAimPreviewConsumer {
                 includeGrenadeWarning: false, includeCounts: false,
                 playerInformation: false, botInformation: false,
                 includeWarningYaw: false, maximumDrawDistance: Double(maximumDistance))
+            let captureFailure = self.session.readFailureSequence != failureSequence
+                ? self.session.lastReadDiagnostic
+                : "preview-snapshot-validation-or-freshness-failed transport-errors=0"
             var frame: CoreSetAimPreviewFrame?
             if let snapshot,
                snapshot.sessionGeneration == generation,
@@ -108,16 +117,20 @@ final class CoreSetAimPreviewConsumer {
                     target: best?.target)
             }
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.stopped,
+                guard let self else { completion(nil); return }
+                guard !self.stopped,
                       self.ready, self.session.generation == generation,
                       self.session.processID == pid, self.session.imageBase == base else {
+                    self.lastCaptureDiagnostic = "preview-identity-changed generation=\(generation)"
                     completion(nil); return
                 }
                 guard let frame,
                       CACurrentMediaTime() - frame.captureCompletedMonotonicSeconds >= 0,
                       CACurrentMediaTime() - frame.captureCompletedMonotonicSeconds <= 0.5 else {
+                    self.lastCaptureDiagnostic = captureFailure
                     completion(nil); return
                 }
+                self.lastCaptureDiagnostic = "preview-snapshot-confirmed"
                 completion(frame)
             }
         }

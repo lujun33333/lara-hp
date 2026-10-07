@@ -7,6 +7,10 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
     let capability = CoreSetCapability.recoilControl
     private let writer = CoreSetTargetWriteSession()
 
+    init() {
+        NSLog("Core-SET: target-write lane=recoil stage=capability ready=0 reason=audited-writer-or-receipt-unavailable formula=unverified controllerSlots=static-typed axisUnitRoute=unverified lifecycleReceipt=unverified")
+    }
+
     var availability: CoreSetAvailability {
         .unavailable(reason: writer.pendingCleanup
             ? "压枪写会话清理待确认" : "压枪增量公式及目标写 profile 未验证")
@@ -15,6 +19,7 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
 
     func apply(_ request: CoreSetApplyRequest<State>,
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
+        NSLog("Core-SET: target-write lane=recoil stage=request-denied committed=0 reason=audited-writer-or-receipt-unavailable request=%@", request.token.requestID.uuidString)
         completion(request.token, .notApplied(reason: "压枪公式未闭合，未执行目标写入"))
     }
 

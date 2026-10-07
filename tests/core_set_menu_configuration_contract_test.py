@@ -4,6 +4,7 @@ from pathlib import Path
 import argparse
 import json
 import re
+from collections import Counter
 
 ROOT = Path(__file__).resolve().parents[1]
 menu = (ROOT / "lara/views/app/CoreSetMenuViewController.swift").read_text(encoding="utf-8")
@@ -57,7 +58,8 @@ apply = body(menu, "private func applyGame<")
 assert "prepareApply()" in apply
 assert apply.index("stagedConfigurationPaths.remove(path)") < apply.index("consumer.apply(request)")
 assert "receive(token, outcome: outcome)" in apply
-assert "channel.isDesiredConfirmed" in apply
+assert "channel.isSupportedDesiredConfirmed" in apply
+assert "scope=consumer-declared-fields" in apply
 assert "case .notApplied, .unavailable:" in apply
 assert "self.stagedConfigurationPaths.insert(path)" in apply
 assert "self.stagedConfigurationReadiness[path] = self.canApply" in apply
@@ -74,7 +76,7 @@ assert "stagedConfigurationReadiness.removeAll()" in stop
 def require_rejection_safety(source: str) -> None:
     receipt = body(source, "mutating func receive(")
     rejected = receipt.split("case .notApplied(let reason):", 1)[1].split("case .unavailable(let reason):", 1)[0]
-    assert "if actual == nil" in rejected
+    assert "if actual == nil && !effectsBeforePendingApply" in rejected
     first, prior = rejected.split("} else {", 1)
     assert "mayHaveEffects = false" in first and "restoration = .notNeeded" in first
     assert "phase = .active" in prior
@@ -89,6 +91,7 @@ require_rejection_safety(state)
 for unsafe in (
     state.replace("phase = .active\n            }\n        case .unavailable", "mayHaveEffects = false; phase = .active\n            }\n        case .unavailable"),
     state.replace("case .unavailable(let reason): availability", "case .unavailable(let reason): mayHaveEffects = false; availability"),
+    state.replace("if actual == nil && !effectsBeforePendingApply", "if actual == nil"),
 ):
     try:
         require_rejection_safety(unsafe)
@@ -154,6 +157,94 @@ assert "applyGame(\\.aim)" not in visible_aim_ranges
 visible_aim_bots = body(menu, "@objc private func configureBasicAimBots(")
 assert "editGame(\\.aimDisplay) { $0.includeBots" in visible_aim_bots
 
+# Nil/stale periodic frames revoke proof without forgiving a previous effect.
+invalidation = body(state, "mutating func invalidateReadFrameObservation(")
+assert invalidation.index("actual = nil") < invalidation.index("guard pendingStop == nil") < invalidation.index("generation = UUID()")
+assert "observationInvalidationReason = reason" in invalidation
+assert "mayHaveEffects = false" not in invalidation
+assert "restoration = .notNeeded" not in invalidation
+assert "phase = mayHaveEffects ? .active : .unknown" in invalidation
+assert "effectsBeforePendingApply = mayHaveEffects" in prepare
+full_proof = body(state, "var isDesiredConfirmed:")
+assert "availability == .ready" in full_proof and "canApplySupportedSubset" not in full_proof
+field_proof = body(state, "func isFieldDesiredConfirmed(")
+assert "fieldAvailability(field) == .ready" in field_proof
+assert "isSupportedDesiredConfirmed" in field_proof
+subset_proof = body(state, "var isSupportedDesiredConfirmed:")
+for gate in ("currentAvailability() == .ready", "actual == desired", "pendingApply == nil", "phase == .active"):
+    assert gate in subset_proof, gate
+display_proof = body(menu, "private func updateControlProof(")
+assert "guard explicit else" in display_proof
+assert "channel.isFieldDesiredConfirmed(field)" in display_proof
+assert "observationInvalidationReason" in display_proof
+assert "替代预览，不算v1.7原效果" in display_proof
+assert "control.accessibilityIdentifier" in display_proof
+assert "stage=field-state" in display_proof
+forward = (ROOT / "lara/views/app/CoreSetRuntimeCoordinator.swift").read_text(encoding="utf-8")
+assert "menu.invalidateReadFrameObservation(capability: capability, reason: reason)" in body(forward, "func invalidateReadFrameObservation(")
+
+# Reference custom controls are in the scenario card and remain local config.
+aim_ui = body(menu, "private func aimControls(")
+assert 'UISegmentedControl(items: ["头部", "胸部", "屁股"])' in aim_ui
+for title in ("水平速度", "垂直速度", "预判提前", "锁定门槛", "接管暂停"):
+    assert f'("{title}"' in aim_ui, title
+assert "scenario.addSubview(slider)" in aim_ui
+assert "else if state.scene != nil" in aim_ui
+assert "case 9: $0.custom.predictionMilliseconds.set" in visible_aim_ranges
+assert "recordAimConfiguration" in visible_aim_ranges
+record = body(menu, "private func recordAimConfiguration(")
+assert "configured=1 confirmed=0" in record and "scope=local-configuration" in record
+assert "prepareApply" not in record and "applyGame" not in record
+chest = body(menu, "@objc private func configureBasicAimPoint(")
+refusal = chest.split("if point == .chest", 1)[1].split("featureState.aim.updateDesired", 1)[0]
+assert "return" in refusal and "confirmed=0" in refusal
+assert "未修改期望或目标" in refusal
+
+# Executable inventory: every point has reference, state, conversion, lifecycle,
+# consumer and receipt entries. Missing actions cannot silently become closed.
+matrix = json.loads((ROOT / "tests/fixtures/core_set_v17_menu_point_map.json").read_text(encoding="utf-8"))
+rows = [dict(zip(matrix["columns"], row)) for row in matrix["points"]]
+native_matrix = json.loads((ROOT / "tests/fixtures/core_set_v17_native_point_chain_map.json").read_text(encoding="utf-8"))
+native_points = {point["id"]: point for point in native_matrix["points"]}
+assert len(rows) == 137
+assert [row["id"] for row in rows] == [f"v17-{index:03}" for index in range(137)]
+assert len({row["page"] for row in rows}) == 7
+assert len({(row["page"], row["card"]) for row in rows}) == 19
+assert not any(row["device_effect_verified"] for row in rows)
+contracts = matrix["contracts"]
+for row in rows:
+    native_point = native_points[row["id"]]
+    assert (native_point["page"], native_point["title"]) == (row["page"], row["title"])
+    assert row["reference_evidence_key"] == native_point["reference_evidence_key"]
+    assert not native_point["one_to_one_complete"] and not native_point["original_runtime_receipt_verified"]
+    assert row["reference_prior_static_evidence_key"]
+    for callback in row["entry"].split("|"):
+        assert re.search(rf"\bfunc {callback}\b", menu), (row["id"], callback)
+    assert row["reference_evidence_key"] and row["reference_binding_grade"]
+    assert row["configuration"] and row["parameter_conversion"] and row["current_implementation_status"]
+    assert row["ax_role"] == "carrier-only; NOT feature algorithm/source"
+    contract = contracts[row["consumer_contract"]]
+    assert (ROOT / contract["source"]).is_file()
+    assert contract["receipt"] and set(contract["lifecycle"]) == {"start", "update", "stop"}
+    assert not contract["runtime_device_verified"]
+missing = [row for row in rows if row["consumer_contract"].startswith("missing_")]
+assert len(missing) == 35
+counts = Counter(row["consumer_contract"] for row in rows)
+assert counts["local_appearance"] + counts["local_directory"] == 31
+assert counts["home_observation"] + counts["performance_observation"] == 10
+assert sum(counts[key] for key in ("player", "materials", "adjustments", "radar", "frame_rate")) == 61
+assert {row["id"] for row in missing} == set(matrix["downstream_requirements"])
+for row in missing:
+    requirement = matrix["downstream_requirements"][row["id"]]
+    for key in ("interface", "state_field", "evidence_required", "receipt_required"):
+        assert requirement[key], (row["id"], key)
+    assert row["downstream_requirement"] == row["id"]
+assert [row["id"] for row in rows if row["alternative_preview_field"]] == [
+    "v17-108", "v17-110", "v17-111", "v17-112", "v17-113", "v17-115", "v17-117"]
+assert all(row["consumer_contract"] == "missing_aim" for row in rows if row["alternative_preview_field"])
+assert set(matrix["missing_observation_producers"]) == {"v17-009", "v17-010"}
+assert all(not extra["counts_toward_v17_closure"] for extra in matrix["current_ui_extensions"])
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--inventory", type=Path)
 args = parser.parse_args()
@@ -164,7 +255,10 @@ if args.inventory:
     assert len(pages) == 7 and len(cards) == 19
     for _, card in cards:
         assert f'card("{card}"' in menu, card
+    assert [(point["page"], point["card"], point["title"], point.get("condition") or "", point.get("range")) for point in points] == [
+        (row["page"], row["card"], row["title"], row["reference_condition"], row["reference_range"]) for row in rows]
     print(f"REFERENCE: {len(pages)} pages / {len(cards)} cards / {len(points)} inventory points; all card names present")
 
 print("PASS: local configuration staging, live apply gates, observable unavailable actions, pointer lifetime; source only")
+print("MATRIX: 137 reference points, 35 missing original action consumers, 7 alternative previews, 2 missing observation producers; device effect closure=0")
 print("LIMIT: no Swift/UIKit compilation, physical hit testing, consumer receipt or device output verification")

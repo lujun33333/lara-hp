@@ -1,4 +1,5 @@
 import UIKit
+import QuartzCore
 
 // Radar dots and the read-only warning subset use separate composer lanes.
 // Neither path clears player/material commands or writes to the target.
@@ -22,6 +23,12 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
     private var expectedSessionGeneration: UInt64?
     private var expectedProcessID: Int32?
     private var expectedImageBase: UInt64?
+    private var expectedCapturedAt: Double?
+    private var lastCaptureFailure: String?
+    private var pendingInvalidation: (token: CoreSetRequestToken, snapshot: UUID,
+        generation: UInt64, revision: UInt64, reason: String)?
+    private var invalidationLanes: Set<CoreSetRenderLane> = []
+    private var invalidationRejected = false
     private let ownedLanes: Set<CoreSetRenderLane> = [.radar, .warning]
     private var confirmedLanes: Set<CoreSetRenderLane> = []
 
@@ -74,7 +81,10 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
         precondition(Thread.isMainThread)
         guard !stopped, availability == .ready, accepts(request.desired), revision < UInt64.max else {
-            completion(request.token, .notApplied(reason: "雷达只读会话或字段未获静态支持")); return
+            let reason: String
+            if case .unavailable(let detail) = availability { reason = detail }
+            else { reason = "雷达侦测距离、半径、X/Y 或预警距离、字号未完整选择，或会话已停止" }
+            completion(request.token, .notApplied(reason: reason)); return
         }
         refresh?.invalidate(); refresh = nil
         revision += 1
@@ -92,19 +102,24 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
         if settings.enabled != true && settings.warningEnabled != true {
             submit([], warning: [], token: token, revision: expectedRevision, canvas: canvas,
                    snapshotID: UUID(), sessionGeneration: session.generation,
-                   processID: session.processID, imageBase: session.imageBase)
+                   processID: session.processID, imageBase: session.imageBase,
+                   capturedAt: CACurrentMediaTime())
             return
         }
         inFlight = true
         let includeWarningYaw = settings.warningEnabled == true
         worker.async { [weak self] in
             guard let self else { return }
+            let failureSequence = self.session.readFailureSequence
             let snapshot = CoreSetPlayerCollector.capture(self.session, canvasSize: canvas.size,
                 playerBones: false, botBones: false, boneDistanceLimit: 0,
                 includeOffscreen: false, includeRadar: true, includeBattleInputs: false,
                 playerWeaponText: false, botWeaponText: false, includeGrenadeWarning: false,
                 includeCounts: false, playerInformation: false, botInformation: false,
                 includeWarningYaw: includeWarningYaw)
+            let captureFailure = self.session.readFailureSequence != failureSequence
+                ? self.session.lastReadDiagnostic
+                : "snapshot-validation-or-identity-failed transport-errors=0"
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.inFlight = false
@@ -113,17 +128,27 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                     if self.pendingApply != nil { self.capture() }
                     return
                 }
+                let captureAge = snapshot.map { CACurrentMediaTime() - $0.captureCompletedMonotonicSeconds } ?? .nan
+                let failureReason = snapshot != nil && !(0...0.5).contains(captureAge)
+                    ? String(format: "snapshot-stale stage=capture ageSeconds=%.3f limit=0.5", captureAge)
+                    : captureFailure
                 guard let snapshot, snapshot.sessionGeneration == self.session.generation,
                       snapshot.processID == self.session.processID,
-                      snapshot.imageBase == self.session.imageBase else {
-                    self.clearStaleLanes(token: token)
+                      snapshot.imageBase == self.session.imageBase,
+                      captureAge >= 0, captureAge <= 0.5 else {
+                    if self.lastCaptureFailure != failureReason {
+                        self.lastCaptureFailure = failureReason
+                        NSLog("Core-SET: target-read lane=radar stage=capture ready=0 reason=%@", failureReason)
+                    }
+                    self.clearStaleLanes(token: token, reason: failureReason)
                     if let pending = self.pendingApply, pending.0 == token {
                         self.pendingApply = nil
-                        pending.1(token, .unavailable(reason: "未取得完整且身份稳定的雷达快照"))
+                        pending.1(token, .unavailable(reason: "雷达快照未确认：\(failureReason)"))
                     }
                     self.coordinator?.refreshPlayerAvailability()
                     return
                 }
+                self.lastCaptureFailure = nil
                 guard let commands = self.renderRadar(snapshot, on: canvas.size),
                       let warning = self.renderWarning(snapshot, on: canvas.size) else {
                     self.clearStaleLanes(token: token)
@@ -137,7 +162,8 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                 self.submit(commands, warning: warning, token: token,
                     revision: expectedRevision, canvas: canvas,
                     snapshotID: id, sessionGeneration: snapshot.sessionGeneration,
-                    processID: snapshot.processID, imageBase: snapshot.imageBase)
+                    processID: snapshot.processID, imageBase: snapshot.imageBase,
+                    capturedAt: snapshot.captureCompletedMonotonicSeconds)
             }
         }
     }
@@ -146,7 +172,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                         token: CoreSetRequestToken,
                         revision expectedRevision: UInt64, canvas: (generation: UInt64, size: CGSize),
                         snapshotID: UUID, sessionGeneration: UInt64,
-                        processID: Int32, imageBase: UInt64) {
+                        processID: Int32, imageBase: UInt64, capturedAt: Double) {
         let radarAccepted = publish(commands, lane: .radar, token: token,
             revision: expectedRevision, canvas: canvas, snapshotID: snapshotID)
         let warningAccepted = publish(warning, lane: .warning, token: token,
@@ -159,39 +185,46 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
             }
             return
         }
-        if pendingApply?.0 == token {
-            confirmedLanes.removeAll()
-            expectedSnapshot = snapshotID
-            expectedGeneration = canvas.generation
-            expectedSessionGeneration = sessionGeneration
-            expectedProcessID = processID
-            expectedImageBase = imageBase
-        }
+        if pendingApply?.0 == token { confirmedLanes.removeAll() }
+        expectedSnapshot = snapshotID
+        expectedGeneration = canvas.generation
+        expectedSessionGeneration = sessionGeneration
+        expectedProcessID = processID
+        expectedImageBase = imageBase
+        expectedCapturedAt = capturedAt
     }
 
     private func publish(_ commands: [CoreSetRenderCommand], lane: CoreSetRenderLane,
                          token: CoreSetRequestToken, revision: UInt64,
                          canvas: (generation: UInt64, size: CGSize), snapshotID: UUID) -> Bool {
-        if commands.isEmpty {
-            return coordinator?.clearLane(lane, generation: canvas.generation,
-                configRevision: revision, snapshotID: snapshotID,
-                requestToken: token, canvasSize: canvas.size) == true
-        }
+        // No warning hits (or a disabled radar in a warning-only frame) must
+        // not install the explicit stop barrier for this configuration.
         return coordinator?.submitLane(CoreSetLaneSubmission(lane: lane,
             hostGeneration: canvas.generation, configRevision: revision,
             snapshotID: snapshotID, requestToken: token,
             canvasSize: canvas.size, commands: commands)) == true
     }
 
-    private func clearStaleLanes(token: CoreSetRequestToken) {
+    private func clearStaleLanes(token: CoreSetRequestToken, reason: String = "radar-frame-invalidated",
+                                 recordInvalidation: Bool = true) {
         guard let canvas = coordinator?.playerCanvas, revision < UInt64.max - 1 else { return }
+        refresh?.invalidate(); refresh = nil
         revision += 1
-        _ = coordinator?.clearLane(.radar, generation: canvas.generation,
-            configRevision: revision, snapshotID: UUID(), requestToken: token,
-            canvasSize: canvas.size)
-        _ = coordinator?.clearLane(.warning, generation: canvas.generation,
-            configRevision: revision, snapshotID: UUID(), requestToken: token,
-            canvasSize: canvas.size)
+        let id = UUID()
+        if recordInvalidation && pendingApply == nil && pendingStop == nil && activeToken == token {
+            pendingInvalidation = (token, id, canvas.generation, revision, reason)
+            invalidationLanes.removeAll(); invalidationRejected = false
+        }
+        let radarCleared = coordinator?.clearLane(.radar, generation: canvas.generation,
+            configRevision: revision, snapshotID: id, requestToken: token,
+            canvasSize: canvas.size) == true
+        let warningCleared = coordinator?.clearLane(.warning, generation: canvas.generation,
+            configRevision: revision, snapshotID: id, requestToken: token,
+            canvasSize: canvas.size) == true
+        if !radarCleared || !warningCleared {
+            pendingInvalidation = nil; invalidationLanes.removeAll()
+            NSLog("Core-SET: target-read lane=radar stage=clear-submission confirmed=0 reason=%@", reason)
+        }
         revision += 1
     }
 
@@ -264,6 +297,19 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
 
     func consumed(_ receipt: CoreSetLocalFrameReceipt) {
         guard ownedLanes.contains(receipt.lane) else { return }
+        if let invalidation = pendingInvalidation,
+           receipt.requestToken == invalidation.token, receipt.snapshotID == invalidation.snapshot,
+           receipt.hostGeneration == invalidation.generation, receipt.configRevision == invalidation.revision {
+            invalidationLanes.insert(receipt.lane)
+            invalidationRejected = invalidationRejected || !receipt.acceptedByLocalRenderer
+            guard invalidationLanes == ownedLanes else { return }
+            pendingInvalidation = nil; invalidationLanes.removeAll()
+            guard pendingApply == nil, pendingStop == nil, activeToken == invalidation.token else { return }
+            activeToken = nil
+            coordinator?.invalidateReadFrameObservation(capability,
+                reason: invalidationRejected ? "radar-clear-renderer-rejected" : invalidation.reason)
+            return
+        }
         if let stop = pendingStop, stop.0 == receipt.requestToken,
            receipt.configRevision == revision, receipt.snapshotID == expectedSnapshot,
            receipt.hostGeneration == expectedGeneration {
@@ -286,19 +332,26 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
            receipt.hostGeneration == expectedGeneration {
             let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
                 session.processID == expectedProcessID && session.imageBase == expectedImageBase
-            guard identityMatches else {
+            let fresh = expectedCapturedAt.map {
+                CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
+            } ?? false
+            guard identityMatches && fresh else {
                 pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
                 confirmedLanes.removeAll()
                 expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
-                clearStaleLanes(token: pending.0)
-                pending.1(pending.0, .unavailable(reason: "雷达快照消费时目标身份已变化"))
+                expectedCapturedAt = nil
+                let reason = identityMatches ? "snapshot-stale stage=receipt" : "radar-receipt-identity-lost"
+                NSLog("Core-SET: target-read lane=radar stage=receipt confirmed=0 reason=%@", reason)
+                clearStaleLanes(token: pending.0, reason: reason, recordInvalidation: false)
+                pending.1(pending.0, .unavailable(reason: reason))
                 return
             }
             guard receipt.acceptedByLocalRenderer else {
                 pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
                 confirmedLanes.removeAll()
                 expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
-                clearStaleLanes(token: pending.0)
+                expectedCapturedAt = nil
+                clearStaleLanes(token: pending.0, recordInvalidation: false)
                 pending.1(pending.0, .failed(reason: "雷达或预警帧未被本地渲染器消费"))
                 return
             }
@@ -307,6 +360,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                 pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
                 confirmedLanes.removeAll()
                 expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
+                expectedCapturedAt = nil
                 pending.1(pending.0, .applied(observed: settings))
                 refresh?.invalidate(); refresh = nil
                 if settings.enabled == true || settings.warningEnabled == true {
@@ -315,7 +369,22 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
             }
             return
         }
-        if activeToken == receipt.requestToken && availability != .ready { clearStaleLanes(token: receipt.requestToken) }
+        if activeToken == receipt.requestToken,
+           receipt.configRevision == revision, receipt.snapshotID == expectedSnapshot,
+           receipt.hostGeneration == expectedGeneration {
+            let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
+                session.processID == expectedProcessID && session.imageBase == expectedImageBase
+            let fresh = expectedCapturedAt.map {
+                CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
+            } ?? false
+            if !receipt.acceptedByLocalRenderer || !identityMatches || !fresh {
+                clearStaleLanes(token: receipt.requestToken,
+                    reason: !identityMatches ? "radar-receipt-identity-lost" :
+                        (!fresh ? "snapshot-stale stage=receipt" : "radar-renderer-rejected"))
+            }
+        } else if activeToken == receipt.requestToken && availability != .ready {
+            clearStaleLanes(token: receipt.requestToken, reason: "radar-receipt-session-unavailable")
+        }
     }
 
     func stop(_ token: CoreSetRequestToken,

@@ -41,6 +41,10 @@ static const uint8_t CSUUID[16] = {
     NSString *_lastConnectDiagnostic;
     NSString *_lastLoggedDiagnostic;
     CFAbsoluteTime _lastDiagnosticLogTime;
+    uint64_t _readFailureSequence;
+    NSString *_lastReadDiagnostic;
+    NSString *_lastLoggedReadFailureKind;
+    CFAbsoluteTime _lastReadFailureLogTime;
 }
 @end
 
@@ -51,6 +55,7 @@ static const uint8_t CSUUID[16] = {
         _task = MACH_PORT_NULL; _pid = -1; _generation = 1;
         _diagnosticLabel = @"unassigned";
         _lastConnectDiagnostic = @"尚未尝试连接目标只读会话";
+        _lastReadDiagnostic = @"no-read-failure";
     }
     return self;
 }
@@ -62,6 +67,7 @@ static const uint8_t CSUUID[16] = {
         if (_task == MACH_PORT_NULL) return NO;
         if ([self identityStillValid:YES]) return YES;
         [self disconnect];
+        [self publishConnectDiagnostic:@"identity-lost stage=ready" ready:NO];
         return NO;
     }
 }
@@ -78,6 +84,29 @@ static const uint8_t CSUUID[16] = {
 }
 - (NSString *)lastConnectDiagnostic {
     @synchronized (self) { return [_lastConnectDiagnostic copy] ?: @"目标只读会话状态未知"; }
+}
+- (uint64_t)readFailureSequence { @synchronized (self) { return _readFailureSequence; } }
+- (NSString *)lastReadDiagnostic {
+    @synchronized (self) { return [_lastReadDiagnostic copy] ?: @"no-read-failure"; }
+}
+
+// Called only while this session's lock is held. Never log the read buffer.
+- (void)recordReadFailure:(NSString *)kind address:(uint64_t)address
+                  length:(size_t)length generation:(uint64_t)generation
+               completed:(size_t)completed result:(kern_return_t)result {
+    ++_readFailureSequence;
+    _lastReadDiagnostic = [NSString stringWithFormat:
+        @"%@ captureGeneration=%llu sessionGeneration=%llu address=0x%llx length=%zu completed=%zu kr=0x%x",
+        kind, (unsigned long long)generation, (unsigned long long)_generation,
+        (unsigned long long)address, length, completed, (unsigned)result];
+    const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (![_lastLoggedReadFailureKind isEqualToString:kind] || now - _lastReadFailureLogTime >= 30.0) {
+        _lastLoggedReadFailureKind = [kind copy];
+        _lastReadFailureLogTime = now;
+        NSLog(@"Core-SET: target-read lane=%@ stage=read ready=0 failureSequence=%llu reason=%@",
+              _diagnosticLabel ?: @"unassigned", (unsigned long long)_readFailureSequence,
+              _lastReadDiagnostic);
+    }
 }
 
 - (void)publishConnectDiagnostic:(NSString *)diagnostic ready:(BOOL)ready {
@@ -266,20 +295,48 @@ static const uint8_t CSUUID[16] = {
         if (completedBytes) *completedBytes = 0;
         if (error) *error = nil;
         if (!destination || length == 0 || length > 0x10000 || address == 0 ||
-            address > UINT64_MAX - length || generation != _generation || ![self identityStillValid:NO]) {
-            if (error) *error = @"lease/identity/arguments invalid";
-            if (generation == _generation && _task != MACH_PORT_NULL && ![self identityStillValid:NO]) [self disconnect];
+            address > UINT64_MAX - length) {
+            [self recordReadFailure:@"read-arguments-invalid" address:address length:length
+                         generation:generation completed:0 result:KERN_INVALID_ARGUMENT];
+            if (error) *error = _lastReadDiagnostic;
+            return NO;
+        }
+        if (generation != _generation) {
+            [self recordReadFailure:@"read-generation-stale" address:address length:length
+                         generation:generation completed:0 result:KERN_FAILURE];
+            if (error) *error = _lastReadDiagnostic;
+            return NO;
+        }
+        if (![self identityStillValid:NO]) {
+            if (_task != MACH_PORT_NULL) {
+                [self disconnect];
+                [self publishConnectDiagnostic:@"identity-lost stage=read-before" ready:NO];
+            }
+            [self recordReadFailure:@"read-identity-unavailable" address:address length:length
+                         generation:generation completed:0 result:KERN_FAILURE];
+            if (error) *error = _lastReadDiagnostic;
             return NO;
         }
         NSMutableData *scratch = [NSMutableData dataWithLength:length];
-        if (!scratch) { if (error) *error = @"scratch allocation failed"; return NO; }
+        if (!scratch) {
+            [self recordReadFailure:@"read-allocation-failed" address:address length:length
+                         generation:generation completed:0 result:KERN_RESOURCE_SHORTAGE];
+            if (error) *error = _lastReadDiagnostic;
+            return NO;
+        }
         mach_vm_size_t done = 0;
         kern_return_t kr = mach_vm_read_overwrite(_task, address, length,
             (mach_vm_address_t)(uintptr_t)scratch.mutableBytes, &done);
         if (completedBytes) *completedBytes = (size_t)done;
-        if (kr != KERN_SUCCESS || done != length || ![self identityStillValid:NO] || generation != _generation) {
-            if (error) *error = @"partial read or identity changed";
-            if (![self identityStillValid:NO]) [self disconnect];
+        const BOOL identityValid = [self identityStillValid:NO] && generation == _generation;
+        if (kr != KERN_SUCCESS || done != length || !identityValid) {
+            if (!identityValid) {
+                [self disconnect];
+                [self publishConnectDiagnostic:@"identity-lost stage=read-after" ready:NO];
+            }
+            [self recordReadFailure:identityValid ? @"read-partial-or-kern-failure" : @"read-identity-changed"
+                           address:address length:length generation:generation completed:(size_t)done result:kr];
+            if (error) *error = _lastReadDiagnostic;
             return NO; // Never expose a partially filled destination.
         }
         memcpy(destination, scratch.bytes, length);
@@ -290,11 +347,22 @@ static const uint8_t CSUUID[16] = {
 - (CoreSetReadCleanupResult *)disconnect {
     @synchronized (self) {
         BOOL released = YES;
+        const BOOL hadIdentity = _task != MACH_PORT_NULL || _pid > 0 || _base != 0 || _path.length != 0;
         if (_task != MACH_PORT_NULL) {
             released = mach_port_deallocate(mach_task_self(), _task) == KERN_SUCCESS;
         }
         if (released) _task = MACH_PORT_NULL;
         _pid = -1; _base = 0; _path = nil;
+        // Failure sequence stays monotonic for in-flight capture attribution,
+        // but old identity diagnostics must not survive a disconnected lease.
+        if (hadIdentity) {
+            _lastConnectDiagnostic = @"disconnected";
+            _lastLoggedDiagnostic = nil;
+            _lastDiagnosticLogTime = 0;
+            _lastReadDiagnostic = @"no-read-failure session-disconnected";
+            _lastLoggedReadFailureKind = nil;
+            _lastReadFailureLogTime = 0;
+        }
         BOOL advanced = _generation != UINT64_MAX;
         if (advanced) ++_generation;
         return [[CoreSetReadCleanupResult alloc] initWithTaskPortReleased:released generationAdvanced:advanced];

@@ -20,6 +20,10 @@ NS_ASSUME_NONNULL_BEGIN
 // Latest exact connect boundary. This is suitable for unavailable UI text and
 // never implies that a request or render receipt has succeeded.
 @property(nonatomic, copy, readonly) NSString *lastConnectDiagnostic;
+// Capture producers compare this sequence before/after their own serialized
+// capture. Only a changed sequence attributes lastReadDiagnostic to that capture.
+@property(nonatomic, readonly) uint64_t readFailureSequence;
+@property(nonatomic, copy, readonly) NSString *lastReadDiagnostic;
 
 // Only ShadowTrackerExtra 1.38.12/build 15915/LC_UUID 34b785b2... is accepted.
 // An unavailable task_read_for_pid port leaves this session unavailable; there is no

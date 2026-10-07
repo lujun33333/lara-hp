@@ -199,7 +199,8 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         }
         if needsTarget(request.desired) &&
             (!preview.ready || request.desired.maximumDistance.value == nil) {
-            completion(request.token, .notApplied(reason: "只读目标候选或预览筛选尚未就绪")); return
+            let reason = preview.ready ? "请先选择只读预览筛选距离" : preview.unavailableDiagnostic
+            completion(request.token, .notApplied(reason: reason)); return
         }
         refresh?.invalidate(); refresh = nil
         revision += 1
@@ -235,7 +236,7 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
             }
             guard let frame else {
                 self.clearStale(token: token, canvas: canvas,
-                    reason: "只读候选快照失效，预览已撤销")
+                    reason: "只读候选快照未确认：\(self.preview.lastCaptureDiagnostic)")
                 return
             }
             self.submit(frame: frame, ring: ring, state: current, token: token,
@@ -311,6 +312,7 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
 
     private func clearStale(token: CoreSetRequestToken,
                             canvas: (generation: UInt64, size: CGSize), reason: String) {
+        NSLog("Core-SET: target-read lane=aim-preview stage=preview-invalidated confirmed=0 reason=%@", reason)
         refresh?.invalidate(); refresh = nil
         resetDynamicAnimation()
         guard revision < UInt64.max else { return }

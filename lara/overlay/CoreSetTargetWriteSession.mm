@@ -56,6 +56,9 @@
         _backend = [[CoreSetMappedPageWriteBackend alloc] initWithReadSession:_readSession];
         _authority = authority;
         _generation = 1;
+        if (!_authority) {
+            NSLog(@"Core-SET: target-write stage=capability ready=0 committed=0 reason=active-request-snapshot-authority-unavailable");
+        }
     }
     return self;
 }

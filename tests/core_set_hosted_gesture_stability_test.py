@@ -177,7 +177,7 @@ assert "[self togglePanelFromHostedPointer]" in end_gate
 assert "[self disarmHostedInput]" in body(host, "- (CoreSetHUDStopResult)stop") or \
        "[self disarmHostedInput]" in body(host, "- (void)stopHostedAsync:")
 assert ax_callback.index("if (paths.count != 1)") < ax_callback.index("_pendingTouchActions.enqueue")
-assert ax_callback.index("if (phase < 0) return") < ax_callback.index("_pendingTouchActions.enqueue")
+assert ax_callback.index('CoreSetLogAXDrop("phase-missing"') < ax_callback.index("_pendingTouchActions.enqueue")
 assert "CoreSetDrawWindow" in host and "CoreSetMenuWindow" in host
 assert "CoreSetMirroredMenuWindow" not in host
 assert "foregroundTouchCalibrationReady" not in host
@@ -244,4 +244,111 @@ assert placement_bounds(390, 844, 50) == ((50, 340), (50, 794))
 assert placement_bounds(844, 390, 50) == ((50, 794), (50, 340))
 
 assert not re.search(r"sendActions\s*\(", menu), "hosted input must use explicit consumers"
+
+
+def check_hosted_input_diagnostics(source: str) -> None:
+    implementation = source[source.index("@implementation CoreSetHUDHost {"):]
+    logger = body(source, "static void CoreSetLogInputStage(")
+    assert "counter->fetch_add(1)" in logger
+    assert "if (CoreSetInputLogDue(count))" in logger
+    assert "phase=%ld control=%@ result=%ld" in logger
+    assert "point.x" not in logger and "point.y" not in logger
+    assert "count == 1 || count % 64 == 0" in body(source, "static BOOL CoreSetInputLogDue(")
+    callback = body(implementation, "- (void)receiveHostedHIDEvent:")
+    assert "stage=event count=%llu provider=%s" in callback
+    assert "typeKnown=%d" in callback and "eventType != UINT32_MAX" in callback
+    assert "const uint32_t eventType = _hidEventGetType" in callback
+    assert "(!_bkInputRegistered && _hidEventGetType)" not in callback
+    assert "stage=wrapper count=%llu provider=%s" in callback
+    assert "rootAX=%d rootHand=%d" in callback
+    assert "selectedDepth=%lu selectedType=%u maxDepth=%lu truncated=%d" in callback
+    assert "constexpr NSUInteger nodeLimit = 64, depthLimit = 4" in callback
+    assert "const CFIndex boundedCount = MIN(count, (CFIndex)nodeLimit)" in callback
+    assert "nodes[visited].event == child" in callback
+    assert "if (node.depth >= depthLimit && count > 0)" in callback
+    assert "if (nodeCount == nodeLimit)" in callback
+    for reason in ("wrapper-scan-limit", "wrapper-multiple-pointers"):
+        assert f'CoreSetLogAXDrop("{reason}"' in callback
+    assert callback.index("if (candidatePointers.count > 1)") < callback.index(
+        "_pendingTouchActions.enqueue"
+    )
+    assert "IOHIDEventGetParent" not in source and "IOHIDEventGetTypeID" not in source
+    assert "_inputCounts.parseDropped.fetch_add(1)" in callback
+    for reason in ("paths-empty", "multiple-paths", "reserved-pointer", "phase-missing",
+                   "nonfinite-point", "physical-cancel"):
+        assert f'CoreSetLogAXDrop("{reason}"' in callback
+    assert 'CoreSetLogInputStage("queue"' in callback
+    assert "accepted ? &host->_inputCounts.queued : &host->_inputCounts.queueDropped" in callback
+    assert "queueGeneration == current->_pendingTouchGeneration.load()" in callback
+    expiry_reset = callback.index("if (result == coreset_pending_touch::EnqueueResult::AppendedAfterDroppingLifecycle)")
+    assert expiry_reset < callback.index("[current resetHostedPointer]", expiry_reset) < callback.index(
+        "[host drainPendingTouchActionsOnQueue]", expiry_reset
+    )
+    drain = body(implementation, "- (void)drainPendingTouchActionsOnQueue")
+    assert 'CoreSetLogInputStage("delivery", "main-action"' in drain
+    assert 'CoreSetLogInputStage("delivery", reason' in drain
+    pointer = body(implementation, "- (void)handleHostedPointer:")
+    for reason in ("host-not-interactive", "readback-pending", "source-context-unavailable",
+                   "control-changed-at-end"):
+        assert f'CoreSetLogInputStage("hit", "{reason}"' in pointer
+    assert 'CoreSetLogInputStage("hit", missReason' in pointer
+    hit_test = body(implementation, "- (NSString *)hostedControlIDAtSurfacePoint:")
+    for reason in ("no-eligible-control", "outside-fixed-surface", "modal-presented",
+                   "panel-hidden-or-consumer-unavailable"):
+        assert f'"{reason}"' in hit_test
+    coordinate = body(implementation, "- (CGPoint)menuWindowPointFromFixedSurface:")
+    assert "stage=coordinate count=%llu generation=%llu mapping=screen-fixed" in coordinate
+    assert "if (CoreSetInputLogDue(count))" in coordinate
+    assert "fixedInside=%d sceneInside=%d nativeInside=%d unitRange=%d menuInside=%d" in coordinate
+    assert "fromCoordinateSpace:_menuWindow.windowScene.screen.fixedCoordinateSpace" in coordinate
+    assert 'CoreSetLogInputStage("hit", "control-matched"' in pointer
+    assert pointer.index('CoreSetLogInputStage("hit", "control-matched"') < pointer.index(
+        "(void)[self dispatchHostedMenuControl:identifier"
+    )
+    assert "if (CoreSetInputLogDue(dispatchCount))" in pointer
+    assert pointer.index("action=begin generation=%llu") < pointer.index(
+        "dispatched = [self dispatchHostedMenuControl:identifier"
+    )
+    consumer_callback = body(implementation, "- (BOOL)dispatchHostedMenuControl:")
+    assert consumer_callback.index("const uint64_t generation = self.generation") < consumer_callback.index(
+        "handleHostedControlID:"
+    )
+    assert consumer_callback.index("handleHostedControlID:") < consumer_callback.index(
+        'CoreSetLogInputStage("callback", "menu-return"'
+    )
+    assert "return handled" in consumer_callback
+    arm = body(implementation, "- (BOOL)armHostedInput")
+    assert 'CoreSetLogInputStage("source"' in arm
+    readback = body(implementation, "- (void)requestHostedReadback")
+    assert "if (CoreSetInputLogDue(readbackCount))" in readback
+    assert 'CoreSetLogInputStage("readback", "stale-epoch"' in readback
+    assert "stage=readback observed=%d" in readback
+    snapshot = body(implementation, "- (NSString *)hostingDiagnosticSnapshot")
+    for counter in ("event", "wrapper", "wrapperIncomplete", "parsed", "parseDropped", "queued", "queueDropped", "delivered",
+                    "deliveryDropped", "coordinate", "coordinateDropped", "hit", "hitDropped", "dispatched", "callback",
+                    "callbackHandled", "readback", "readbackDropped"):
+        assert f"{counter}=%llu" in snapshot
+    monitor = body(implementation, "- (BOOL)startInputMonitor")
+    assert "stage=source-api count=%llu callbackABI=WZ-IOHIDEventRef" in monitor
+    assert "[axClass methodSignatureForSelector:factory]" in monitor
+    assert "eventArgument=%s streamArgument=%s returnArgument=%s" in monitor
+    assert monitor.index("if (registerBK)") < monitor.index("if (create && reg && schedule)")
+    assert "WZ's install_hid_monitor_main tries IOHID first and BKSHID as fallback" in monitor
+
+
+check_hosted_input_diagnostics(host)
+for required in ('CoreSetLogInputStage("queue"', 'CoreSetLogInputStage("delivery", "main-action"',
+                 'CoreSetLogInputStage("hit", "control-matched"',
+                 'CoreSetLogInputStage("callback", "menu-return"',
+                 "if (CoreSetInputLogDue(readbackCount))",
+                 "if (candidatePointers.count > 1)", "nodes[visited].event == child",
+                 "queueGeneration == current->_pendingTouchGeneration.load()"):
+    try:
+        check_hosted_input_diagnostics(host.replace(required, "REMOVED_DIAGNOSTIC"))
+    except (AssertionError, ValueError):
+        pass
+    else:
+        raise AssertionError("input diagnostics negative control accepted: " + required)
+
 print("PASS: hosted gesture survives unrelated samples and frames, keeps page scroll, gates stale readback; source only")
+print("PASS: source/event/AX/queue/delivery/hit/dispatch/callback/readback counters and throttled diagnostics; source only")

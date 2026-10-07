@@ -208,6 +208,10 @@ final class CoreSetRuntimeCoordinator {
     private(set) var lastStopResult: CoreSetHUDStopResult?
     // Read-only snapshot, not a second mutable configuration store.
     var featureState: CoreSetFeatureState { menu.featureState }
+    func invalidateReadFrameObservation(_ capability: CoreSetCapability, reason: String) {
+        precondition(Thread.isMainThread)
+        menu.invalidateReadFrameObservation(capability: capability, reason: reason)
+    }
     var playerCanvas: (generation: UInt64, size: CGSize)? {
         guard host.localSurfacesReady else { return nil }
         let size = host.logicalCanvasSize

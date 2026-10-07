@@ -7,6 +7,10 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     let capability = CoreSetCapability.aimControl
     private let writer = CoreSetTargetWriteSession()
 
+    init() {
+        NSLog("Core-SET: target-write lane=aim stage=capability ready=0 reason=audited-writer-or-receipt-unavailable controllerSlots=static-typed axisUnitRoute=unverified selector=unverified lifecycleReceipt=unverified")
+    }
+
     var availability: CoreSetAvailability {
         .unavailable(reason: writer.pendingCleanup
             ? "目标写会话清理待确认" : "build15915 映射写能力与动作停止回执未验证")
@@ -15,6 +19,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
 
     func apply(_ request: CoreSetApplyRequest<State>,
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
+        NSLog("Core-SET: target-write lane=aim stage=request-denied committed=0 reason=audited-writer-or-receipt-unavailable request=%@", request.token.requestID.uuidString)
         completion(request.token, .notApplied(reason: "自瞄目标写能力未验证，未执行目标写入"))
     }
 

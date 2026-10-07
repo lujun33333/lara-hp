@@ -42,6 +42,14 @@ enum CoreSetField: Hashable {
     // the explicit field ID to avoid mistaking a visible selector for support.
     case basicAimScene
 
+    var diagnosticID: String {
+        switch self {
+        case .actor(let scope, let field): return "actor.\(scope).\(field)"
+        case .actorColor(let scope, let field): return "actorColor.\(scope).\(field)"
+        default: return String(describing: self)
+        }
+    }
+
     static func required(for capability: CoreSetCapability) -> Set<CoreSetField> {
         switch capability {
         case .frameScheduling: return [.framesPerSecond]
@@ -147,8 +155,10 @@ struct CoreSetFeatureChannel<Value: Equatable> {
     private(set) var pendingApply: CoreSetApplyRequest<Value>?
     private(set) var pendingStop: CoreSetRequestToken?
     private(set) var suspended = false
+    private(set) var observationInvalidationReason: String?
     // Tracks possible effects even after a failed/lost apply acknowledgement.
     private var mayHaveEffects = false
+    private var effectsBeforePendingApply = false
     private var binding: CoreSetConsumerBinding<Value>?
 
     init(capability: CoreSetCapability, desired: Value) {
@@ -179,6 +189,16 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         }
         return binding?.currentAvailability() ?? .unavailable(reason: "Consumer released")
     }
+    // A partial consumer can confirm only its declared live fields. This never
+    // promotes a page or a different reference capability to fully supported.
+    var isSupportedDesiredConfirmed: Bool {
+        binding?.owner != nil && binding?.currentAvailability() == .ready &&
+            (availability == .ready || canApplySupportedSubset) &&
+            !suspended && phase == .active && actual == desired && pendingApply == nil
+    }
+    func isFieldDesiredConfirmed(_ field: CoreSetField) -> Bool {
+        fieldAvailability(field) == .ready && isSupportedDesiredConfirmed
+    }
     var canStageDesired: Bool {
         guard binding?.owner != nil, !suspended, pendingStop == nil,
               restoration != .pending else { return false }
@@ -186,11 +206,16 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         return true
     }
     func fieldConfigurationAvailability(_ field: CoreSetField) -> CoreSetAvailability {
-        guard CoreSetField.required(for: capability).contains(field),
-              binding?.configurableFields().contains(field) == true else {
-            return .unavailable(reason: "该配置字段尚未接入")
+        guard CoreSetField.required(for: capability).contains(field) else {
+            return .unavailable(reason: "\(capability.rawValue).\(field.diagnosticID)：字段不属于此配置通道")
         }
-        return canStageDesired ? .ready : .unavailable(reason: "配置会话正在停止或恢复待确认")
+        guard binding?.owner != nil else {
+            return .unavailable(reason: "\(capability.rawValue).\(field.diagnosticID)：未绑定消费者")
+        }
+        guard binding?.configurableFields().contains(field) == true else {
+            return .unavailable(reason: "\(capability.rawValue).\(field.diagnosticID)：消费者未提供此字段配置合同")
+        }
+        return canStageDesired ? .ready : .unavailable(reason: "\(capability.rawValue).\(field.diagnosticID)：配置会话正在停止或恢复待确认")
     }
     mutating func updateDesired(_ edit: (inout Value) -> Void) { edit(&desired) }
 
@@ -201,6 +226,7 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         guard consumer.capability == capability, !mayHaveEffects, pendingStop == nil else { return false }
         binding = CoreSetConsumerBinding(consumer)
         generation = UUID(); pendingApply = nil; actual = nil; phase = .unknown
+        observationInvalidationReason = nil; effectsBeforePendingApply = false
         refreshAvailability()
         return true
     }
@@ -227,6 +253,21 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         mayHaveEffects = false; restoration = .notNeeded
     }
 
+    // Call only after the consumer observed an exact clear-frame receipt. The
+    // old configuration remains staged, but its prior display proof is revoked.
+    mutating func invalidateReadFrameObservation(reason: String) {
+        guard [.playerRendering, .materialFiltering, .radarRendering,
+               .drawingAppearance, .localAimDisplay].contains(capability) else { return }
+        actual = nil
+        observationInvalidationReason = reason
+        // A pending stop still belongs to the existing consumer generation.
+        guard pendingStop == nil else { return }
+        generation = UUID(); pendingApply = nil
+        // Keep the stop obligation. An active consumer can accept a subsequent
+        // explicit edit, while actual == nil prevents a confirmed display claim.
+        phase = mayHaveEffects ? .active : .unknown
+    }
+
     mutating func prepareApply() -> CoreSetApplyRequest<Value>? {
         refreshAvailability()
         guard let binding = binding, binding.owner != nil else { return nil }
@@ -235,6 +276,7 @@ struct CoreSetFeatureChannel<Value: Equatable> {
               restoration != .pending else { return nil }
         if restoration == .required && phase != .active { return nil }
         if case .failed = restoration { return nil }
+        effectsBeforePendingApply = mayHaveEffects
         let request = CoreSetApplyRequest(token: CoreSetRequestToken(generation: generation, consumerID: binding.id, requestID: UUID()), desired: desired)
         pendingApply = request
         phase = .applying
@@ -251,10 +293,10 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         switch outcome {
         case .applied(let observed):
             guard binding?.currentAvailability() == .ready else { refreshAvailability(); return false }
-            actual = observed; phase = .active
+            actual = observed; phase = .active; observationInvalidationReason = nil
         case .notApplied(let reason):
             availability = .unavailable(reason: reason)
-            if actual == nil {
+            if actual == nil && !effectsBeforePendingApply {
                 mayHaveEffects = false; restoration = .notNeeded; phase = .failed(reason)
             } else {
                 // The previous observed state can still have effects. Keep its
@@ -296,6 +338,7 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         switch outcome {
         case .restored:
             mayHaveEffects = false; restoration = .confirmed; phase = .stopped; actual = nil
+            observationInvalidationReason = nil; effectsBeforePendingApply = false
         case .failed(let reason): restoration = .failed(reason); phase = .failed(reason)
         }
         return true

@@ -1,4 +1,5 @@
 import UIKit
+import QuartzCore
 
 // Name-matched material marks have their own read-only session and render lane.
 // Opened-crate semantics remain unproven; filtering currently uses only the
@@ -24,6 +25,10 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
     private var expectedSessionGeneration: UInt64?
     private var expectedProcessID: Int32?
     private var expectedImageBase: UInt64?
+    private var expectedCapturedAt: Double?
+    private var lastCaptureFailure: String?
+    private var pendingInvalidation: (token: CoreSetRequestToken, snapshot: UUID,
+        generation: UInt64, revision: UInt64, reason: String)?
 
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
@@ -78,7 +83,10 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
         precondition(Thread.isMainThread)
         guard !stopped, availability == .ready, accepts(request.desired), revision < UInt64.max else {
-            completion(request.token, .notApplied(reason: "物资只读会话或字段未获静态支持")); return
+            let reason: String
+            if case .unavailable(let detail) = availability { reason = detail }
+            else { reason = "所选物资的距离区间或颜色未完整选择，或会话已停止" }
+            completion(request.token, .notApplied(reason: reason)); return
         }
         refresh?.invalidate(); refresh = nil
         revision += 1
@@ -95,7 +103,8 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
         if settings.enabled != true && settings.metroArmor != true {
             submit([], token: token, revision: expectedRevision, canvas: canvas,
                    snapshotID: UUID(), sessionGeneration: session.generation,
-                   processID: session.processID, imageBase: session.imageBase)
+                   processID: session.processID, imageBase: session.imageBase,
+                   capturedAt: CACurrentMediaTime())
             return
         }
         inFlight = true
@@ -106,11 +115,16 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
         let includeHideOpenedCrates = settings.hideOpenedCrates == true
         worker.async { [weak self] in
             guard let self else { return }
+            let failureSequence = self.session.readFailureSequence
             let snapshot = CoreSetMaterialCollector.capture(self.session, canvasSize: canvas.size,
                 patterns: CoreSetMaterialCatalog.matchKeys, includeArmedState: includeArmedState,
                 includeCrateLevel: includeCrateLevel, includeVehicleStatus: includeVehicleStatus,
                 includeMetroArmor: includeMetroArmor,
                 includeHideOpenedCrates: includeHideOpenedCrates)
+            let capturedAt = CACurrentMediaTime()
+            let captureFailure = self.session.readFailureSequence != failureSequence
+                ? self.session.lastReadDiagnostic
+                : "snapshot-validation-or-identity-failed transport-errors=0"
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.inFlight = false
@@ -119,17 +133,27 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
                     if self.pendingApply != nil { self.capture() }
                     return
                 }
+                let captureAge = CACurrentMediaTime() - capturedAt
+                let failureReason = snapshot != nil && !(0...0.5).contains(captureAge)
+                    ? String(format: "snapshot-stale stage=capture ageSeconds=%.3f limit=0.5", captureAge)
+                    : captureFailure
                 guard let snapshot, snapshot.sessionGeneration == self.session.generation,
                       snapshot.processID == self.session.processID,
-                      snapshot.imageBase == self.session.imageBase else {
-                    self.clearStaleLane(token: token)
+                      snapshot.imageBase == self.session.imageBase,
+                      captureAge >= 0, captureAge <= 0.5 else {
+                    if self.lastCaptureFailure != failureReason {
+                        self.lastCaptureFailure = failureReason
+                        NSLog("Core-SET: target-read lane=materials stage=capture ready=0 reason=%@", failureReason)
+                    }
+                    self.clearStaleLane(token: token, reason: failureReason)
                     if let pending = self.pendingApply, pending.0 == token {
                         self.pendingApply = nil
-                        pending.1(token, .unavailable(reason: "未取得完整且身份稳定的物资快照"))
+                        pending.1(token, .unavailable(reason: "物资快照未确认：\(failureReason)"))
                     }
                     self.coordinator?.refreshPlayerAvailability()
                     return
                 }
+                self.lastCaptureFailure = nil
                 guard let commands = self.render(snapshot, on: canvas.size) else {
                     self.clearStaleLane(token: token)
                     if let pending = self.pendingApply, pending.0 == token {
@@ -141,7 +165,8 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
                 let id = UUID(uuidString: snapshot.snapshotID.uuidString) ?? UUID()
                 self.submit(commands, token: token, revision: expectedRevision, canvas: canvas,
                     snapshotID: id, sessionGeneration: snapshot.sessionGeneration,
-                    processID: snapshot.processID, imageBase: snapshot.imageBase)
+                    processID: snapshot.processID, imageBase: snapshot.imageBase,
+                    capturedAt: capturedAt)
             }
         }
     }
@@ -149,15 +174,13 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
     private func submit(_ commands: [CoreSetRenderCommand], token: CoreSetRequestToken,
                         revision expectedRevision: UInt64, canvas: (generation: UInt64, size: CGSize),
                         snapshotID: UUID, sessionGeneration: UInt64,
-                        processID: Int32, imageBase: UInt64) {
+                        processID: Int32, imageBase: UInt64, capturedAt: Double) {
         let input = CoreSetLaneSubmission(lane: .materials, hostGeneration: canvas.generation,
             configRevision: expectedRevision, snapshotID: snapshotID, requestToken: token,
             canvasSize: canvas.size, commands: commands)
-        let accepted = commands.isEmpty
-            ? coordinator?.clearLane(.materials, generation: canvas.generation,
-                configRevision: expectedRevision, snapshotID: snapshotID,
-                requestToken: token, canvasSize: canvas.size)
-            : coordinator?.submitLane(input)
+        // A complete empty snapshot is a normal frame. clearLane installs a
+        // stop barrier and would reject later nonempty frames at this revision.
+        let accepted = coordinator?.submitLane(input)
         guard accepted == true else {
             clearStaleLane(token: token)
             if let pending = pendingApply, pending.0 == token {
@@ -166,21 +189,30 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
             }
             return
         }
-        if pendingApply?.0 == token {
-            expectedSnapshot = snapshotID
-            expectedGeneration = canvas.generation
-            expectedSessionGeneration = sessionGeneration
-            expectedProcessID = processID
-            expectedImageBase = imageBase
-        }
+        expectedSnapshot = snapshotID
+        expectedGeneration = canvas.generation
+        expectedSessionGeneration = sessionGeneration
+        expectedProcessID = processID
+        expectedImageBase = imageBase
+        expectedCapturedAt = capturedAt
     }
 
-    private func clearStaleLane(token: CoreSetRequestToken) {
+    private func clearStaleLane(token: CoreSetRequestToken, reason: String = "material-frame-invalidated",
+                                recordInvalidation: Bool = true) {
         guard let canvas = coordinator?.playerCanvas, revision < UInt64.max - 1 else { return }
+        refresh?.invalidate(); refresh = nil
         revision += 1
-        _ = coordinator?.clearLane(.materials, generation: canvas.generation,
-            configRevision: revision, snapshotID: UUID(), requestToken: token,
-            canvasSize: canvas.size)
+        let id = UUID()
+        if recordInvalidation && pendingApply == nil && pendingStop == nil && activeToken == token {
+            pendingInvalidation = (token, id, canvas.generation, revision, reason)
+        }
+        let cleared = coordinator?.clearLane(.materials, generation: canvas.generation,
+            configRevision: revision, snapshotID: id, requestToken: token,
+            canvasSize: canvas.size) == true
+        if !cleared {
+            pendingInvalidation = nil
+            NSLog("Core-SET: target-read lane=materials stage=clear-submission confirmed=0 reason=%@", reason)
+        }
         revision += 1
     }
 
@@ -251,6 +283,16 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
 
     func consumed(_ receipt: CoreSetLocalFrameReceipt) {
         guard receipt.lane == .materials else { return }
+        if let invalidation = pendingInvalidation,
+           receipt.requestToken == invalidation.token, receipt.snapshotID == invalidation.snapshot,
+           receipt.hostGeneration == invalidation.generation, receipt.configRevision == invalidation.revision {
+            pendingInvalidation = nil
+            guard pendingApply == nil, pendingStop == nil, activeToken == invalidation.token else { return }
+            activeToken = nil
+            coordinator?.invalidateReadFrameObservation(capability,
+                reason: receipt.acceptedByLocalRenderer ? invalidation.reason : "material-clear-renderer-rejected")
+            return
+        }
         if let stop = pendingStop, stop.0 == receipt.requestToken,
            receipt.configRevision == revision, receipt.snapshotID == expectedSnapshot,
            receipt.hostGeneration == expectedGeneration {
@@ -263,11 +305,17 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
            receipt.hostGeneration == expectedGeneration {
             let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
                 session.processID == expectedProcessID && session.imageBase == expectedImageBase
+            let fresh = expectedCapturedAt.map {
+                CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
+            } ?? false
             pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
             expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
-            guard identityMatches else {
-                clearStaleLane(token: pending.0)
-                pending.1(pending.0, .unavailable(reason: "物资快照消费时目标身份已变化"))
+            expectedCapturedAt = nil
+            guard identityMatches && fresh else {
+                let reason = identityMatches ? "snapshot-stale stage=receipt" : "material-receipt-identity-lost"
+                NSLog("Core-SET: target-read lane=materials stage=receipt confirmed=0 reason=%@", reason)
+                clearStaleLane(token: pending.0, reason: reason, recordInvalidation: false)
+                pending.1(pending.0, .unavailable(reason: reason))
                 return
             }
             if receipt.acceptedByLocalRenderer {
@@ -281,7 +329,22 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
             }
             return
         }
-        if activeToken == receipt.requestToken && availability != .ready { clearStaleLane(token: receipt.requestToken) }
+        if activeToken == receipt.requestToken,
+           receipt.configRevision == revision, receipt.snapshotID == expectedSnapshot,
+           receipt.hostGeneration == expectedGeneration {
+            let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
+                session.processID == expectedProcessID && session.imageBase == expectedImageBase
+            let fresh = expectedCapturedAt.map {
+                CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
+            } ?? false
+            if !receipt.acceptedByLocalRenderer || !identityMatches || !fresh {
+                clearStaleLane(token: receipt.requestToken,
+                    reason: !identityMatches ? "material-receipt-identity-lost" :
+                        (!fresh ? "snapshot-stale stage=receipt" : "material-renderer-rejected"))
+            }
+        } else if activeToken == receipt.requestToken && availability != .ready {
+            clearStaleLane(token: receipt.requestToken, reason: "material-receipt-session-unavailable")
+        }
     }
 
     func stop(_ token: CoreSetRequestToken,

@@ -50,11 +50,46 @@ static CGFloat CoreSetHostedOrientationAngle(UIInterfaceOrientation value) {
         default: return 0;
     }
 }
-static void CoreSetLogAXDrop(const char *reason, std::atomic_uint_fast64_t *counter) {
+static BOOL CoreSetInputLogDue(uint64_t count) {
+    return count == 1 || count % 64 == 0;
+}
+struct CoreSetInputDiagnosticCounters {
+    std::atomic_uint_fast64_t source{0}, sourceUnavailable{0}, sourceAPI{0};
+    std::atomic_uint_fast64_t wrapper{0}, wrapperIncomplete{0};
+    std::atomic_uint_fast64_t parseDropped{0}, pathsEmpty{0}, multiplePaths{0};
+    std::atomic_uint_fast64_t reservedPointer{0}, phaseMissing{0}, nonfinitePoint{0}, cancelled{0};
+    std::atomic_uint_fast64_t queued{0}, queueDropped{0}, delivered{0}, deliveryDropped{0};
+    std::atomic_uint_fast64_t coordinate{0}, coordinateDropped{0};
+    std::atomic_uint_fast64_t hit{0}, hitDropped{0}, dispatched{0};
+    std::atomic_uint_fast64_t callback{0}, callbackHandled{0};
+    std::atomic_uint_fast64_t readback{0}, readbackDropped{0};
+};
+// Counts are host-lifetime observations. A callback result is not a feature
+// apply receipt; the menu's existing stage=actual receipts remain authoritative.
+static void CoreSetLogInputStage(const char *stage, const char *reason,
+                                std::atomic_uint_fast64_t *counter,
+                                uint64_t generation, NSInteger phase = -1,
+                                NSString *control = nil, NSInteger result = -1) {
     const uint64_t count = counter->fetch_add(1) + 1;
-    if (count == 1 || count % 64 == 0)
+    if (CoreSetInputLogDue(count))
+        NSLog(@"Core-SET: hosted input stage=%s reason=%s count=%llu generation=%llu phase=%ld control=%@ result=%ld",
+              stage, reason, (unsigned long long)count, (unsigned long long)generation,
+              (long)phase, control ?: @"none", (long)result);
+}
+static void CoreSetLogAXDrop(const char *reason, std::atomic_uint_fast64_t *counter,
+                           std::atomic_uint_fast64_t *total = nullptr) {
+    if (total) total->fetch_add(1);
+    const uint64_t count = counter->fetch_add(1) + 1;
+    if (CoreSetInputLogDue(count))
         NSLog(@"Core-SET: hosted input stage=ax-drop reason=%s count=%llu",
               reason, (unsigned long long)count);
+}
+static BOOL CoreSetAXHasUsableHand(CoreSetAXEvent *representation) {
+    if (!representation || ![representation respondsToSelector:@selector(handInfo)]) return NO;
+    CoreSetAXEventHand *hand = representation.handInfo;
+    if (!hand || ![hand respondsToSelector:@selector(paths)]) return NO;
+    NSArray *paths = hand.paths;
+    return [paths isKindOfClass:NSArray.class] && paths.count > 0;
 }
 
 @interface CoreSetDrawWindow : UIWindow @end
@@ -124,6 +159,9 @@ static void CoreSetLogAXDrop(const char *reason, std::atomic_uint_fast64_t *coun
 @property(nonatomic, strong, readwrite) NSError *lastError;
 - (void)receiveHostedHIDEvent:(CoreSetIOHIDEventRef)event;
 - (void)resetHostedPointer;
+- (BOOL)dispatchHostedMenuControl:(NSString *)identifier
+                           phase:(CoreSetHostedPointerPhase)phase
+                           point:(CGPoint)point consumer:(id<CoreSetHostedMenuTapConsumer>)consumer;
 - (void)disarmHostedInput;
 - (void)failClosedHostedInput;
 - (void)requestHostedReadback;
@@ -208,6 +246,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     std::atomic_uint_fast64_t _axException;
     std::atomic_uint_fast64_t _axChildRecovered;
     std::atomic_uint_fast64_t _axChildUnavailable;
+    CoreSetInputDiagnosticCounters _inputCounts;
     int64_t _touchPointerID;
     NSString *_touchControlID;
     uint64_t _touchMenuRevision;
@@ -273,7 +312,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         [_adapter respondsToSelector:@selector(hostGeneration)];
     const uint64_t adapterGeneration = adapterGenerationAvailable ? [_adapter hostGeneration] : 0;
     const CGSize logicalSize = self.logicalCanvasSize;
-    return [NSString stringWithFormat:
+    NSString *state = [NSString stringWithFormat:
         @"running=%d foreground=%d sceneState=%ld localReady=%d menuRegistered=%d drawRegistered=%d adapter=%d adapterGenerationAvailable=%d hostGeneration=%llu adapterGeneration=%llu panel=%d menuWindowHidden=%d drawWindowHidden=%d floatingHidden=%d floatingAttached=%d orientation=%ld canvas=%.0fx%.0f inputMonitor=%d",
         _running, _foreground, (long)sceneState, self.localSurfacesReady,
         _menuRegistered, _drawRegistered, _adapter != nil, adapterGenerationAvailable,
@@ -282,6 +321,20 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         _floating.superview != nil, (long)_hostedOrientation,
         logicalSize.width, logicalSize.height,
         self.hostedInputMonitorArmed];
+    return [state stringByAppendingFormat:
+        @" inputCounters={source=%llu sourceUnavailable=%llu event=%llu wrapper=%llu wrapperIncomplete=%llu parsed=%llu parseDropped=%llu queued=%llu queueDropped=%llu delivered=%llu deliveryDropped=%llu coordinate=%llu coordinateDropped=%llu hit=%llu hitDropped=%llu dispatched=%llu callback=%llu callbackHandled=%llu readback=%llu readbackDropped=%llu}",
+        (unsigned long long)_inputCounts.source.load(),
+        (unsigned long long)_inputCounts.sourceUnavailable.load(),
+        (unsigned long long)_hidCallbacks.load(), (unsigned long long)_inputCounts.wrapper.load(),
+        (unsigned long long)_inputCounts.wrapperIncomplete.load(), (unsigned long long)_axParsed.load(),
+        (unsigned long long)_inputCounts.parseDropped.load(),
+        (unsigned long long)_inputCounts.queued.load(), (unsigned long long)_inputCounts.queueDropped.load(),
+        (unsigned long long)_inputCounts.delivered.load(), (unsigned long long)_inputCounts.deliveryDropped.load(),
+        (unsigned long long)_inputCounts.coordinate.load(), (unsigned long long)_inputCounts.coordinateDropped.load(),
+        (unsigned long long)_inputCounts.hit.load(), (unsigned long long)_inputCounts.hitDropped.load(),
+        (unsigned long long)_inputCounts.dispatched.load(),
+        (unsigned long long)_inputCounts.callback.load(), (unsigned long long)_inputCounts.callbackHandled.load(),
+        (unsigned long long)_inputCounts.readback.load(), (unsigned long long)_inputCounts.readbackDropped.load()];
 }
 - (BOOL)cleanupPending { return !_running && (_menuCleanupNeeded || _drawCleanupNeeded || _schedulerCleanupNeeded); }
 - (BOOL)hostedCleanupInFlight { return _hostedAsyncStopPending; }
@@ -548,9 +601,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (void)resetHostedPointer {
     if (_touchControlID && ![_touchControlID isEqualToString:@"host.floating"] &&
         [_menuController conformsToProtocol:@protocol(CoreSetHostedMenuTapConsumer)]) {
-        [(id<CoreSetHostedMenuTapConsumer>)_menuController
-            handleHostedControlID:_touchControlID phase:CoreSetHostedPointerPhaseCancelled
-            atPoint:CGPointZero];
+        [self dispatchHostedMenuControl:_touchControlID phase:CoreSetHostedPointerPhaseCancelled
+            point:CGPointZero consumer:(id<CoreSetHostedMenuTapConsumer>)_menuController];
     }
     _touchPointerID = -1; _touchControlID = nil; _touchGeneration = 0;
     _touchMenuRevision = 0; _touchContinuous = NO;
@@ -558,23 +610,62 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     _touchFloatingDownLogical = CGPointZero; _touchFloatingOrigin = CGPointZero;
     _touchFloatingDragged = NO;
 }
-- (CGPoint)menuWindowPointFromFixedSurface:(CGPoint)point {
-    return [_menuWindow convertPoint:point
-        fromCoordinateSpace:_menuWindow.windowScene.screen.fixedCoordinateSpace];
+- (BOOL)dispatchHostedMenuControl:(NSString *)identifier
+                           phase:(CoreSetHostedPointerPhase)phase
+                           point:(CGPoint)point consumer:(id<CoreSetHostedMenuTapConsumer>)consumer {
+    const uint64_t generation = self.generation;
+    const BOOL handled = [consumer handleHostedControlID:identifier phase:phase atPoint:point];
+    if (handled) _inputCounts.callbackHandled.fetch_add(1);
+    CoreSetLogInputStage("callback", "menu-return", &_inputCounts.callback,
+        generation, phase, identifier, handled);
+    return handled;
 }
-- (NSString *)hostedControlIDAtSurfacePoint:(CGPoint)point {
+- (CGPoint)menuWindowPointFromFixedSurface:(CGPoint)point {
+    const CGPoint converted = [_menuWindow convertPoint:point
+        fromCoordinateSpace:_menuWindow.windowScene.screen.fixedCoordinateSpace];
+    const BOOL inside = _menuWindow && std::isfinite(converted.x) && std::isfinite(converted.y) &&
+        CGRectContainsPoint(_menuWindow.bounds, converted);
+    UIScreen *screen = _menuWindow.windowScene.screen;
+    const BOOL fixedInside = screen && CGRectContainsPoint(screen.fixedCoordinateSpace.bounds, point);
+    const BOOL sceneInside = _menuWindow.windowScene &&
+        CGRectContainsPoint(_menuWindow.windowScene.coordinateSpace.bounds, point);
+    const BOOL nativeInside = screen && CGRectContainsPoint(screen.nativeBounds, point);
+    const BOOL unitRange = point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1;
+    std::atomic_uint_fast64_t *counter = inside ? &_inputCounts.coordinate : &_inputCounts.coordinateDropped;
+    const uint64_t count = counter->fetch_add(1) + 1;
+    if (CoreSetInputLogDue(count))
+        NSLog(@"Core-SET: hosted input stage=coordinate count=%llu generation=%llu mapping=screen-fixed fixedInside=%d sceneInside=%d nativeInside=%d unitRange=%d menuInside=%d orientation=%ld scale=%.2f",
+              (unsigned long long)count, (unsigned long long)self.generation,
+              fixedInside, sceneInside, nativeInside, unitRange, inside,
+              (long)_hostedOrientation, screen.scale);
+    return converted;
+}
+- (NSString *)hostedControlIDAtSurfacePoint:(CGPoint)point missReason:(const char **)missReason {
+    if (missReason) *missReason = "no-eligible-control";
     if (!_menuWindow || !_floating || !_menuController ||
-        !std::isfinite(point.x) || !std::isfinite(point.y)) return nil;
+        !std::isfinite(point.x) || !std::isfinite(point.y)) {
+        if (missReason) *missReason = "surface-or-point-unavailable";
+        return nil;
+    }
     CGRect surface = _menuWindow.windowScene.screen.fixedCoordinateSpace.bounds;
-    if (!CGRectContainsPoint(surface, point)) return nil;
     const CGPoint windowPoint = [self menuWindowPointFromFixedSurface:point];
+    if (!CGRectContainsPoint(surface, point)) {
+        if (missReason) *missReason = "outside-fixed-surface";
+        return nil;
+    }
     CGPoint floatPoint = [_floating convertPoint:windowPoint fromView:_menuWindow];
     if (!_floating.hidden && _floating.alpha > 0.01 && _floating.userInteractionEnabled &&
         [_floating pointInside:floatPoint withEvent:nil]) return @"host.floating";
     if (!_panelVisible || _panel.hidden ||
-        ![_menuController conformsToProtocol:@protocol(CoreSetHostedMenuTapConsumer)]) return nil;
+        ![_menuController conformsToProtocol:@protocol(CoreSetHostedMenuTapConsumer)]) {
+        if (missReason) *missReason = "panel-hidden-or-consumer-unavailable";
+        return nil;
+    }
     if (_menuController.presentedViewController ||
-        _menuWindow.rootViewController.presentedViewController) return nil;
+        _menuWindow.rootViewController.presentedViewController) {
+        if (missReason) *missReason = "modal-presented";
+        return nil;
+    }
     CGPoint menuPoint = [_menuController.view convertPoint:windowPoint fromView:_menuWindow];
     id<CoreSetHostedMenuTapConsumer> consumer = (id)_menuController;
     return [consumer hostedControlIDAtPoint:menuPoint];
@@ -584,9 +675,13 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
                   timestamp:(CFAbsoluteTime)timestamp {
     if (!NSThread.isMainThread || !_inputArmed.load() || !_running || _foreground ||
         UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
+        CoreSetLogInputStage("hit", "host-not-interactive", &_inputCounts.hitDropped,
+            self.generation, phase, nil, 0);
         [self resetHostedPointer]; return;
     }
     if (CFAbsoluteTimeGetCurrent() - timestamp > 0.75) {
+        CoreSetLogInputStage("hit", "event-expired", &_inputCounts.hitDropped,
+            self.generation, phase, nil, 0);
         [self resetHostedPointer]; return;
     }
     if (phase == CoreSetHostedPointerPhaseCancelled) { [self resetHostedPointer]; return; }
@@ -596,21 +691,35 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     if (phase == CoreSetHostedPointerPhaseBegan) {
         if (![self hasHostedRegistrationReceipt]) {
             if (_hostedReadbackPending || _hostedReadbackInFlight) {
-                NSLog(@"Core-SET: hosted input stage=drop reason=readback-pending");
+                CoreSetLogInputStage("hit", "readback-pending", &_inputCounts.hitDropped,
+                    self.generation, phase, nil, 0);
                 [self resetHostedPointer]; return;
             }
+            CoreSetLogInputStage("hit", "source-context-unavailable", &_inputCounts.hitDropped,
+                self.generation, phase, nil, 0);
             [self failClosedHostedInput];
             return;
         }
         if (_touchPointerID >= 0 || generation != self.generation ||
             !self.localSurfacesReady || !_menuRegistered || !_drawRegistered ||
             ![_adapter respondsToSelector:@selector(hostGeneration)] ||
-            [_adapter hostGeneration] != self.generation) return;
-        NSString *identifier = [self hostedControlIDAtSurfacePoint:point];
-        if (!identifier) return;
+            [_adapter hostGeneration] != self.generation) {
+            CoreSetLogInputStage("hit", _touchPointerID >= 0 ? "pointer-busy" : "stale-host-generation",
+                &_inputCounts.hitDropped, self.generation, phase, nil, 0);
+            return;
+        }
+        const char *missReason = "no-eligible-control";
+        NSString *identifier = [self hostedControlIDAtSurfacePoint:point missReason:&missReason];
+        if (!identifier) {
+            CoreSetLogInputStage("hit", missReason, &_inputCounts.hitDropped,
+                self.generation, phase, nil, 0);
+            return;
+        }
         _touchPointerID = pointerID; _touchControlID = [identifier copy];
         _touchGeneration = generation; _touchDownPoint = point;
         _touchDownTime = timestamp;
+        CoreSetLogInputStage("hit", "control-matched", &_inputCounts.hit,
+            generation, phase, identifier, 1);
         if ([identifier isEqualToString:@"host.floating"]) {
             _touchContinuous = YES;
             _touchFloatingDownLogical = [_menuWindow.rootViewController.view
@@ -621,11 +730,9 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
             _touchMenuRevision = consumer.hostedMenuRevision;
             _touchContinuous = [consumer hostedControlAllowsDrag:identifier];
             CGPoint menuPoint = [_menuController.view convertPoint:[self menuWindowPointFromFixedSurface:point] fromView:_menuWindow];
-            (void)[consumer handleHostedControlID:identifier
-                phase:CoreSetHostedPointerPhaseBegan atPoint:menuPoint];
+            (void)[self dispatchHostedMenuControl:identifier phase:CoreSetHostedPointerPhaseBegan
+                point:menuPoint consumer:consumer];
         }
-        NSLog(@"Core-SET: hosted input stage=hit control=%@ generation=%llu",
-              identifier, (unsigned long long)generation);
         return;
     }
     if (_touchPointerID != pointerID || _touchGeneration != self.generation ||
@@ -633,6 +740,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
             consumer.hostedMenuRevision != _touchMenuRevision)) ||
         (!_touchContinuous && (timestamp - _touchDownTime > 0.75 ||
             hypot(point.x - _touchDownPoint.x, point.y - _touchDownPoint.y) > 9.0))) {
+        CoreSetLogInputStage("hit", "pointer-or-menu-lifecycle-changed", &_inputCounts.hitDropped,
+            self.generation, phase, _touchControlID, 0);
         [self resetHostedPointer]; return;
     }
     if (phase == CoreSetHostedPointerPhaseMoved) {
@@ -647,8 +756,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
             }
         } else if (_touchContinuous && consumer) {
             CGPoint menuPoint = [_menuController.view convertPoint:[self menuWindowPointFromFixedSurface:point] fromView:_menuWindow];
-            (void)[consumer handleHostedControlID:_touchControlID
-                phase:CoreSetHostedPointerPhaseMoved atPoint:menuPoint];
+            (void)[self dispatchHostedMenuControl:_touchControlID phase:CoreSetHostedPointerPhaseMoved
+                point:menuPoint consumer:consumer];
         }
         return;
     }
@@ -658,29 +767,40 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     const BOOL floatingDragged = _touchFloatingDragged;
     if (![self hasHostedRegistrationReceipt]) {
         if (_hostedReadbackPending || _hostedReadbackInFlight) {
+            CoreSetLogInputStage("hit", "readback-pending-at-end", &_inputCounts.hitDropped,
+                self.generation, phase, identifier, 0);
             [self resetHostedPointer]; return;
         }
+        CoreSetLogInputStage("hit", "source-context-unavailable-at-end", &_inputCounts.hitDropped,
+            self.generation, phase, identifier, 0);
         [self failClosedHostedInput]; return;
     }
-    if (!continuous && ![identifier isEqualToString:[self hostedControlIDAtSurfacePoint:point]]) {
+    if (!continuous && ![identifier isEqualToString:[self hostedControlIDAtSurfacePoint:point missReason:nullptr]]) {
+        CoreSetLogInputStage("hit", "control-changed-at-end", &_inputCounts.hitDropped,
+            self.generation, phase, identifier, 0);
         [self resetHostedPointer]; return;
     }
     _touchControlID = nil; // A confirmed End must not run the cancel handler.
     [self resetHostedPointer];
+    const uint64_t dispatchCount = _inputCounts.dispatched.fetch_add(1) + 1;
+    if (CoreSetInputLogDue(dispatchCount))
+        NSLog(@"Core-SET: hosted input stage=dispatch source=HID control=%@ action=begin generation=%llu count=%llu",
+              identifier, (unsigned long long)generation, (unsigned long long)dispatchCount);
     BOOL dispatched = NO;
     if ([identifier isEqualToString:@"host.floating"]) {
         if (!floatingDragged) [self togglePanelFromHostedPointer];
         dispatched = YES;
-        NSLog(@"Core-SET: hosted input stage=actual source=HID capability=floatingDrag confirmed=%d",
-              floatingDragged ? 1 : 0);
+        CoreSetLogInputStage("callback", floatingDragged ? "floating-drag" : "panel-request",
+            &_inputCounts.callback, generation, phase, identifier, -1);
     } else if (consumer) {
         CGPoint menuPoint = [_menuController.view convertPoint:[self menuWindowPointFromFixedSurface:point] fromView:_menuWindow];
-        dispatched = [consumer handleHostedControlID:identifier
-            phase:CoreSetHostedPointerPhaseEnded atPoint:menuPoint];
+        dispatched = [self dispatchHostedMenuControl:identifier phase:CoreSetHostedPointerPhaseEnded
+            point:menuPoint consumer:consumer];
     }
     // Dispatch is not an apply receipt; existing menu/channel callbacks own it.
-    NSLog(@"Core-SET: hosted input stage=dispatch source=HID control=%@ dispatched=%d generation=%llu",
-           identifier, dispatched, (unsigned long long)generation);
+    if (CoreSetInputLogDue(dispatchCount))
+        NSLog(@"Core-SET: hosted input stage=dispatch source=HID control=%@ dispatched=%d generation=%llu count=%llu",
+              identifier, dispatched, (unsigned long long)generation, (unsigned long long)dispatchCount);
 }
 - (void)invalidatePendingTouchActions {
     const uint64_t next = _pendingTouchGeneration.fetch_add(1) + 1;
@@ -706,6 +826,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     const auto result = _pendingTouchActions.popNext(CFAbsoluteTimeGetCurrent(),
         generation, &action, &expiredPointerID);
     if (result == coreset_pending_touch::PopResult::DroppedExpiredLifecycle) {
+        CoreSetLogInputStage("delivery", "queue-lifecycle-expired", &_inputCounts.deliveryDropped,
+            self.generation, -1, nil, 0);
         __weak CoreSetHUDHost *weakSelf = self;
         dispatch_async(dispatch_get_main_queue(), ^{
             CoreSetHUDHost *host = weakSelf;
@@ -726,9 +848,16 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
             coreset_pending_touch::isLifecycle(pending->kind);
         if (current && host->_running && host->_inputArmed.load() && !host->_foreground &&
             coreset_pending_touch::canExecute(*pending, now, generation)) {
+            CoreSetLogInputStage("delivery", "main-action", &host->_inputCounts.delivered,
+                host.generation, (NSInteger)pending->kind, nil, 1);
             pending->actionBlock();
-        } else if (expired && host->_touchPointerID == pending->pointerID) {
-            [host resetHostedPointer];
+        } else if (host) {
+            const char *reason = !current ? "stale-queue-generation" :
+                (expired ? "main-lifecycle-expired" : "host-not-interactive");
+            CoreSetLogInputStage("delivery", reason, &host->_inputCounts.deliveryDropped,
+                host.generation, (NSInteger)pending->kind, nil, 0);
+            if (expired && host->_touchPointerID == pending->pointerID)
+                [host resetHostedPointer];
         }
         dispatch_async(host ? host->_pendingTouchSerialQueue : dispatch_get_main_queue(), ^{
             if (!host) return;
@@ -742,91 +871,165 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (void)receiveHostedHIDEvent:(CoreSetIOHIDEventRef)event {
     if (!_inputArmed.load() || !event) return;
     const uint64_t callbacks = _hidCallbacks.fetch_add(1) + 1;
-    const uint32_t eventType = (!_bkInputRegistered && _hidEventGetType)
+    const uint32_t eventType = _hidEventGetType
         ? _hidEventGetType(event) : UINT32_MAX;
     if (eventType == 1) _hidTypeVendor.fetch_add(1);
     else if (eventType == 11) _hidTypeDigitizer.fetch_add(1);
     else _hidTypeOther.fetch_add(1);
     if (callbacks <= 8 || callbacks % 64 == 0)
-        NSLog(@"Core-SET: hosted input stage=callback count=%llu provider=%s type=%u vendor=%llu digitizer=%llu other=%llu cleanupCapable=%d",
+        NSLog(@"Core-SET: hosted input stage=event count=%llu provider=%s type=%u vendor=%llu digitizer=%llu other=%llu cleanupCapable=%d typeKnown=%d",
               (unsigned long long)callbacks, _bkInputRegistered ? "BKSHID" : "IOHID",
               eventType, (unsigned long long)_hidTypeVendor.load(),
               (unsigned long long)_hidTypeDigitizer.load(),
               (unsigned long long)_hidTypeOther.load(),
-              _touchClient && _hidCanUnschedule);
+              _touchClient && _hidCanUnschedule, eventType != UINT32_MAX);
     // AX decodes the HID pointer while the callback owns it. Only value types
     // enter the serial queue; the IOHIDEventRef is never retained asynchronously.
     @autoreleasepool { @try {
         Class eventClass = NSClassFromString(@"AXEventRepresentation");
-        if (!eventClass) { CoreSetLogAXDrop("class-missing", &_axClassMissing); return; }
+        if (!eventClass) {
+            CoreSetLogAXDrop("class-missing", &_axClassMissing, &_inputCounts.parseDropped); return;
+        }
         CoreSetAXEvent *representation = ((id (*)(id, SEL, CoreSetIOHIDEventRef, NSString *))objc_msgSend)(
             eventClass, @selector(representationWithHIDEvent:hidStreamIdentifier:),
             event, @"UIApplicationEvents");
+        const BOOL rootAX = representation != nil;
+        const BOOL rootHand = CoreSetAXHasUsableHand(representation);
         CFIndex childCount = 0;
         uint64_t digitizerChildren = 0;
-        if (!representation && _hidEventGetChildren) {
-            CFArrayRef children = _hidEventGetChildren(event);
-            if (children && CFGetTypeID(children) == CFArrayGetTypeID()) {
-                childCount = MIN(CFArrayGetCount(children), (CFIndex)64);
-                for (CFIndex index = 0; index < childCount; ++index) {
-                    CoreSetIOHIDEventRef child = (CoreSetIOHIDEventRef)CFArrayGetValueAtIndex(children, index);
-                    if (!child) continue;
-                    const uint32_t childType = _hidEventGetType ? _hidEventGetType(child) : UINT32_MAX;
-                    if (childType == 11) ++digitizerChildren;
+        uint64_t vendorChildren = 0, otherChildren = 0, candidates = 0;
+        NSUInteger selectedDepth = 0, maxDepth = 0, scannedNodes = 0;
+        uint32_t selectedType = eventType;
+        BOOL scanTruncated = NO;
+        NSMutableIndexSet *candidatePointers = [NSMutableIndexSet indexSet];
+        if (!rootHand && _hidEventGetChildren) {
+            // The callback ABI and factory are WZ's unchanged IOHIDEventRef
+            // path. Inspect parent-to-child layers with the already resolved
+            // accessors; do not guess ObjC wrappers or object field offsets.
+            struct Node { CoreSetIOHIDEventRef event; NSUInteger depth; };
+            constexpr NSUInteger nodeLimit = 64, depthLimit = 4;
+            Node nodes[nodeLimit] = {{event, 0}};
+            NSUInteger nodeCount = 1;
+            for (NSUInteger cursor = 0; cursor < nodeCount; ++cursor) {
+                ++scannedNodes;
+                const Node node = nodes[cursor];
+                maxDepth = MAX(maxDepth, node.depth);
+                if (cursor != 0) {
+                    const uint32_t type = _hidEventGetType ? _hidEventGetType(node.event) : UINT32_MAX;
+                    if (type == 11) ++digitizerChildren;
+                    else if (type == 1) ++vendorChildren;
+                    else ++otherChildren;
                     CoreSetAXEvent *candidate = ((id (*)(id, SEL, CoreSetIOHIDEventRef, NSString *))objc_msgSend)(
                         eventClass, @selector(representationWithHIDEvent:hidStreamIdentifier:),
-                        child, @"UIApplicationEvents");
-                    if (candidate) { representation = candidate; break; }
+                        node.event, @"UIApplicationEvents");
+                    if (CoreSetAXHasUsableHand(candidate)) {
+                        ++candidates;
+                        NSArray<CoreSetAXEventPath *> *candidatePaths = candidate.handInfo.paths;
+                        if (candidatePaths.count > nodeLimit) { scanTruncated = YES; break; }
+                        for (CoreSetAXEventPath *path in candidatePaths)
+                            [candidatePointers addIndex:path.pathIdentity];
+                        // Breadth first keeps the outer digitizer/hand
+                        // container ahead of leaf finger events.
+                        if (selectedDepth == 0) {
+                            representation = candidate; selectedDepth = node.depth; selectedType = type;
+                        }
+                    }
+                }
+                CFArrayRef children = _hidEventGetChildren(node.event);
+                if (!children || CFGetTypeID(children) != CFArrayGetTypeID()) continue;
+                const CFIndex count = CFArrayGetCount(children);
+                if (cursor == 0) childCount = count;
+                if (count > (CFIndex)nodeLimit) scanTruncated = YES;
+                if (node.depth >= depthLimit && count > 0) { scanTruncated = YES; continue; }
+                const CFIndex boundedCount = MIN(count, (CFIndex)nodeLimit);
+                for (CFIndex index = 0; index < boundedCount; ++index) {
+                    CoreSetIOHIDEventRef child = (CoreSetIOHIDEventRef)CFArrayGetValueAtIndex(children, index);
+                    if (!child) continue;
+                    BOOL seen = NO;
+                    for (NSUInteger visited = 0; visited < nodeCount; ++visited)
+                        if (nodes[visited].event == child) { seen = YES; break; }
+                    if (seen) continue;
+                    if (nodeCount == nodeLimit) { scanTruncated = YES; break; }
+                    nodes[nodeCount++] = {child, node.depth + 1};
                 }
             }
         }
+        const uint64_t wrapperCount = _inputCounts.wrapper.fetch_add(1) + 1;
+        if (CoreSetInputLogDue(wrapperCount))
+            NSLog(@"Core-SET: hosted input stage=wrapper count=%llu provider=%s rootType=%u rootAX=%d rootHand=%d children=%ld digitizerNodes=%llu vendorNodes=%llu otherNodes=%llu candidates=%llu candidatePointers=%lu nodes=%lu selectedDepth=%lu selectedType=%u maxDepth=%lu truncated=%d childrenAPI=%d typeAPI=%d",
+                  (unsigned long long)wrapperCount, _bkInputRegistered ? "BKSHID" : "IOHID",
+                  eventType, rootAX, rootHand, (long)childCount,
+                  (unsigned long long)digitizerChildren, (unsigned long long)vendorChildren,
+                  (unsigned long long)otherChildren, (unsigned long long)candidates,
+                  (unsigned long)candidatePointers.count, (unsigned long)scannedNodes, (unsigned long)selectedDepth,
+                  selectedType, (unsigned long)maxDepth, scanTruncated,
+                  _hidEventGetChildren != NULL, _hidEventGetType != NULL);
+        if (scanTruncated) {
+            CoreSetLogAXDrop("wrapper-scan-limit", &_inputCounts.wrapperIncomplete, &_inputCounts.parseDropped);
+            [self invalidatePendingTouchActions]; return;
+        }
+        if (candidatePointers.count > 1) {
+            CoreSetLogAXDrop("wrapper-multiple-pointers", &_inputCounts.multiplePaths, &_inputCounts.parseDropped);
+            [self invalidatePendingTouchActions]; return;
+        }
         if (!representation) {
             const uint64_t count = _axFactoryNil.fetch_add(1) + 1;
+            _inputCounts.parseDropped.fetch_add(1);
             _axChildUnavailable.fetch_add(1);
-            if (count == 1 || count % 64 == 0)
+            if (CoreSetInputLogDue(count))
                 NSLog(@"Core-SET: hosted input stage=ax-drop reason=factory-nil count=%llu eventType=%u children=%ld digitizerChildren=%llu",
                       (unsigned long long)count, eventType, (long)childCount,
                       (unsigned long long)digitizerChildren);
             return;
         }
-        if (childCount > 0) {
+        if (selectedDepth > 0) {
             const uint64_t recovered = _axChildRecovered.fetch_add(1) + 1;
-            if (recovered == 1 || recovered % 64 == 0)
+            if (CoreSetInputLogDue(recovered))
                 NSLog(@"Core-SET: hosted input stage=ax-child-recover count=%llu eventType=%u children=%ld digitizerChildren=%llu",
                       (unsigned long long)recovered, eventType, (long)childCount,
                       (unsigned long long)digitizerChildren);
         }
         CoreSetAXEventHand *hand = representation.handInfo;
         if (!hand || ![hand respondsToSelector:@selector(paths)]) {
-            CoreSetLogAXDrop("hand-missing", &_axHandMissing); return;
+            CoreSetLogAXDrop("hand-missing", &_axHandMissing, &_inputCounts.parseDropped); return;
         }
         NSArray<CoreSetAXEventPath *> *paths = hand.paths;
         if (![paths isKindOfClass:NSArray.class]) {
-            CoreSetLogAXDrop("paths-missing", &_axPathsMissing); return;
+            CoreSetLogAXDrop("paths-missing", &_axPathsMissing, &_inputCounts.parseDropped); return;
         }
-        if (!paths.count) return;
+        if (!paths.count) {
+            CoreSetLogAXDrop("paths-empty", &_inputCounts.pathsEmpty, &_inputCounts.parseDropped); return;
+        }
         if (paths.count != 1) {
+            CoreSetLogAXDrop("multiple-paths", &_inputCounts.multiplePaths, &_inputCounts.parseDropped);
             [self invalidatePendingTouchActions];
             return;
         }
         const int64_t pointerID = (int64_t)paths.firstObject.pathIdentity;
-        if (pointerID == 9) return;
+        if (pointerID == 9) {
+            CoreSetLogAXDrop("reserved-pointer", &_inputCounts.reservedPointer, &_inputCounts.parseDropped); return;
+        }
         NSInteger phase = -1;
         if (representation.isCancel) phase = CoreSetHostedPointerPhaseCancelled;
         else if (representation.isLift || representation.isInRangeLift) phase = CoreSetHostedPointerPhaseEnded;
         else if (representation.isTouchDown) phase = CoreSetHostedPointerPhaseBegan;
         else if (representation.isMove || representation.isChordChange) phase = CoreSetHostedPointerPhaseMoved;
-        if (phase < 0) return;
+        if (phase < 0) {
+            CoreSetLogAXDrop("phase-missing", &_inputCounts.phaseMissing, &_inputCounts.parseDropped); return;
+        }
         const CGPoint point = representation.location;
-        if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+            CoreSetLogAXDrop("nonfinite-point", &_inputCounts.nonfinitePoint, &_inputCounts.parseDropped); return;
+        }
         if (phase == CoreSetHostedPointerPhaseCancelled) {
+            CoreSetLogAXDrop("physical-cancel", &_inputCounts.cancelled, &_inputCounts.parseDropped);
             [self invalidatePendingTouchActions];
             return;
         }
         const uint64_t parsed = _axParsed.fetch_add(1) + 1;
-        if (parsed == 1 || parsed % 64 == 0)
-            NSLog(@"Core-SET: hosted input stage=ax-parse count=%llu single=1",
-                  (unsigned long long)parsed);
+        if (CoreSetInputLogDue(parsed))
+            NSLog(@"Core-SET: hosted input stage=ax-parse count=%llu single=1 phase=%ld generation=%llu",
+                  (unsigned long long)parsed, (long)phase, (unsigned long long)self.generation);
         const uint64_t hostGeneration = self.generation;
         const uint64_t queueGeneration = _pendingTouchGeneration.load();
         const double timestamp = CFAbsoluteTimeGetCurrent();
@@ -846,13 +1049,30 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         dispatch_async(_pendingTouchSerialQueue, ^{
             CoreSetHUDHost *host = weakSelf;
             if (!host) return;
-            if (host->_pendingTouchActions.enqueue(std::move(action),
-                    CFAbsoluteTimeGetCurrent(), host->_pendingTouchGeneration.load()) !=
-                coreset_pending_touch::EnqueueResult::Rejected)
+            const auto result = host->_pendingTouchActions.enqueue(std::move(action),
+                CFAbsoluteTimeGetCurrent(), host->_pendingTouchGeneration.load());
+            const BOOL accepted = result != coreset_pending_touch::EnqueueResult::Rejected;
+            const char *reason = !accepted ? "stale-or-expired" :
+                (result == coreset_pending_touch::EnqueueResult::CoalescedMove ? "coalesced-move" :
+                 (result == coreset_pending_touch::EnqueueResult::AppendedAfterDroppingLifecycle
+                    ? "expired-lifecycle-pruned" : "appended"));
+            CoreSetLogInputStage("queue", reason,
+                accepted ? &host->_inputCounts.queued : &host->_inputCounts.queueDropped,
+                host.generation, phase, nil, accepted);
+            if (result == coreset_pending_touch::EnqueueResult::AppendedAfterDroppingLifecycle) {
+                // Expiry cleared the pending lifecycle. Release its active
+                // pointer before the newly appended Begin reaches main.
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    CoreSetHUDHost *current = weakSelf;
+                    if (current && queueGeneration == current->_pendingTouchGeneration.load())
+                        [current resetHostedPointer];
+                });
+            }
+            if (accepted)
                 [host drainPendingTouchActionsOnQueue];
         });
     } @catch (__unused NSException *exception) {
-        CoreSetLogAXDrop("exception", &_axException);
+        CoreSetLogAXDrop("exception", &_axException, &_inputCounts.parseDropped);
     } }
 }
 - (void)failClosedHostedInput {
@@ -871,13 +1091,20 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 }
 - (BOOL)armHostedInput {
     if (!NSThread.isMainThread || !_running || !_orientationObserver) {
+        CoreSetLogInputStage("source", "host-orientation", &_inputCounts.sourceUnavailable,
+            self.generation, -1, nil, 0);
         NSLog(@"Core-SET: hosted input monitor armed=0 reason=host-orientation"); return NO;
     }
     if (!self.hostedRegistrationReceipt) {
+        CoreSetLogInputStage("source", "hosting-registration", &_inputCounts.sourceUnavailable,
+            self.generation, -1, nil, 0);
         NSLog(@"Core-SET: hosted input monitor armed=0 reason=hosting-registration"); return NO;
     }
     if (self.hostedInputMonitorArmed) return YES;
     const BOOL armed = [self startInputMonitor];
+    CoreSetLogInputStage("source", armed ? (_bkInputRegistered ? "BKSHID" : "IOHID") : "provider-unavailable",
+        armed ? &_inputCounts.source : &_inputCounts.sourceUnavailable,
+        self.generation, -1, nil, armed);
     NSLog(@"Core-SET: hosted input monitor armed=%d mode=%@ cleanupCapable=%d",
           armed, _bkInputRegistered ? @"BKSHID" : @"IOHID",
           _touchClient && _hidCanUnschedule);
@@ -895,6 +1122,17 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     if (!axClass) {
         NSLog(@"Core-SET: hosted input monitor armed=0 reason=AX-class"); return NO;
     }
+    const SEL factory = @selector(representationWithHIDEvent:hidStreamIdentifier:);
+    NSMethodSignature *factorySignature = [axClass methodSignatureForSelector:factory];
+    const NSUInteger argumentCount = factorySignature.numberOfArguments;
+    const char *eventArgument = argumentCount > 2 ? [factorySignature getArgumentTypeAtIndex:2] : "missing";
+    const char *streamArgument = argumentCount > 3 ? [factorySignature getArgumentTypeAtIndex:3] : "missing";
+    const uint64_t sourceAPICount = _inputCounts.sourceAPI.fetch_add(1) + 1;
+    if (CoreSetInputLogDue(sourceAPICount))
+        NSLog(@"Core-SET: hosted input stage=source-api count=%llu callbackABI=WZ-IOHIDEventRef factoryAvailable=%d arguments=%lu eventArgument=%s streamArgument=%s returnArgument=%s",
+              (unsigned long long)sourceAPICount, [axClass respondsToSelector:factory],
+              (unsigned long)argumentCount, eventArgument, streamArgument,
+              factorySignature.methodReturnType ?: "missing");
     if (!_ioKitHandle) _ioKitHandle = dlopen(
         "/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
     _hidEventGetType = _ioKitHandle ? (CoreSetHIDEventGetType)dlsym(
@@ -917,9 +1155,10 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         _inputArmed.store(true);
         return YES;
     }
-    // Prefer the same process-scoped BackBoard source used by the working WZ
-    // host. On iOS 26 the generic IOHID client can deliver type-1 vendor
-    // wrappers that AXEventRepresentation rejects before a touch is decoded.
+    // WZ's install_hid_monitor_main tries IOHID first and BKSHID as fallback.
+    // The supplied IOHID device log has 4160 callbacks, zero digitizer events
+    // and 4160 AX factory-nil drops. Prefer that existing BK tier for a fresh
+    // subscription; registration alone does not prove a physical touch parses.
     if (!_backBoardHandle) _backBoardHandle = dlopen(
         "/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices",
         RTLD_NOW | RTLD_GLOBAL);
@@ -973,6 +1212,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         if (!host) return;
         host->_hostedReadbackInFlight = NO;
         if (epoch != host->_hostedReadbackEpoch) {
+            CoreSetLogInputStage("readback", "stale-epoch", &host->_inputCounts.readbackDropped,
+                host.generation, -1, nil, 0);
             if (host->_hostedReadbackRetryNeeded && host->_running && !host->_foreground) {
                 host->_hostedReadbackRetryNeeded = NO;
                 [host requestHostedReadback];
@@ -995,8 +1236,12 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         }
         if (!current && host->_inputArmed.load() && !host->_foreground)
             [host failClosedHostedInput];
-        NSLog(@"Core-SET: hosted input stage=readback observed=%d generation=%llu source=async",
-              current, (unsigned long long)generation);
+        std::atomic_uint_fast64_t *counter = current
+            ? &host->_inputCounts.readback : &host->_inputCounts.readbackDropped;
+        const uint64_t readbackCount = counter->fetch_add(1) + 1;
+        if (CoreSetInputLogDue(readbackCount))
+            NSLog(@"Core-SET: hosted input stage=readback observed=%d generation=%llu source=async count=%llu",
+                  current, (unsigned long long)generation, (unsigned long long)readbackCount);
         [host drainHostedReadbackIdleWaiters];
     }];
 }
