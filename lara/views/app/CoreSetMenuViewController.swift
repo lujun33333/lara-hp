@@ -20,6 +20,11 @@ private struct CoreSetDirectoryPresentation: Equatable {
 
 // Retains the actual consumer. FeatureChannel itself deliberately uses weak ownership.
 private final class CoreSetMenuConsumer<Value: Equatable>: CoreSetFeatureConsumer {
+    // Swift 6.3's EarlyPerfInliner crashes in this generic isolated destructor.
+    // Keep actor isolation and normal stored-property cleanup; skip only its SIL optimization.
+    @_optimize(none)
+    deinit {}
+
     typealias State = Value
     let capability: CoreSetCapability
     private let readiness: () -> CoreSetAvailability
@@ -50,7 +55,15 @@ private final class CoreSetMenuConsumer<Value: Equatable>: CoreSetFeatureConsume
 }
 
 // Local presentation only. Reference geometry does not establish device pixel parity.
-final class CoreSetMenuViewController: UIViewController {
+final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapConsumer {
+    private weak var basicAimStatusLabel: UILabel?
+    private var basicAimStatus = "基础模式待配置"
+    func updateBasicAimStatus(_ status: String) {
+        basicAimStatus = status
+        if case .unavailable(let reason) = featureState.aim.availability {
+            basicAimStatusLabel?.text = reason
+        } else { basicAimStatusLabel?.text = status }
+    }
     var onClose: (() -> Void)?
     private(set) var featureState = CoreSetFeatureState()
     private var gameConsumers: [AnyKeyPath: AnyObject] = [:]
@@ -90,6 +103,11 @@ final class CoreSetMenuViewController: UIViewController {
         return Int(value)
     }
     private let radarRangeRows = UIView()
+    private var radarRangeCanvas: CoreSetRadarCanvas?
+    private var performanceValueLabels: [UILabel] = []
+    private var pageContentOffsets: [Int: CGPoint] = [:]
+    private var hostedPointerID: String?
+    private var homeStatusNeedsRebuild = false
     private var homeStatusSnapshot: CoreSetHomeSnapshot? { featureState.homeSnapshot }
     func updateRuntimeObservations(_ observation: CoreSetHomeObservation) {
         precondition(Thread.isMainThread)
@@ -98,7 +116,10 @@ final class CoreSetMenuViewController: UIViewController {
         featureState.homeSnapshot = observation.snapshot
         featureState.homeObservationSupportedFields = observation.supportedFields
         guard changed else { return }
-        if isViewLoaded && selectedPage == 0 { rebuildMenu() }
+        if isViewLoaded && selectedPage == 0 {
+            if hostedPointerID == nil { rebuildMenu() }
+            else { homeStatusNeedsRebuild = true }
+        }
     }
 
     func updatePerformanceObservation(_ sample: CoreSetPerformanceSample?) {
@@ -110,7 +131,7 @@ final class CoreSetMenuViewController: UIViewController {
                 residentMiB: sample.memoryValid ? sample.residentMiB : nil,
                 peakResidentMiB: sample.memoryValid ? sample.peakResidentMiB : nil)
         } else { featureState.performanceSnapshot = nil }
-        if isViewLoaded && selectedPage == 0 { rebuildMenu() }
+        if isViewLoaded && selectedPage == 0 { refreshPerformanceLabels() }
     }
     // v1.7 palette bytes at file 0xac813c; swatch spacing is 7, not the selection helper's 6.
     private let presetRGB: [[CGFloat]] = [
@@ -120,6 +141,61 @@ final class CoreSetMenuViewController: UIViewController {
     private let panel = UIView()
     private let content = UIScrollView()
     private let closeButton = UIButton(type: .system)
+    private enum HostedAction: String {
+        case close, page, theme, boundRange, adjustmentRange, localAimCircleSize
+        case localAimPreviewDistance, frameRate, warningRange, radarPlacement
+        case backIndicator, playerWeaponMode, playerCountMode, playerInformationMode
+        case playerField, localAimCircle, localAimPreviewField, materialEnabled
+        case hideWhileArmed, metroArmor, hideOpenedCrates, crateLevel, vehicleStatus
+        case radarField, warningField, presetColor, floatingColor, materialCategory
+        case backStyle, previewScene, materialGroup, allMaterialGroups
+        case aimTrigger, aimPoint, aimRange, aimBots, aimLock, aimLockStrength
+        case aimStart, aimStop, contentScroll, materialScroll
+        case colorEditor, colorRed, colorGreen, colorBlue, colorAlpha, colorApply, colorCancel
+        var allowsDrag: Bool { self == .contentScroll || self == .materialScroll || isSlider }
+        var isSlider: Bool {
+            switch self {
+            case .boundRange, .adjustmentRange, .localAimCircleSize,
+                 .localAimPreviewDistance, .frameRate, .warningRange,
+                 .radarPlacement, .aimRange, .colorRed, .colorGreen,
+                 .colorBlue, .colorAlpha: return true
+            default: return false
+            }
+        }
+        var isSegmented: Bool {
+            switch self {
+            case .aimTrigger, .aimPoint, .aimBots, .aimLock, .aimLockStrength: return true
+            default: return false
+            }
+        }
+    }
+    private final class HostedEntry {
+        weak var view: UIView?
+        let identifier: String
+        let action: HostedAction
+        init(view: UIView, identifier: String, action: HostedAction) {
+            self.view = view; self.identifier = identifier; self.action = action
+        }
+    }
+    private var hostedEntries: [HostedEntry] = []
+    private(set) var hostedMenuRevision: UInt64 = 0
+    private var hostedScrollID: String?
+    private var hostedScrollStart = CGPoint.zero
+    private var hostedScrollOffset = CGPoint.zero
+    private var hostedDispatchControlID: String?
+    private var hostedSliderID: String?
+    private var hostedSliderOriginalValue: Float = 0
+    private var hostedColorOverlay: UIView?
+    private var hostedColorCard: UIView?
+    private var hostedColorPreview: UIView?
+    private var hostedColorSliders: [UISlider] = []
+    private var hostedColorApplyButton: UIButton?
+    private var hostedColorCancelButton: UIButton?
+    private var hostedColorTarget: ColorTarget?
+    private func registerHosted(_ view: UIView, _ action: HostedAction) {
+        let id = "p\(selectedPage).\(action.rawValue).\(view.tag).\(hostedEntries.count)"
+        hostedEntries.append(HostedEntry(view: view, identifier: id, action: action))
+    }
     // Read-only live views: the host converts hit coordinates through their
     // current transforms. No second copy of the reference geometry is exported.
     var localHostHitRegions: [UIView] { [panel, closeButton] }
@@ -210,6 +286,8 @@ final class CoreSetMenuViewController: UIViewController {
                                   y: panel.center.y + (20 - referenceSize.height / 2) * scale)
         closeButton.center = CGPoint(x: min(safe.maxX - 22, max(safe.minX + 22, closeCenter.x)),
                                      y: min(safe.maxY - 22, max(safe.minY + 22, closeCenter.y)))
+        hostedColorOverlay?.frame = view.bounds
+        hostedColorCard?.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
         if selectedPage == 4 { refreshRadarRangeRows() }
     }
 
@@ -230,7 +308,17 @@ final class CoreSetMenuViewController: UIViewController {
         return result
     }
 
-    private func rebuildMenu() {
+    private func rebuildMenu(preservingCurrentOffset: Bool = true) {
+        if preservingCurrentOffset { pageContentOffsets[selectedPage] = content.contentOffset }
+        hostedPointerID = nil
+        homeStatusNeedsRebuild = false
+        hostedMenuRevision &+= 1
+        hostedEntries.removeAll()
+        hostedScrollID = nil
+        hostedSliderID = nil
+        performanceValueLabels.removeAll()
+        radarRangeCanvas = nil
+        registerHosted(closeButton, .close)
         updateConsumerAvailability()
         panel.subviews.forEach { $0.removeFromSuperview() }
         pageViews.forEach { $0.removeFromSuperview() }
@@ -273,6 +361,7 @@ final class CoreSetMenuViewController: UIViewController {
             button.accessibilityTraits = selectedPage == index ? [.button, .selected] : .button
             button.addTarget(self, action: #selector(selectPage(_:)), for: .touchUpInside)
             sidebar.addSubview(button)
+            registerHosted(button, .page)
         }
         content.frame = CGRect(x: 170, y: 38, width: 658, height: 492)
         content.contentSize = CGSize(width: 658, height: 492)
@@ -282,13 +371,23 @@ final class CoreSetMenuViewController: UIViewController {
         content.showsVerticalScrollIndicator = true
         content.clipsToBounds = false
         panel.addSubview(content)
+        registerHosted(content, .contentScroll)
         rebuildPage()
+        content.layoutIfNeeded()
+        let offset = pageContentOffsets[selectedPage] ?? .zero
+        content.contentOffset = CGPoint(
+            x: min(max(0, offset.x), max(0, content.contentSize.width - content.bounds.width)),
+            y: min(max(0, offset.y), max(0, content.contentSize.height - content.bounds.height)))
+        registerHostedColorEditor()
     }
 
     @objc private func selectPage(_ sender: UIButton) {
         guard pageTitles.indices.contains(sender.tag) else { return }
+        pageContentOffsets[selectedPage] = content.contentOffset
         selectedPage = sender.tag
-        rebuildMenu()
+        rebuildMenu(preservingCurrentOffset: false)
+        NSLog("Core-SET: hosted input stage=actual capability=menuPage page=%ld confirmed=%d",
+              selectedPage, pageViews.isEmpty ? 0 : 1)
     }
 
     @objc private func selectTheme(_ sender: UIButton) {
@@ -297,6 +396,290 @@ final class CoreSetMenuViewController: UIViewController {
         featureState.home.updateDesired { $0.theme = sender.tag == 1 ? .light : .dark }
         applyLocalAppearance()
     }
+
+    func hostedControlID(at point: CGPoint) -> String? {
+        precondition(Thread.isMainThread)
+        guard presentedViewController == nil, isViewLoaded, view.window != nil,
+              let hit = view.hitTest(point, with: nil) else { return nil }
+        var candidate: UIView? = hit
+        while let current = candidate {
+            if let entry = hostedEntries.last(where: { $0.view === current }),
+               hostedEligible(entry),
+               hostedColorOverlay.map({ entry.view?.isDescendant(of: $0) == true }) ?? true {
+                return entry.identifier
+            }
+            if current === view { break }
+            candidate = current.superview
+        }
+        return nil
+    }
+
+    private func hostedEligible(_ entry: HostedEntry) -> Bool {
+        guard let target = entry.view, target.window != nil else { return false }
+        var node: UIView? = target
+        while let current = node {
+            if current.isHidden || current.alpha <= 0.01 || !current.isUserInteractionEnabled { return false }
+            if let control = current as? UIControl, !control.isEnabled { return false }
+            if current === view { return true }
+            node = current.superview
+        }
+        return false
+    }
+
+    func hostedControlAllowsDrag(_ identifier: String) -> Bool {
+        hostedEntries.first(where: { $0.identifier == identifier })?.action.allowsDrag ?? false
+    }
+
+    func handleHostedControl(_ identifier: String, phase: CoreSetHostedPointerPhase,
+                             at point: CGPoint) -> Bool {
+        precondition(Thread.isMainThread)
+        defer {
+            if phase == .ended || phase == .cancelled {
+                if hostedPointerID == identifier { hostedPointerID = nil }
+                if homeStatusNeedsRebuild && hostedPointerID == nil && selectedPage == 0 {
+                    rebuildMenu()
+                }
+            }
+        }
+        if phase == .cancelled {
+            if hostedScrollID == identifier { hostedScrollID = nil }
+            if hostedSliderID == identifier {
+                if let slider = hostedEntries.first(where: { $0.identifier == identifier })?.view as? UISlider {
+                    slider.value = hostedSliderOriginalValue
+                    refreshHostedColorPreview()
+                }
+                hostedSliderID = nil
+            }
+            return false
+        }
+        guard let entry = hostedEntries.first(where: { $0.identifier == identifier }),
+              hostedEligible(entry), let target = entry.view else { return false }
+        if phase == .began { hostedPointerID = identifier }
+        if let scroll = target as? UIScrollView, entry.action == .contentScroll || entry.action == .materialScroll {
+            if phase == .began {
+                hostedScrollID = identifier; hostedScrollStart = point
+                hostedScrollOffset = scroll.contentOffset
+                return true
+            }
+            guard hostedScrollID == identifier else { return false }
+            if phase == .ended && hypot(point.x - hostedScrollStart.x,
+                                        point.y - hostedScrollStart.y) < 3 {
+                hostedScrollID = nil
+                return false
+            }
+            let maxX = max(0, scroll.contentSize.width - scroll.bounds.width)
+            let maxY = max(0, scroll.contentSize.height - scroll.bounds.height)
+            let desired = CGPoint(x: min(maxX, max(0, hostedScrollOffset.x - point.x + hostedScrollStart.x)),
+                                  y: min(maxY, max(0, hostedScrollOffset.y - point.y + hostedScrollStart.y)))
+            scroll.contentOffset = desired
+            if entry.action == .contentScroll { pageContentOffsets[selectedPage] = desired }
+            if phase == .ended { hostedScrollID = nil }
+            let confirmed = scroll.contentOffset == desired
+            if phase == .ended {
+                NSLog("Core-SET: hosted input stage=actual capability=scroll confirmed=%d",
+                      confirmed ? 1 : 0)
+            }
+            return confirmed
+        }
+        if phase == .began {
+            if let slider = target as? UISlider, entry.action.isSlider {
+                hostedSliderID = identifier
+                hostedSliderOriginalValue = slider.value
+            }
+            return true
+        }
+        if let slider = target as? UISlider, entry.action.isSlider {
+            let local = slider.convert(point, from: view)
+            let fraction = min(1, max(0, local.x / max(1, slider.bounds.width)))
+            slider.value = slider.minimumValue + Float(fraction) * (slider.maximumValue - slider.minimumValue)
+            if phase == .moved {
+                if [.colorRed, .colorGreen, .colorBlue, .colorAlpha].contains(entry.action) {
+                    refreshHostedColorPreview()
+                }
+                return true
+            }
+            guard phase == .ended else { return false }
+            hostedSliderID = nil
+            hostedDispatchControlID = identifier
+            defer { hostedDispatchControlID = nil }
+            return dispatchHostedSlider(entry.action, slider)
+        }
+        guard phase == .ended else { return false }
+        if let segment = target as? UISegmentedControl, entry.action.isSegmented {
+            let local = segment.convert(point, from: view)
+            let index = min(segment.numberOfSegments - 1,
+                            max(0, Int(local.x / max(1, segment.bounds.width) * CGFloat(segment.numberOfSegments))))
+            guard segment.isEnabledForSegment(at: index) else { return false }
+            segment.selectedSegmentIndex = index
+            hostedDispatchControlID = identifier
+            defer { hostedDispatchControlID = nil }
+            return dispatchHostedSegment(entry.action, segment)
+        }
+        guard let button = target as? UIButton else { return false }
+        hostedDispatchControlID = identifier
+        defer { hostedDispatchControlID = nil }
+        return dispatchHostedButton(entry.action, button)
+    }
+
+    private func dispatchHostedSlider(_ action: HostedAction, _ slider: UISlider) -> Bool {
+        switch action {
+        case .boundRange: changeBoundRange(slider)
+        case .adjustmentRange: changeAdjustmentRange(slider)
+        case .localAimCircleSize: changeLocalAimCircleSize(slider)
+        case .localAimPreviewDistance: changeLocalAimPreviewDistance(slider)
+        case .frameRate: changeFrameRate(slider)
+        case .warningRange: changeWarningRange(slider)
+        case .radarPlacement: changeRadarPlacement(slider)
+        case .aimRange: configureBasicAimRange(slider)
+        case .colorRed, .colorGreen, .colorBlue, .colorAlpha:
+            refreshHostedColorPreview()
+        default: return false
+        }
+        return true
+    }
+
+    private func dispatchHostedSegment(_ action: HostedAction, _ segment: UISegmentedControl) -> Bool {
+        switch action {
+        case .aimTrigger: configureBasicAimTrigger(segment)
+        case .aimPoint: configureBasicAimPoint(segment)
+        case .aimBots: configureBasicAimBots(segment)
+        case .aimLock: configureBasicAimLock(segment)
+        case .aimLockStrength: configureBasicAimLockStrength(segment)
+        default: return false
+        }
+        return true
+    }
+
+    private func dispatchHostedButton(_ action: HostedAction, _ button: UIButton) -> Bool {
+        switch action {
+        case .close: guard !isClosing else { return false }; closeMenu()
+        case .page: selectPage(button)
+        case .theme: selectTheme(button)
+        case .backIndicator: selectBackIndicator(button)
+        case .playerWeaponMode: selectPlayerWeaponMode(button)
+        case .playerCountMode: selectPlayerCountMode(button)
+        case .playerInformationMode: selectPlayerInformationMode(button)
+        case .playerField: togglePlayerField(button)
+        case .localAimCircle: toggleLocalAimCircle(button)
+        case .localAimPreviewField: toggleLocalAimPreviewField(button)
+        case .materialEnabled: toggleMaterialEnabled(button)
+        case .hideWhileArmed: toggleHideWhileArmed(button)
+        case .metroArmor: toggleMetroArmor(button)
+        case .hideOpenedCrates: toggleHideOpenedCrates(button)
+        case .crateLevel: toggleCrateLevel(button)
+        case .vehicleStatus: toggleVehicleStatus(button)
+        case .radarField: toggleRadarField(button)
+        case .warningField: toggleWarningField(button)
+        case .presetColor: selectPresetColor(button)
+        case .floatingColor: selectFloatingColor(button)
+        case .materialCategory: selectMaterialCategory(button)
+        case .backStyle: selectBackStyle(button)
+        case .previewScene: selectPreviewScene(button)
+        case .materialGroup: toggleMaterialGroup(button)
+        case .allMaterialGroups: setAllMaterialGroups(button)
+        case .aimStart: startBasicAim()
+        case .aimStop: stopBasicAim()
+        case .colorEditor: return showHostedColorEditor(button)
+        case .colorApply: return applyHostedColorEditor()
+        case .colorCancel: dismissHostedColorEditor(); return true
+        default: return false
+        }
+        return true // Invocation only. Original FeatureChannel owns the actual receipt.
+    }
+
+    private func registerHostedColorEditor() {
+        guard hostedColorOverlay != nil, hostedColorSliders.count == 4 else { return }
+        for (slider, action) in zip(hostedColorSliders,
+                                     [HostedAction.colorRed, .colorGreen, .colorBlue, .colorAlpha]) {
+            registerHosted(slider, action)
+        }
+        if let hostedColorApplyButton { registerHosted(hostedColorApplyButton, .colorApply) }
+        if let hostedColorCancelButton { registerHosted(hostedColorCancelButton, .colorCancel) }
+    }
+
+    private func refreshHostedColorPreview() {
+        guard hostedColorSliders.count == 4 else { return }
+        let values = hostedColorSliders.map { CGFloat($0.value) }
+        hostedColorPreview?.backgroundColor = UIColor(red: values[0], green: values[1],
+                                                     blue: values[2], alpha: values[3])
+    }
+
+    private func showHostedColorEditor(_ sender: UIButton) -> Bool {
+        guard let target = (sender as? ColorButton)?.colorTarget,
+              colorTargetStageReady(target), hostedColorOverlay == nil else { return false }
+        let seed = colorValue(target).map(uiColor) ?? defaultAccent
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard seed.getRed(&r, green: &g, blue: &b, alpha: &a) else { return false }
+        let overlay = UIView(frame: view.bounds)
+        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        overlay.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+        let card = UIView(frame: CGRect(x: 0, y: 0, width: 330, height: 320))
+        card.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        card.backgroundColor = gray(26, 250)
+        card.layer.cornerRadius = 12
+        card.layer.borderWidth = 1
+        card.layer.borderColor = gray(70, 190).cgColor
+        card.addSubview(label("RGBA 本地编辑", size: 17,
+                              frame: CGRect(x: 20, y: 12, width: 290, height: 28)))
+        let preview = UIView(frame: CGRect(x: 20, y: 48, width: 290, height: 24))
+        preview.layer.cornerRadius = 4
+        card.addSubview(preview)
+        hostedColorSliders = []
+        for (index, value) in [r, g, b, target == .theme ? CGFloat(1) : a].enumerated() {
+            card.addSubview(label(["R", "G", "B", "A"][index], size: 13,
+                                  frame: CGRect(x: 20, y: 83 + CGFloat(index) * 44,
+                                                width: 22, height: 30)))
+            let slider = UISlider(frame: CGRect(x: 50, y: 83 + CGFloat(index) * 44,
+                                                width: 260, height: 30))
+            slider.minimumValue = 0; slider.maximumValue = 1
+            slider.value = Float(value)
+            slider.isEnabled = index != 3 || target != .theme
+            slider.addTarget(self, action: #selector(hostedColorSliderChanged), for: .valueChanged)
+            card.addSubview(slider)
+            hostedColorSliders.append(slider)
+        }
+        let apply = UIButton(type: .system)
+        apply.frame = CGRect(x: 145, y: 275, width: 76, height: 32)
+        apply.setTitle("应用", for: .normal)
+        apply.addTarget(self, action: #selector(hostedColorApplyTapped), for: .touchUpInside)
+        card.addSubview(apply)
+        let cancel = UIButton(type: .system)
+        cancel.frame = CGRect(x: 234, y: 275, width: 76, height: 32)
+        cancel.setTitle("取消", for: .normal)
+        cancel.addTarget(self, action: #selector(hostedColorCancelTapped), for: .touchUpInside)
+        card.addSubview(cancel)
+        overlay.addSubview(card)
+        view.addSubview(overlay)
+        hostedColorOverlay = overlay; hostedColorCard = card; hostedColorPreview = preview
+        hostedColorApplyButton = apply; hostedColorCancelButton = cancel; hostedColorTarget = target
+        hostedMenuRevision &+= 1
+        registerHostedColorEditor()
+        refreshHostedColorPreview()
+        return true
+    }
+
+    private func applyHostedColorEditor() -> Bool {
+        guard let target = hostedColorTarget, colorTargetStageReady(target),
+              hostedColorSliders.count == 4 else { return false }
+        let values = hostedColorSliders.map { CGFloat($0.value) }
+        guard values.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return false }
+        let color = UIColor(red: values[0], green: values[1], blue: values[2], alpha: values[3])
+        dismissHostedColorEditor()
+        applyEditedColor(color, target: target)
+        return true // The original appearance/material/adjustment channel owns the receipt.
+    }
+
+    private func dismissHostedColorEditor() {
+        hostedColorOverlay?.removeFromSuperview()
+        hostedColorOverlay = nil; hostedColorCard = nil; hostedColorPreview = nil
+        hostedColorSliders = []; hostedColorApplyButton = nil; hostedColorCancelButton = nil
+        hostedColorTarget = nil
+        hostedMenuRevision &+= 1
+    }
+
+    @objc private func hostedColorSliderChanged() { refreshHostedColorPreview() }
+    @objc private func hostedColorApplyTapped() { _ = applyHostedColorEditor() }
+    @objc private func hostedColorCancelTapped() { dismissHostedColorEditor() }
 
     @objc private func closeMenu() {
         guard !isClosing else { return }
@@ -359,8 +742,7 @@ final class CoreSetMenuViewController: UIViewController {
     // and every edit additionally query the live consumer before accepting input.
     func refreshConsumerAvailability() {
         precondition(Thread.isMainThread)
-        updateConsumerAvailability()
-        if isViewLoaded { rebuildMenu() }
+        if updateConsumerAvailability(), isViewLoaded { rebuildMenu() }
     }
     func invalidateLocalAimDisplayAfterHostReset() {
         precondition(Thread.isMainThread)
@@ -394,10 +776,15 @@ final class CoreSetMenuViewController: UIViewController {
     private func applyGame<Value: Equatable>(_ path: WritableKeyPath<CoreSetFeatureState, CoreSetFeatureChannel<Value>>) {
         guard let consumer = gameConsumers[path] as? CoreSetMenuConsumer<Value>,
               let request = featureState[keyPath: path].prepareApply() else { return }
+        let hostedSource = hostedDispatchControlID ?? "UIKit"
         rebuildMenu()
         consumer.apply(request) { [weak self] token, outcome in
             DispatchQueue.main.async {
                 guard let self, self.featureState[keyPath: path].receive(token, outcome: outcome) else { return }
+                let channel = self.featureState[keyPath: path]
+                NSLog("Core-SET: hosted input stage=actual control=%@ capability=%@ confirmed=%d",
+                      hostedSource, channel.capability.rawValue,
+                      channel.isDesiredConfirmed ? 1 : 0)
                 self.rebuildMenu()
                 if self.featureState[keyPath: path].desired != request.desired,
                    self.featureState[keyPath: path].phase == .active { self.applyGame(path) }
@@ -436,6 +823,29 @@ final class CoreSetMenuViewController: UIViewController {
             completion(states.allSatisfy { $0 == .notNeeded || $0 == .confirmed })
         }
     }
+    func suspendAimConsumer(completion: @escaping (Bool) -> Void) {
+        precondition(Thread.isMainThread)
+        featureState.aim.suspend()
+        guard let token = featureState.aim.pendingStop else {
+            completion(featureState.aim.restoration == .notNeeded || featureState.aim.restoration == .confirmed); return
+        }
+        guard let consumer = gameConsumers[\CoreSetFeatureState.aim] as? CoreSetMenuConsumer<CoreSetAimSettings> else {
+            completion(false); return
+        }
+        consumer.stop(token) { [weak self] token, outcome in
+            DispatchQueue.main.async {
+                guard let self, self.featureState.aim.receiveStop(token, outcome: outcome) else { completion(false); return }
+                self.rebuildMenu()
+                completion(self.featureState.aim.restoration == .notNeeded ||
+                           self.featureState.aim.restoration == .confirmed)
+            }
+        }
+    }
+    @discardableResult
+    func resumeAimConsumer() -> Bool {
+        precondition(Thread.isMainThread)
+        let result = featureState.aim.resume(); refreshConsumerAvailability(); return result
+    }
 
     @discardableResult
     func resumeGameConsumers() -> Bool {
@@ -464,6 +874,7 @@ final class CoreSetMenuViewController: UIViewController {
         hostChannel.updateDesired { $0.menuVisible = visible; $0.floatingPalette = palette }
         applyHostSettings { [weak self] confirmed in
             if confirmed && visible { self?.isClosing = false }
+            if confirmed && !visible { self?.dismissHostedColorEditor() }
             completion(confirmed)
         }
     }
@@ -491,11 +902,14 @@ final class CoreSetMenuViewController: UIViewController {
 
     private func applyHostSettings(completion: @escaping (Bool) -> Void = { _ in }) {
         guard let consumer = hostConsumer, let request = hostChannel.prepareApply() else { completion(false); return }
+        let hostedSource = hostedDispatchControlID ?? "host-or-UIKit"
         consumer.apply(request) { [weak self] token, outcome in
             DispatchQueue.main.async {
                 guard let self, self.hostChannel.receive(token, outcome: outcome) else { completion(false); return }
                 _ = self.featureState.setInfrastructure(.hostWindow, availability: self.hostChannel.isDesiredConfirmed
                     ? .ready : .unavailable(reason: "Host request has not been confirmed"))
+                NSLog("Core-SET: hosted input stage=actual control=%@ capability=hostWindow confirmed=%d",
+                      hostedSource, self.hostChannel.isDesiredConfirmed ? 1 : 0)
                 completion(self.hostChannel.isDesiredConfirmed)
             }
         }
@@ -604,9 +1018,12 @@ final class CoreSetMenuViewController: UIViewController {
         let desired = appearanceDesired()
         appearanceChannel?.updateDesired { $0 = desired }
         guard let consumer = appearanceConsumer, let request = appearanceChannel?.prepareApply() else { rebuildMenu(); return }
+        let hostedSource = hostedDispatchControlID ?? "UIKit"
         consumer.apply(request) { [weak self] token, outcome in
             DispatchQueue.main.async {
                 guard let self, self.appearanceChannel?.receive(token, outcome: outcome) == true else { return }
+                NSLog("Core-SET: hosted input stage=actual control=%@ capability=localRendering confirmed=%d",
+                      hostedSource, self.appearanceChannel?.isDesiredConfirmed == true ? 1 : 0)
                 self.rebuildMenu()
                 if self.appearanceChannel?.desired != request.desired,
                    self.appearanceChannel?.phase == .active { self.applyLocalAppearance() }
@@ -617,9 +1034,12 @@ final class CoreSetMenuViewController: UIViewController {
         let desired = directoryDesired()
         directoryChannel?.updateDesired { $0 = desired }
         guard let consumer = directoryConsumer, let request = directoryChannel?.prepareApply() else { rebuildMenu(); return }
+        let hostedSource = hostedDispatchControlID ?? "UIKit"
         consumer.apply(request) { [weak self] token, outcome in
             DispatchQueue.main.async {
                 guard let self, self.directoryChannel?.receive(token, outcome: outcome) == true else { return }
+                NSLog("Core-SET: hosted input stage=actual control=%@ capability=directoryPreview confirmed=%d",
+                      hostedSource, self.directoryChannel?.isDesiredConfirmed == true ? 1 : 0)
                 self.rebuildMenu()
                 if self.directoryChannel?.desired != request.desired,
                    self.directoryChannel?.phase == .active { self.applyLocalDirectory() }
@@ -658,6 +1078,7 @@ final class CoreSetMenuViewController: UIViewController {
         button.isEnabled = localAppearanceReady
         button.addTarget(self, action: #selector(selectTheme(_:)), for: .touchUpInside)
         card.addSubview(button)
+        registerHosted(button, .theme)
     }
 
     // Selected control types come from static v1.7 menu call sites. Unverified
@@ -756,6 +1177,7 @@ final class CoreSetMenuViewController: UIViewController {
                     slider.thumbTintColor = ready ? accent : .clear
                     slider.accessibilityValue = current.map { String($0) } ?? "未选择"
                     slider.addTarget(self, action: #selector(changeBoundRange(_:)), for: .valueChanged)
+                    registerHosted(slider, .boundRange)
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
                 } else if title == "射线粗细" || title == "骨骼粗细" || title == "物资字体" {
@@ -772,6 +1194,7 @@ final class CoreSetMenuViewController: UIViewController {
                     slider.thumbTintColor = ready ? accent : .clear
                     slider.accessibilityValue = current.map { String($0) } ?? "未选择"
                     slider.addTarget(self, action: #selector(changeAdjustmentRange(_:)), for: .valueChanged)
+                    registerHosted(slider, .adjustmentRange)
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
                 } else if title == "自瞄圈大小" {
@@ -784,6 +1207,7 @@ final class CoreSetMenuViewController: UIViewController {
                     slider.accessibilityValue = current.map { String($0) } ?? "未选择"
                     slider.accessibilityHint = "仅本地 HUD 预览圈半径，不是自瞄范围或目标动作"
                     slider.addTarget(self, action: #selector(changeLocalAimCircleSize(_:)), for: .valueChanged)
+                    registerHosted(slider, .localAimCircleSize)
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
                 } else if title == "最大距离" && !materialFilter {
@@ -796,6 +1220,7 @@ final class CoreSetMenuViewController: UIViewController {
                     slider.accessibilityValue = current.map { String($0) } ?? "未选择"
                     slider.accessibilityHint = "只限制本地预览候选距离，不改变自瞄控制"
                     slider.addTarget(self, action: #selector(changeLocalAimPreviewDistance(_:)), for: .valueChanged)
+                    registerHosted(slider, .localAimPreviewDistance)
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
                 } else if title == "FPS 调节" {
@@ -809,6 +1234,7 @@ final class CoreSetMenuViewController: UIViewController {
                     slider.accessibilityHint = ready ? "仅可回读的 Metal 调度器；CA 事件驱动不可设置固定 FPS" :
                         "当前渲染后端没有可回读的固定 FPS 调度器"
                     slider.addTarget(self, action: #selector(changeFrameRate(_:)), for: .valueChanged)
+                    registerHosted(slider, .frameRate)
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
                 } else if title == "被瞄预警范围" || title == "预警文字调节" {
@@ -825,6 +1251,7 @@ final class CoreSetMenuViewController: UIViewController {
                     slider.accessibilityValue = current.map { String($0) } ?? "未选择"
                     slider.accessibilityHint = "仅 Core 主分支 ServerControlRotation.Yaw 的只读预警子集"
                     slider.addTarget(self, action: #selector(changeWarningRange(_:)), for: .valueChanged)
+                    registerHosted(slider, .warningRange)
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
                 }
@@ -857,6 +1284,7 @@ final class CoreSetMenuViewController: UIViewController {
                         selection.isSelected = featureState.player.desired.backIndicator?.rawValue == optionIndex
                         selection.backgroundColor = selection.isSelected ? accent : gray(41, 230)
                         selection.addTarget(self, action: #selector(selectBackIndicator(_:)), for: .touchUpInside)
+                        registerHosted(selection, .backIndicator)
                         row.isUserInteractionEnabled = true
                         row.isAccessibilityElement = false
                     } else if parts[0] == "显示手持" || parts[0] == "人机手持" {
@@ -876,6 +1304,7 @@ final class CoreSetMenuViewController: UIViewController {
                         selection.accessibilityHint = optionIndex == 0 &&
                             !CoreSetWeaponImageCatalog.isReady() ? "武器图片资源加载或校验未完成" : nil
                         selection.addTarget(self, action: #selector(selectPlayerWeaponMode(_:)), for: .touchUpInside)
+                        registerHosted(selection, .playerWeaponMode)
                         row.isUserInteractionEnabled = true
                         row.isAccessibilityElement = false
                     } else if parts[0] == "玩家数量" || parts[0] == "人机数量" {
@@ -891,6 +1320,7 @@ final class CoreSetMenuViewController: UIViewController {
                             (count.enabled == true && count.mode == selectedMode)
                         selection.backgroundColor = selection.isSelected ? accent : gray(41, 230)
                         selection.addTarget(self, action: #selector(selectPlayerCountMode(_:)), for: .touchUpInside)
+                        registerHosted(selection, .playerCountMode)
                         row.isUserInteractionEnabled = true
                         row.isAccessibilityElement = false
                     } else if parts[0] == "显示信息", let scope = playerScope {
@@ -906,6 +1336,7 @@ final class CoreSetMenuViewController: UIViewController {
                         selection.backgroundColor = selection.isSelected ? accent : gray(41, 230)
                         selection.accessibilityHint = "仅已证名称/队伍/生命/距离/手持字段；文字布局为本地子集"
                         selection.addTarget(self, action: #selector(selectPlayerInformationMode(_:)), for: .touchUpInside)
+                        registerHosted(selection, .playerInformationMode)
                         row.isUserInteractionEnabled = true
                         row.isAccessibilityElement = false
                     } else { selection.isEnabled = false }
@@ -947,6 +1378,7 @@ final class CoreSetMenuViewController: UIViewController {
                     action.tag = title == "全开" ? 1 : 0
                     action.accessibilityHint = "更新当前分类的名称模式选择；生效需物资 lane 精确回执"
                     action.addTarget(self, action: #selector(setAllMaterialGroups(_:)), for: .touchUpInside)
+                    registerHosted(action, .allMaterialGroups)
                 }
                 row.addSubview(action)
             } else if materialFilter && title == "分类颜色" {
@@ -979,6 +1411,7 @@ final class CoreSetMenuViewController: UIViewController {
                     button.accessibilityHint = ready ? "请求目标只读玩家消费者；须等本地帧精确回执" : "目标身份会话未就绪或字段未支持"
                     button.accessibilityTraits = button.isSelected ? [.button, .selected] : .button
                     button.addTarget(self, action: #selector(togglePlayerField(_:)), for: .touchUpInside)
+                    registerHosted(button, .playerField)
                     box.backgroundColor = button.isSelected ? accent : .clear
                     row.addSubview(button)
                 } else if title == "显示自瞄圈" {
@@ -997,6 +1430,7 @@ final class CoreSetMenuViewController: UIViewController {
                         (value == true ? "待重新应用" : (value == false ? "关闭" : "未选择"))
                     button.accessibilityHint = "仅本地 HUD 圈；不启动自瞄控制、不写目标游戏"
                     button.addTarget(self, action: #selector(toggleLocalAimCircle(_:)), for: .touchUpInside)
+                    registerHosted(button, .localAimCircle)
                     box.backgroundColor = button.isSelected ? accent : .clear
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
@@ -1030,6 +1464,7 @@ final class CoreSetMenuViewController: UIViewController {
                         (value == true ? "待重新应用" : (value == false ? "关闭" : "未选择"))
                     button.accessibilityHint = "仅真实只读预选目标的本地 HUD 装饰；不启动自瞄"
                     button.addTarget(self, action: #selector(toggleLocalAimPreviewField(_:)), for: .touchUpInside)
+                    registerHosted(button, .localAimPreviewField)
                     box.backgroundColor = button.isSelected ? accent : .clear
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
@@ -1050,6 +1485,7 @@ final class CoreSetMenuViewController: UIViewController {
                     button.accessibilityHint = button.isEnabled ? "请求独立物资 lane；生效需精确回执" :
                         "先为所选分类设置最小/最大距离及颜色，或目标只读会话未就绪"
                     button.addTarget(self, action: #selector(toggleMaterialEnabled(_:)), for: .touchUpInside)
+                    registerHosted(button, .materialEnabled)
                     box.backgroundColor = button.isSelected ? accent : .clear
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
@@ -1067,6 +1503,7 @@ final class CoreSetMenuViewController: UIViewController {
                     button.accessibilityHint = ready ? "本地武器 ID 非零时仅清物资 lane；须等精确帧回执" :
                         "目标只读会话未就绪或字段未支持"
                     button.addTarget(self, action: #selector(toggleHideWhileArmed(_:)), for: .touchUpInside)
+                    registerHosted(button, .hideWhileArmed)
                     box.backgroundColor = button.isSelected ? accent : .clear
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
@@ -1084,6 +1521,7 @@ final class CoreSetMenuViewController: UIViewController {
                     button.accessibilityHint = ready ? "只显示目标角色第 9/10 装备槽已知 ID 的头甲标签" :
                         "目标只读会话未就绪或字段未支持"
                     button.addTarget(self, action: #selector(toggleMetroArmor(_:)), for: .touchUpInside)
+                    registerHosted(button, .metroArmor)
                     box.backgroundColor = button.isSelected ? accent : .clear
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
@@ -1101,6 +1539,7 @@ final class CoreSetMenuViewController: UIViewController {
                     button.accessibilityHint = ready ? "仅按 Core 规则隐藏 Children.Num 为 1 的 EscapeBox" :
                         "目标只读会话未就绪或字段未支持"
                     button.addTarget(self, action: #selector(toggleHideOpenedCrates(_:)), for: .touchUpInside)
+                    registerHosted(button, .hideOpenedCrates)
                     box.backgroundColor = button.isSelected ? accent : .clear
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
@@ -1118,6 +1557,7 @@ final class CoreSetMenuViewController: UIViewController {
                     button.accessibilityHint = ready ? "只显示 EscapeBox 名称中明确的 Lv 等级；不推断开启状态" :
                         "目标只读会话未就绪或字段未支持"
                     button.addTarget(self, action: #selector(toggleCrateLevel(_:)), for: .touchUpInside)
+                    registerHosted(button, .crateLevel)
                     box.backgroundColor = button.isSelected ? accent : .clear
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
@@ -1135,6 +1575,7 @@ final class CoreSetMenuViewController: UIViewController {
                     button.accessibilityHint = ready ? "仅对目标车辆类显示已验证的血量和油量百分比" :
                         "目标只读会话未就绪或字段未支持"
                     button.addTarget(self, action: #selector(toggleVehicleStatus(_:)), for: .touchUpInside)
+                    registerHosted(button, .vehicleStatus)
                     box.backgroundColor = button.isSelected ? accent : .clear
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
@@ -1158,6 +1599,7 @@ final class CoreSetMenuViewController: UIViewController {
                     button.accessibilityHint = button.isEnabled ? "请求独立雷达 lane；生效需精确回执" :
                         "先设置探测距离、半径、X、Y，或目标只读会话未就绪"
                     button.addTarget(self, action: #selector(toggleRadarField(_:)), for: .touchUpInside)
+                    registerHosted(button, .radarField)
                     box.backgroundColor = button.isSelected ? accent : .clear
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
@@ -1180,6 +1622,7 @@ final class CoreSetMenuViewController: UIViewController {
                     button.accessibilityHint = button.isEnabled ? "独立 warning lane；生效须双 lane 精确回执" :
                         "先设置范围和文字大小，或目标只读会话未就绪"
                     button.addTarget(self, action: #selector(toggleWarningField(_:)), for: .touchUpInside)
+                    registerHosted(button, .warningField)
                     box.backgroundColor = button.isSelected ? accent : .clear
                     row.isUserInteractionEnabled = true
                     row.isAccessibilityElement = false
@@ -1564,6 +2007,7 @@ final class CoreSetMenuViewController: UIViewController {
                 swatch.layer.addSublayer(outline)
             }
             swatch.addTarget(self, action: #selector(selectPresetColor(_:)), for: .touchUpInside)
+            registerHosted(swatch, .presetColor)
             card.addSubview(swatch)
         }
         floatingColorRows(in: card)
@@ -1628,6 +2072,7 @@ final class CoreSetMenuViewController: UIViewController {
         button.isEnabled = colorTargetReady(target)
         if !button.isEnabled { button.accessibilityHint = "对应消费者不可用，颜色功能未接入" }
         button.addTarget(self, action: #selector(editLocalColor(_:)), for: .touchUpInside)
+        registerHosted(button, .colorEditor)
         row.addSubview(label(title, size: 12,
                              frame: CGRect(x: labelInset, y: 0, width: max(0, button.frame.minX - labelInset - 8), height: row.bounds.height)))
         row.addSubview(button)
@@ -1772,6 +2217,7 @@ final class CoreSetMenuViewController: UIViewController {
                 swatch.layer.addSublayer(outline)
             }
             swatch.addTarget(self, action: #selector(selectFloatingColor(_:)), for: .touchUpInside)
+            registerHosted(swatch, .floatingColor)
             card.addSubview(swatch)
         }
     }
@@ -1806,6 +2252,7 @@ final class CoreSetMenuViewController: UIViewController {
             button.accessibilityHint = "本地目录预览；原版运行分类和实际可见物资未验证"
             button.isEnabled = localDirectoryReady
             button.addTarget(self, action: #selector(selectMaterialCategory(_:)), for: .touchUpInside)
+            registerHosted(button, .materialCategory)
             card.addSubview(button)
             x += width + 6
         }
@@ -1832,6 +2279,7 @@ final class CoreSetMenuViewController: UIViewController {
             button.accessibilityTraits = selected ? [.button, .selected] : .button
             drawBackGlyph(index, in: button, color: selected ? accent : gray(255, 80))
             button.addTarget(self, action: #selector(selectBackStyle(_:)), for: .touchUpInside)
+            registerHosted(button, .backStyle)
             card.addSubview(button)
         }
     }
@@ -1932,24 +2380,26 @@ final class CoreSetMenuViewController: UIViewController {
             button.backgroundColor = selected ? accent : gray(41, 230)
             button.layer.cornerRadius = 5
             button.accessibilityHint = "仅切换本地场景参数预览，不影响游戏"
-            button.isEnabled = canApply(featureState.aim)
+            button.isEnabled = featureState.aim.phase != .applying && featureState.aim.phase != .active &&
+                controlAvailability(.basicAimScene, in: featureState.aim) == .ready
             button.accessibilityHint = button.isEnabled ? "请求场景消费者，生效需实际回执" : "场景消费者未接入，不能切换游戏场景"
             button.accessibilityTraits = selected ? [.button, .selected] : .button
             button.addTarget(self, action: #selector(selectPreviewScene(_:)), for: .touchUpInside)
+            registerHosted(button, .previewScene)
             card.addSubview(button)
             x += scenarioWidths[index] + 6
         }
-        if previewSceneValue == 3 {
-            disabledRows(["水平速度", "垂直速度", "预判提前", "锁定门槛", "接管暂停"], in: card, y: 64)
-        } else if previewSceneValue != nil {
-            disabledRows(["锁定强度  强锁定 / 中锁定 / 轻锁定"], in: card, y: 64)
-        }
+        let note = previewSceneValue == 3 ? "自定义参数在目标筛选卡设置" : "预设参数固定；下方选择接管强度"
+        card.addSubview(label(note, size: 10, frame: CGRect(x: 12, y: 64, width: 299, height: 18), secondary: true))
     }
 
     @objc private func selectPreviewScene(_ sender: UIButton) {
         refreshBeforeInteraction()
-        guard scenarioValues.indices.contains(sender.tag), let scene = CoreSetAimScene(rawValue: scenarioValues[sender.tag]) else { return }
-        editGame(\.aim) { $0.scene = scene }
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active,
+              scenarioValues.indices.contains(sender.tag),
+              let scene = CoreSetAimScene(rawValue: scenarioValues[sender.tag]) else { return }
+        featureState.aim.updateDesired { $0.scene = scene }
+        rebuildMenu()
     }
 
     private func materialGroupValues(category: Int, item: Int) -> [Bool?] {
@@ -2009,6 +2459,7 @@ final class CoreSetMenuViewController: UIViewController {
         materialGrid.accessibilityLabel = "物资目录预览"
         materialGrid.accessibilityHint = "Core 名称候选目录；选中项经目标只读采集和本地物资 lane 绘制，不写游戏"
         card.addSubview(materialGrid)
+        registerHosted(materialGrid, .materialScroll)
         materialGrid.addSubview(materialGridItems)
         var x: CGFloat = 4
         var y: CGFloat = 4
@@ -2034,6 +2485,7 @@ final class CoreSetMenuViewController: UIViewController {
             button.accessibilityTraits = selected.all ? [.button, .selected] : .button
             button.isEnabled = materialGroupEditingReady
             button.addTarget(self, action: #selector(toggleMaterialGroup(_:)), for: .touchUpInside)
+            registerHosted(button, .materialGroup)
             materialGridItems.addSubview(button)
             x += width + 6
         }
@@ -2042,14 +2494,39 @@ final class CoreSetMenuViewController: UIViewController {
         materialGrid.contentOffset = CGPoint(x: 0, y: min(max(0, oldOffset.y), max(0, materialGrid.contentSize.height - materialGrid.bounds.height)))
     }
 
+    func syncRadarCanvas(_ size: CGSize) {
+        precondition(Thread.isMainThread)
+        guard size.width > 0, size.height > 0 else { return }
+        let canvas = CoreSetRadarCanvas(nativeWidth: nil, nativeHeight: nil,
+                                         displayWidth: Double(size.width), displayHeight: Double(size.height))
+        guard featureState.radar.desired.placement.canvas != canvas else { return }
+        let oldPlacement = featureState.radar.desired.placement
+        featureState.radar.updateDesired { $0.placement.refreshCanvas(canvas) }
+        let changed = oldPlacement != featureState.radar.desired.placement
+        if selectedPage == 4 { refreshRadarRangeRows() }
+        guard changed, featureState.radar.phase == .active else { return }
+        // Layout/host callbacks can occur while a frame is being consumed.
+        // Reapply through the existing channel after this stack unwinds; only
+        // CoreSetRadarConsumer's frame receipt can confirm the new placement.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.featureState.radar.desired.placement.canvas == canvas,
+                  self.featureState.radar.phase == .active,
+                  self.featureState.radar.pendingApply == nil,
+                  self.featureState.radar.actual != self.featureState.radar.desired else { return }
+            self.applyGame(\.radar)
+        }
+    }
+
     private func refreshRadarRangeRows() {
         guard selectedPage == 4, radarRangeRows.bounds.width > 0 else { return }
-        // The local CA host consumes scene points. This is not a claim about
-        // original ImGui DisplaySize pixels or an absent cross-app surface.
-        let local = view.window?.windowScene?.coordinateSpace.bounds.size ?? UIScreen.main.bounds.size
-        let canvas = CoreSetRadarCanvas(nativeWidth: nil, nativeHeight: nil,
-                                        displayWidth: Double(local.width), displayHeight: Double(local.height))
-        featureState.radar.updateDesired { $0.placement.refreshCanvas(canvas) }
+        guard let canvas = featureState.radar.desired.placement.canvas else { return }
+        guard radarRangeCanvas != canvas || radarRangeRows.subviews.isEmpty else { return }
+        if radarRangeCanvas != nil {
+            hostedMenuRevision &+= 1
+            hostedSliderID = nil
+            hostedEntries.removeAll { $0.action == .radarPlacement }
+        }
+        radarRangeCanvas = canvas
         let placement = featureState.radar.desired.placement
         radarRangeRows.subviews.forEach { $0.removeFromSuperview() }
         let values: [(String, ClosedRange<Int>?)] = [
@@ -2078,6 +2555,7 @@ final class CoreSetMenuViewController: UIViewController {
                 slider.minimumTrackTintColor = gray(75, 200)
                 slider.maximumTrackTintColor = gray(75, 200)
                 slider.addTarget(self, action: #selector(changeRadarPlacement(_:)), for: .valueChanged)
+                registerHosted(slider, .radarPlacement)
                 row.addSubview(slider)
                 row.isUserInteractionEnabled = true
                 row.isAccessibilityElement = false
@@ -2094,10 +2572,13 @@ final class CoreSetMenuViewController: UIViewController {
         }
     }
 
-    private func statusRow(_ title: String, value: String?, in card: UIView, y: CGFloat) {
+    private func statusText(_ value: String?) -> String {
         let text = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let display: String
-        if let text, !text.isEmpty { display = text } else { display = "未接入 / 未验证" }
+        return text.flatMap { $0.isEmpty ? nil : $0 } ?? "未接入 / 未验证"
+    }
+    @discardableResult
+    private func statusRow(_ title: String, value: String?, in card: UIView, y: CGFloat) -> UILabel {
+        let display = statusText(value)
         card.addSubview(label(title, size: 12, frame: CGRect(x: 20, y: y, width: 90, height: 26)))
         let detail = label(display, size: 12, frame: CGRect(x: 112, y: y, width: card.bounds.width - 132, height: 26), secondary: true)
         detail.textAlignment = .right
@@ -2105,6 +2586,26 @@ final class CoreSetMenuViewController: UIViewController {
         detail.minimumScaleFactor = 0.72
         detail.accessibilityLabel = "\(title)：\(display)"
         card.addSubview(detail)
+        return detail
+    }
+    private func performanceValues() -> [String?] {
+        let sample = featureState.performanceSnapshot
+        let age = sample.map { Date().timeIntervalSince($0.observedAt) }
+        let fresh = sample?.processID == getpid() && age.map { $0 >= 0 && $0 <= 5 } == true
+        guard fresh, let sample else { return [nil, nil, nil] }
+        return [sample.cpuPercent.map { String(format: "本应用 %.1f%%", $0) },
+                sample.residentMiB.map { String(format: "本应用 %.1f MiB", $0) },
+                sample.peakResidentMiB.map { String(format: "本应用 %.1f MiB", $0) }]
+    }
+    private func refreshPerformanceLabels() {
+        let values = performanceValues()
+        let titles = ["CPU 占用", "内存占用", "内存峰值"]
+        guard performanceValueLabels.count == values.count else { return }
+        for index in values.indices {
+            let display = statusText(values[index])
+            performanceValueLabels[index].text = display
+            performanceValueLabels[index].accessibilityLabel = "\(titles[index])：\(display)"
+        }
     }
 
     private func homeStatusRows(in card: UIView) {
@@ -2143,6 +2644,181 @@ final class CoreSetMenuViewController: UIViewController {
         }
     }
 
+    @objc private func configureBasicAimTrigger(_ sender: UISegmentedControl) {
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active else { return }
+        guard (0...3).contains(sender.selectedSegmentIndex) else { return }
+        let modes: [CoreSetAimTrigger] = [.scopeOnly, .fireOnly, .either, .both]
+        featureState.aim.updateDesired { $0.trigger = modes[sender.selectedSegmentIndex] }
+        rebuildMenu()
+    }
+    @objc private func configureBasicAimRange(_ sender: UISlider) {
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active else { return }
+        featureState.aim.updateDesired {
+            switch sender.tag {
+            case 0: $0.circleSize.set(Int(sender.value.rounded()))
+            case 1: $0.custom.maximumDistance.set(Int(sender.value.rounded()))
+            case 2: $0.custom.strength.set(Int(sender.value.rounded()))
+            case 3: $0.custom.smoothing.set(Int(sender.value.rounded()))
+            case 4: $0.custom.horizontalSpeed.set(Int(sender.value.rounded()))
+            case 5: $0.custom.verticalSpeed.set(Int(sender.value.rounded()))
+            case 6: $0.custom.lockThreshold.set(Int(sender.value.rounded()))
+            case 7: $0.custom.confirmationFrames.set(Int(sender.value.rounded()))
+            case 8: $0.custom.takeoverPauseMilliseconds.set(Int(sender.value.rounded()))
+            default: break
+            }
+        }
+        rebuildMenu()
+    }
+    @objc private func configureBasicAimBots(_ sender: UISegmentedControl) {
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active else { return }
+        guard sender.selectedSegmentIndex >= 0 else { return }
+        featureState.aim.updateDesired { $0.includeBots = sender.selectedSegmentIndex == 1 }
+        rebuildMenu()
+    }
+    @objc private func configureBasicAimLock(_ sender: UISegmentedControl) {
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active,
+              sender.selectedSegmentIndex >= 0 else { return }
+        featureState.aim.updateDesired { $0.lockSameTarget = sender.selectedSegmentIndex == 1 }
+        rebuildMenu()
+    }
+    @objc private func configureBasicAimPoint(_ sender: UISegmentedControl) {
+        let values: [CoreSetAimPoint] = [.head, .hips]
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active,
+              values.indices.contains(sender.selectedSegmentIndex) else { return }
+        let point = values[sender.selectedSegmentIndex]
+        featureState.aim.updateDesired { $0.point = point }
+        rebuildMenu()
+    }
+    @objc private func configureBasicAimLockStrength(_ sender: UISegmentedControl) {
+        guard featureState.aim.phase != .applying && featureState.aim.phase != .active else { return }
+        let values: [CoreSetLockStrength] = [.strong, .medium, .light]
+        guard values.indices.contains(sender.selectedSegmentIndex) else { return }
+        featureState.aim.updateDesired { $0.lockStrength = values[sender.selectedSegmentIndex] }
+        rebuildMenu()
+    }
+    @objc private func startBasicAim() {
+        guard canApply(featureState.aim) else { return }
+        editGame(\.aim) { $0.enabled = true }
+    }
+    @objc private func stopBasicAim() {
+        guard let consumer = gameConsumers[\CoreSetFeatureState.aim] as? CoreSetMenuConsumer<CoreSetAimSettings>,
+              let token = featureState.aim.prepareStop() else { return }
+        let hostedSource = hostedDispatchControlID ?? "UIKit"
+        consumer.stop(token) { [weak self] token, outcome in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let received = self.featureState.aim.receiveStop(token, outcome: outcome)
+                NSLog("Core-SET: hosted input stage=actual control=%@ capability=aimStop confirmed=%d",
+                      hostedSource, received && self.featureState.aim.restoration == .confirmed ? 1 : 0)
+                self.rebuildMenu()
+            }
+        }
+    }
+    private func aimControls(in aim: UIView, filter: UIView, scenario: UIView) {
+        let state = featureState.aim.desired
+        let editable = featureState.aim.phase != .applying && featureState.aim.phase != .active
+        let custom = state.scene == .custom
+        let modes: [CoreSetAimTrigger] = [.scopeOnly, .fireOnly, .either, .both]
+        let trigger = UISegmentedControl(items: ["开镜", "开火", "任一", "同时"])
+        trigger.frame = CGRect(x: 335, y: 34, width: 303, height: 40)
+        trigger.selectedSegmentIndex = state.trigger.flatMap { modes.firstIndex(of: $0) } ?? UISegmentedControl.noSegment
+        trigger.isEnabled = editable
+        trigger.addTarget(self, action: #selector(configureBasicAimTrigger(_:)), for: .valueChanged)
+        registerHosted(trigger, .aimTrigger)
+        aim.addSubview(trigger)
+        let point = UISegmentedControl(items: ["上身 fallback +30", "胯部 fallback +25"])
+        point.frame = CGRect(x: 20, y: 34, width: 300, height: 40)
+        point.selectedSegmentIndex = state.point == .head ? 0 : (state.point == .hips ? 1 : UISegmentedControl.noSegment)
+        point.isEnabled = editable
+        point.accessibilityHint = "原包当前可执行两种高度；胸部raw骨点不可达且未开放"
+        point.addTarget(self, action: #selector(configureBasicAimPoint(_:)), for: .valueChanged)
+        registerHosted(point, .aimPoint)
+        aim.addSubview(point)
+        let circle = UISlider(frame: CGRect(x: 145, y: 82, width: 493, height: 36))
+        circle.tag = 0; circle.minimumValue = 30; circle.maximumValue = 525
+        circle.value = Float(state.circleSize.value ?? 30); circle.isEnabled = editable
+        circle.addTarget(self, action: #selector(configureBasicAimRange(_:)), for: .valueChanged)
+        registerHosted(circle, .aimRange)
+        aim.addSubview(label("自瞄圈大小 \(state.circleSize.value.map(String.init) ?? "未选择")", size: 12,
+                             frame: CGRect(x: 20, y: 82, width: 120, height: 36)))
+        aim.addSubview(circle)
+        let bots = UISegmentedControl(items: ["不含人机", "含人机"])
+        bots.frame = CGRect(x: 20, y: 34, width: 135, height: 40)
+        bots.selectedSegmentIndex = state.includeBots.map { $0 ? 1 : 0 } ?? UISegmentedControl.noSegment
+        bots.isEnabled = editable
+        bots.addTarget(self, action: #selector(configureBasicAimBots(_:)), for: .valueChanged)
+        registerHosted(bots, .aimBots)
+        filter.addSubview(bots)
+        let lock = UISegmentedControl(items: ["最近目标", "锁定同目标"])
+        lock.frame = CGRect(x: 165, y: 34, width: 138, height: 40)
+        lock.selectedSegmentIndex = state.lockSameTarget.map { $0 ? 1 : 0 } ?? UISegmentedControl.noSegment
+        lock.isEnabled = editable
+        lock.addTarget(self, action: #selector(configureBasicAimLock(_:)), for: .valueChanged)
+        registerHosted(lock, .aimLock)
+        filter.addSubview(lock)
+        var rows: [(String, Int?, Float, Float, Int)] = []
+        if custom {
+            rows = [("距离", state.custom.maximumDistance.value, 10, 500, 1),
+                     ("强度", state.custom.strength.value, 5, 100, 2),
+                     ("平滑", state.custom.smoothing.value, 1, 10, 3),
+                     ("水平", state.custom.horizontalSpeed.value, 30, 720, 4),
+                     ("垂直", state.custom.verticalSpeed.value, 30, 720, 5),
+                     ("接管阈值", state.custom.lockThreshold.value, 5, 500, 6),
+                     ("确认帧", state.custom.confirmationFrames.value, 1, 6, 7),
+                     ("暂停 ms", state.custom.takeoverPauseMilliseconds.value, 50, 1000, 8)]
+        }
+        for (index, row) in rows.enumerated() {
+            let y = 82 + CGFloat(index) * 38
+            filter.addSubview(label(row.0 + " " + (row.1.map(String.init) ?? "未选择"),
+                size: 10, frame: CGRect(x: 12, y: y, width: 88, height: 34)))
+            let slider = UISlider(frame: CGRect(x: 102, y: y, width: 201, height: 34))
+            slider.tag = row.4; slider.minimumValue = row.2; slider.maximumValue = row.3
+            slider.value = Float(row.1 ?? Int(slider.minimumValue)); slider.isContinuous = false
+            slider.isEnabled = editable
+            slider.addTarget(self, action: #selector(configureBasicAimRange(_:)), for: .valueChanged)
+            registerHosted(slider, .aimRange)
+            filter.addSubview(slider)
+        }
+        if !custom {
+            let strength = UISegmentedControl(items: ["强", "中", "轻"])
+            strength.frame = CGRect(x: 12, y: 82, width: 299, height: 40)
+            let strengths: [CoreSetLockStrength] = [.strong, .medium, .light]
+            strength.selectedSegmentIndex = state.lockStrength.flatMap { strengths.firstIndex(of: $0) } ?? UISegmentedControl.noSegment
+            strength.isEnabled = editable
+            strength.addTarget(self, action: #selector(configureBasicAimLockStrength(_:)), for: .valueChanged)
+            registerHosted(strength, .aimLockStrength)
+            scenario.addSubview(strength)
+        }
+        let configured = state.scene != nil && (state.scene != .custom ||
+            (state.custom.maximumDistance.value != nil && state.custom.strength.value != nil &&
+             state.custom.smoothing.value != nil && state.custom.horizontalSpeed.value != nil &&
+             state.custom.verticalSpeed.value != nil && state.custom.lockThreshold.value != nil &&
+             state.custom.confirmationFrames.value != nil && state.custom.takeoverPauseMilliseconds.value != nil)) &&
+             (state.scene == .custom || state.lockStrength != nil)
+        let supportedPoint = state.point == .head || state.point == .hips
+        let start = UIButton(type: .system)
+        start.frame = CGRect(x: 20, y: 126, width: 130, height: 40)
+        start.setTitle("启用自瞄", for: .normal)
+        start.isEnabled = editable && canApply(featureState.aim) && configured && state.trigger != nil &&
+            state.includeBots != nil && state.lockSameTarget != nil && supportedPoint && state.circleSize.value != nil
+        start.addTarget(self, action: #selector(startBasicAim), for: .touchUpInside)
+        registerHosted(start, .aimStart)
+        aim.addSubview(start)
+        let stop = UIButton(type: .system)
+        stop.frame = CGRect(x: 160, y: 126, width: 105, height: 40)
+        stop.setTitle("关闭自瞄", for: .normal)
+        stop.isEnabled = featureState.aim.restoration == .required || featureState.aim.restoration == .pending
+        if case .failed = featureState.aim.restoration { stop.isEnabled = true }
+        stop.addTarget(self, action: #selector(stopBasicAim), for: .touchUpInside)
+        registerHosted(stop, .aimStop)
+        aim.addSubview(stop)
+        let text: String
+        if case .unavailable(let reason) = featureState.aim.availability { text = reason }
+        else { text = basicAimStatus }
+        let status = label(text, size: 10, frame: CGRect(x: 280, y: 122, width: 358, height: 54), secondary: true)
+        status.numberOfLines = 3; aim.addSubview(status); basicAimStatusLabel = status
+        content.contentSize.height = 735
+    }
     private func rebuildPage() {
         switch selectedPage {
         case 0:
@@ -2159,17 +2835,10 @@ final class CoreSetMenuViewController: UIViewController {
             let fps = card("局内绘制帧率", CGRect(x: 335, y: 203, width: 323, height: 90))
             disabledRows(["FPS 调节"], in: fps, y: 38)
             let performance = card("性能监测", CGRect(x: 335, y: 321, width: 323, height: 145))
-            let sample = featureState.performanceSnapshot
-            let age = sample.map { Date().timeIntervalSince($0.observedAt) }
-            let fresh = sample?.processID == getpid() && age.map { $0 >= 0 && $0 <= 5 } == true
-            let values: [String?]
-            if fresh, let sample {
-                values = [sample.cpuPercent.map { String(format: "本应用 %.1f%%", $0) },
-                          sample.residentMiB.map { String(format: "本应用 %.1f MiB", $0) },
-                          sample.peakResidentMiB.map { String(format: "本应用 %.1f MiB", $0) }]
-            } else { values = [nil, nil, nil] }
+            let values = performanceValues()
             for (index, title) in ["CPU 占用", "内存占用", "内存峰值"].enumerated() {
-                statusRow(title, value: values[index], in: performance, y: 34 + CGFloat(index) * 30)
+                performanceValueLabels.append(statusRow(title, value: values[index],
+                    in: performance, y: 34 + CGFloat(index) * 30))
             }
         case 1:
             let players = card("玩家显示", CGRect(x: 0, y: 0, width: 323, height: 225))
@@ -2210,17 +2879,15 @@ final class CoreSetMenuViewController: UIViewController {
             let warning = card("预警设置", CGRect(x: 335, y: 0, width: 323, height: 360))
             disabledRows(["被瞄预警", "忽略人机", "被瞄预警范围", "预警文字调节"], in: warning, y: 34)
         case 5:
-            let aim = card("Core稳定自瞄", CGRect(x: 0, y: 0, width: 658, height: 160))
-            disabledRows(["自瞄总开关", "瞄准部位  头部 / 胸部 / 屁股", "预瞄标记圈",
-                          "触发模式  仅开镜 / 仅开火 / 开镜或开火 / 开镜且开火", "动态自瞄圈",
-                          "显示自瞄圈", "自瞄连接线", "自瞄圈大小"], in: aim, y: 34, columns: 2)
-            let filter = card("目标筛选", CGRect(x: 0, y: 188, width: 323, height: 220))
-            disabledRows(["倒地不瞄", "瞄准人机", "锁定同目标"], in: filter, y: 34)
-            if previewSceneValue == 3 {
-                disabledRows(["最大距离", "自瞄强度", "转动平滑", "接管确认帧数"], in: filter, y: 124)
-            }
-            let scenario = card("场景预设", CGRect(x: 335, y: 188, width: 323, height: 220))
+            let aim = card("Core稳定自瞄", CGRect(x: 0, y: 0, width: 658, height: 218))
+            disabledRows(["预瞄标记圈", "动态自瞄圈", "显示自瞄圈", "自瞄连接线"],
+                         in: aim, y: 172, columns: 4)
+            let filter = card("目标筛选", CGRect(x: 0, y: 246, width: 323, height: 440))
+            disabledRows(["倒地不瞄", "LOS掩体判断"], in: filter, y: 400)
+            let scenario = card("场景预设", CGRect(x: 335, y: 246, width: 323, height: 220))
             scenePreview(in: scenario)
+            disabledRows(["预判提前"], in: scenario, y: 140)
+            aimControls(in: aim, filter: filter, scenario: scenario)
         default:
             let recoil = card("Core智能压枪【非无后坐力】", CGRect(x: 0, y: 0, width: 658, height: 474))
             disabledRows(["启用压枪", "停火不压", "垂直补偿", "垂直补偿强度", "水平补偿", "水平补偿强度"], in: recoil, y: 34)

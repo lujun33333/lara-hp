@@ -38,6 +38,9 @@ enum CoreSetField: Hashable {
     case warningEnabled, warningIgnoreBots, warningRange, warningTextSize
     case localAimCircle, localAimCircleSize, localAimPreviewLine, localAimPreviewMarker
     case localAimDynamicCircle, localAimPreviewBots, localAimPreviewDistance
+    // The legacy HP aim consumer keeps this unavailable; the hosted menu uses
+    // the explicit field ID to avoid mistaking a visible selector for support.
+    case basicAimScene
 
     static func required(for capability: CoreSetCapability) -> Set<CoreSetField> {
         switch capability {

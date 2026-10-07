@@ -87,6 +87,16 @@ private final class CoreSetFrameComposer {
         return expired
     }
 
+    func invalidateGeometry() -> [CoreSetLocalFrameReceipt] {
+        let expired = pending.values.map { receipt($0, accepted: false) }
+        // A layout change keeps the host and remote UIWindow generation.
+        // Keep nextSequence monotonic so in-flight old frames stay stale.
+        lanes.removeAll()
+        pending.removeAll()
+        stoppedAtRevision.removeAll()
+        return expired
+    }
+
     func makeFrame(_ input: CoreSetLaneSubmission) -> CoreSetRenderFrame? {
         guard input.hostGeneration == generation, nextSequence < UInt64.max,
               input.canvasSize.width.isFinite, input.canvasSize.height.isFinite,
@@ -160,6 +170,7 @@ final class CoreSetRuntimeCoordinator {
     private let host = CoreSetHUDHost(hostingAdapter: nil)
     private let metalAdapter = CoreSetMetalRenderAdapter()
     private var remoteHostingAdapter: CoreSetRemoteHostingAdapter?
+    private var localHostingAdapter: CoreSetLocalHostingAdapter?
     private var consumer: CoreSetLocalHostConsumer!
     private var playerConsumer: CoreSetPlayerConsumer?
     private var materialConsumer: CoreSetMaterialConsumer?
@@ -176,16 +187,27 @@ final class CoreSetRuntimeCoordinator {
     private var performanceEpoch = UUID()
     private var stopping = false
     private var stopReceiptsPending = false
+    private var stopChannelsConfirmed = false
+    private var stopWindowsConfirmed = false
     private var submittedGeneration: UInt64?
+    private var submittedCanvasSize: CGSize?
+    private var aimSuspendedForHost = false
+    private var activateAfterAimStop = false
+    private var gameLaunchEpoch: UInt64 = 0
+    private var gameLaunchPending = false
+    private var returnToLocalPending = false
+    private var remoteCleanupFailed = false
+    private var gameLaunchStatus: String?
+    private var kernelOffsetsRunning = false
     private let frameComposer = CoreSetFrameComposer()
     var localFrameDidConsume: ((CoreSetLocalFrameReceipt) -> Void)?
     private(set) var lastStopResult: CoreSetHUDStopResult?
     // Read-only snapshot, not a second mutable configuration store.
     var featureState: CoreSetFeatureState { menu.featureState }
     var playerCanvas: (generation: UInt64, size: CGSize)? {
-        guard host.localSurfacesReady, let scene else { return nil }
-        let size = scene.coordinateSpace.bounds.size
-        return size.width > 0 && size.height > 0 ? (host.generation, size) : nil
+        guard host.localSurfacesReady else { return nil }
+        let size = host.logicalCanvasSize
+        return size.width > 0 && size.height > 0 ? (host.renderGeneration, size) : nil
     }
     var playerStyleReady: Bool { playerConsumer?.availability == .ready }
     var materialStyleReady: Bool { materialConsumer?.availability == .ready }
@@ -205,7 +227,10 @@ final class CoreSetRuntimeCoordinator {
         precondition(Thread.isMainThread)
         return host.restoreRenderFPS()
     }
-    func refreshPlayerAvailability() { menu.refreshConsumerAvailability() }
+    func refreshPlayerAvailability() {
+        menu.refreshConsumerAvailability()
+        menu.updateBasicAimStatus(aimConsumer?.status ?? "基础自瞄未绑定")
+    }
     func invalidateAimDisplayObservation() {
         precondition(Thread.isMainThread)
         aimDisplayConsumer?.invalidateFrame()
@@ -250,6 +275,10 @@ final class CoreSetRuntimeCoordinator {
             self.localFrameDidConsume?(receipt)
         }
         host.panelVisibilityRequested = { [weak self] visible in self?.requestVisibility(visible) }
+        host.hostingInvalidated = { [weak self] in
+            guard let self, !self.stopping else { return }
+            _ = self.stop()
+        }
         menu.onClose = { [weak self] in self?.publishStatus() }
         Self.retained[identity] = self
         startPerformanceSampling()
@@ -275,26 +304,32 @@ final class CoreSetRuntimeCoordinator {
 
     func activate() {
         guard !stopping, let scene else { return }
-        if !host.localSurfacesReady {
-            if remoteHostingAdapter == nil, laramgr.shared.rcready,
-               let process = laramgr.shared.sbProc {
-                let adapter = CoreSetRemoteHostingAdapter(remoteCall: process)
-                if adapter.sessionIdentityReady,
-                   host.installRemoteHostingAdapter(adapter) {
-                    remoteHostingAdapter = adapter
-                }
+        if aimSuspendedForHost {
+            guard menu.resumeAimConsumer() else {
+                activateAfterAimStop = true
+                publishStatus()
+                return
             }
-            if !host.startLocal(in: scene, menuController: menu) {
-                // A verified remote session may still lack this device's
-                // hosting API. Retry local-only only after complete rollback.
-                guard remoteHostingAdapter != nil, !host.cleanupPending,
-                      host.installRemoteHostingAdapter(nil) else {
+            aimSuspendedForHost = false
+        }
+        activateAfterAimStop = false
+        if (remoteHostingAdapter != nil || localHostingAdapter != nil),
+           host.localSurfacesReady, !gameLaunchPending {
+            // Keep WZ's registered source contexts across app foregrounding.
+            host.setApplicationActive(true)
+            hostChanged()
+            return
+        }
+        if !host.localSurfacesReady {
+            if remoteHostingAdapter != nil || localHostingAdapter != nil {
+                guard !host.cleanupPending, host.installRemoteHostingAdapter(nil) else {
                     publishStatus(); return
                 }
                 remoteHostingAdapter = nil
-                guard host.startLocal(in: scene, menuController: menu) else {
-                    publishStatus(); return
-                }
+                localHostingAdapter = nil
+            }
+            if !host.startLocal(in: scene, menuController: menu) {
+                publishStatus(); return
             }
             // Loads the existing, verified local palette before observing it.
             menu.requestMenuVisibility(false) { [weak self] _ in self?.publishStatus() }
@@ -303,10 +338,439 @@ final class CoreSetRuntimeCoordinator {
         hostChanged()
     }
 
-    func deactivate() {
-        guard !stopping else { return }
-        host.setApplicationActive(false)
+    // WZ's local SBS tier is attempted first; SpringBoard mirrors are the
+    // fallback. Both source contexts are checked before opening the game.
+    func launchGame(completion: @escaping (String?) -> Void) {
+        precondition(Thread.isMainThread)
+        guard !stopping, let scene, scene.activationState == .foregroundActive else {
+            completion("本应用窗口未处于前台，无法准备游戏内悬浮窗"); return
+        }
+        guard !gameLaunchPending else { completion("游戏内悬浮窗正在准备中"); return }
+        guard !remoteCleanupFailed else {
+            completion("远端清理未确认，请先点“重试清理”"); return
+        }
+        let support = axDeviceSupportStatus()
+        guard support.isSupported else {
+            completion("当前设备不支持跨应用悬浮窗：\(support.reason ?? support.identifier)"); return
+        }
+        gameLaunchPending = true
+        gameLaunchEpoch &+= 1
+        let epoch = gameLaunchEpoch
+        gameLaunchStatus = "正在准备跨应用悬浮窗"
+        publishStatus()
+
+        if (remoteHostingAdapter != nil || localHostingAdapter != nil), host.localSurfacesReady {
+            host.confirmHostedReadbackAsync { [weak self] observed in
+                guard let self, self.gameLaunchCurrent(epoch) else { return }
+                if observed { self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion) }
+                else {
+                    self.rollbackGameLaunch(epoch: epoch, error: "跨应用双窗口复核失败", completion: completion)
+                }
+            }
+            return
+        }
+        guard !host.cleanupPending else {
+            finishGameLaunch(epoch: epoch, error: "上次窗口清理尚未确认，请重新打开应用", completion: completion)
+            return
+        }
+        let manager = laramgr.shared
+        guard !manager.dsrunning else {
+            finishGameLaunch(epoch: epoch, error: "内核环境正在初始化，请稍后重试", completion: completion)
+            return
+        }
+        guard !kernelOffsetsRunning else {
+            finishGameLaunch(epoch: epoch, error: "当前设备内核偏移仍在解析，请稍后重试", completion: completion)
+            return
+        }
+        if !manager.dsready {
+            init_offsets()
+            offsets_init()
+        }
+        manager.run { [weak self] ready in
+            guard let self, self.gameLaunchCurrent(epoch) else { return }
+            guard ready else {
+                self.finishGameLaunch(epoch: epoch, error: "内核环境初始化失败，无法建立跨应用悬浮窗", completion: completion)
+                return
+            }
+            self.prepareKernelOffsets(epoch: epoch, completion: completion)
+        }
+    }
+
+    private func prepareKernelOffsets(epoch: UInt64, completion: @escaping (String?) -> Void) {
+        guard gameLaunchCurrent(epoch) else { return }
+        guard let scene, scene.activationState == .foregroundActive else {
+            finishGameLaunch(epoch: epoch, error: "场景已失活，已取消当前设备内核偏移解析", completion: completion)
+            return
+        }
+        let manager = laramgr.shared
+        if manager.hasOffsets {
+            prepareLocalHosting(epoch: epoch, completion: completion)
+            return
+        }
+        kernelOffsetsRunning = true
+        gameLaunchStatus = "正在获取并解析当前设备内核偏移"
+        NSLog("Core-SET: game launch epoch=%llu stage=kernel-offsets start", epoch)
+        publishStatus()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let fetched = fetchkcache()
+            let loaded = fetched && dlkcache()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.kernelOffsetsRunning = false
+                manager.hasOffsets = loaded
+                NSLog("Core-SET: game launch epoch=%llu stage=kernel-offsets fetched=%d resolved=%d",
+                      epoch, fetched ? 1 : 0, loaded ? 1 : 0)
+                guard self.gameLaunchCurrent(epoch) else { return }
+                guard loaded else {
+                    self.finishGameLaunch(epoch: epoch,
+                        error: fetched ? "当前设备内核偏移解析失败" : "当前设备 kernelcache 获取失败",
+                        completion: completion)
+                    return
+                }
+                self.prepareLocalHosting(epoch: epoch, completion: completion)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(180)) { [weak self] in
+            guard let self, self.gameLaunchCurrent(epoch), self.kernelOffsetsRunning else { return }
+            self.finishGameLaunch(epoch: epoch,
+                error: "当前设备内核偏移解析超时；后台任务结束前请勿重试", completion: completion)
+        }
+    }
+
+    private func gameLaunchCurrent(_ epoch: UInt64) -> Bool {
+        !stopping && gameLaunchPending && gameLaunchEpoch == epoch
+    }
+
+    // Logs cached state only. Explicit async launch gates own remote readback.
+    private func recordHostingDiagnostic(_ stage: String, epoch: UInt64, remoteDecision: Int = -1) {
+        NSLog("Core-SET: hosting stage=%@ epoch=%llu remoteDecision=%d sceneState=%ld appState=%ld host={%@} remote={%@}",
+              stage, epoch, remoteDecision, scene?.activationState.rawValue ?? -1,
+              UIApplication.shared.applicationState.rawValue,
+              host.hostingDiagnosticSnapshot(),
+              (localHostingAdapter?.hostingDiagnosticSnapshot() ??
+               remoteHostingAdapter?.hostingDiagnosticSnapshot()) ?? "adapter-not-installed")
+    }
+
+    func recordSceneLifecycle(_ event: String, scene eventScene: UIScene) {
+        precondition(Thread.isMainThread)
+        NSLog("Core-SET: scene event=%@ state=%ld", event, eventScene.activationState.rawValue)
+        recordHostingDiagnostic("scene-\(event)", epoch: gameLaunchEpoch)
+    }
+
+    private func finishGameLaunch(epoch: UInt64, error: String?, completion: @escaping (String?) -> Void) {
+        guard gameLaunchCurrent(epoch) else { return }
+        gameLaunchPending = false
+        gameLaunchStatus = error ?? "跨应用画面已回读；触控待真机验收"
+        NSLog("Core-SET: game launch host epoch=%llu result=%@", epoch, gameLaunchStatus ?? "unknown")
+        if let scene, scene.activationState != .foregroundActive {
+            host.setApplicationActive(false)
+        } else if error != nil, aimSuspendedForHost, host.localSurfacesReady,
+                  menu.resumeAimConsumer() {
+            aimSuspendedForHost = false
+        }
+        publishStatus()
+        completion(error)
+    }
+
+    private func prepareLocalHosting(epoch: UInt64, completion: @escaping (String?) -> Void) {
+        guard gameLaunchCurrent(epoch), scene?.activationState == .foregroundActive else { return }
+        let adapter = CoreSetLocalHostingAdapter()
+        // Even when the SBS class is absent, build the dual system source once.
+        // A failed local registration then hands those exact contexts to the
+        // SpringBoard adapter without a stop/recreate cycle.
+        if !adapter.available {
+            NSLog("Core-SET: hosting mode=local-controller class-unavailable; preserve source for fallback")
+        }
+        installHostedWindows(adapter: adapter, localMode: true, epoch: epoch,
+                             completion: completion)
+    }
+
+    private func fallbackToSpringBoardAfterLocalFailure(epoch: UInt64,
+                                                       completion: @escaping (String?) -> Void) {
+        guard gameLaunchCurrent(epoch) else { return }
+        NSLog("Core-SET: hosting mode=local-controller failed; trying SpringBoard with existing contexts")
+        prepareSpringBoardHosting(epoch: epoch, completion: completion)
+    }
+
+    private func prepareSpringBoardHosting(epoch: UInt64, completion: @escaping (String?) -> Void) {
+        guard gameLaunchCurrent(epoch), let scene, scene.activationState == .foregroundActive else {
+            finishGameLaunch(epoch: epoch, error: "场景已失活，已取消跨应用托管", completion: completion)
+            return
+        }
+        let manager = laramgr.shared
+        if manager.rcready, let process = manager.sbProc {
+            rebuildHostedWindows(process: process, epoch: epoch, completion: completion)
+            return
+        }
+        guard !manager.rcrunning else {
+            finishGameLaunch(epoch: epoch, error: "SpringBoard 远程会话正在初始化，请稍后重试", completion: completion)
+            return
+        }
+        gameLaunchStatus = "正在初始化 SpringBoard 远程会话"
+        NSLog("Core-SET: game launch epoch=%llu stage=springboard-rc start", epoch)
+        publishStatus()
+        manager.rcinit(process: "SpringBoard", migbypass: false) { [weak self] success in
+            guard let self, self.gameLaunchCurrent(epoch) else { return }
+            NSLog("Core-SET: game launch epoch=%llu stage=springboard-rc ready=%d",
+                  epoch, success ? 1 : 0)
+            guard success, let process = manager.sbProc else {
+                let detail = manager.rcLastError ?? "远程调用初始化失败"
+                self.finishGameLaunch(epoch: epoch, error: "SpringBoard 托管不可用：\(detail)", completion: completion)
+                return
+            }
+            self.rebuildHostedWindows(process: process, epoch: epoch, completion: completion)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(180)) { [weak self] in
+            guard let self, self.gameLaunchCurrent(epoch), manager.rcrunning else { return }
+            self.finishGameLaunch(epoch: epoch,
+                error: "SpringBoard 远程会话初始化超时；后台任务结束前请勿重试", completion: completion)
+        }
+    }
+
+    private func rebuildHostedWindows(process: RemoteCall, epoch: UInt64,
+                                      completion: @escaping (String?) -> Void) {
+        guard gameLaunchCurrent(epoch), let scene, scene.activationState == .foregroundActive else {
+            finishGameLaunch(epoch: epoch, error: "场景已失活，已取消跨应用托管", completion: completion)
+            return
+        }
+        let adapter = CoreSetRemoteHostingAdapter(remoteCall: process)
+        if let reason = adapter.sessionIdentityFailureReason {
+            let detail = "SpringBoard 会话身份未通过核对：\(reason)"
+            globallogger.log("Core-SET: \(detail)")
+            finishGameLaunch(epoch: epoch, error: detail, completion: completion)
+            return
+        }
+        if localHostingAdapter != nil && host.localSurfacesReady {
+            host.whenHostedReadbackIdle { [weak self] in
+                guard let self, self.gameLaunchCurrent(epoch) else { return }
+                self.host.transitionToRemoteHostingAdapter(adapter) { [weak self] registered in
+                    guard let self, self.gameLaunchCurrent(epoch) else { return }
+                    guard registered else {
+                        self.rollbackGameLaunch(epoch: epoch,
+                            error: "本地双窗口转 SpringBoard 注册未确认", completion: completion)
+                        return
+                    }
+                    self.localHostingAdapter = nil
+                    self.remoteHostingAdapter = adapter
+                    self.remoteCleanupFailed = false
+                    NSLog("Core-SET: hosting mode=springboard stage=same-source-context registered=1")
+                    self.verifyHostedWindows(localMode: false, epoch: epoch, completion: completion)
+                }
+            }
+        } else {
+            installHostedWindows(adapter: adapter, localMode: false,
+                                 epoch: epoch, completion: completion)
+        }
+    }
+
+    private func hostedInstallFailed(localMode: Bool, epoch: UInt64, error: String,
+                                     completion: @escaping (String?) -> Void) {
+        if localMode {
+            NSLog("Core-SET: hosting mode=local-controller failed reason=%@", error)
+            fallbackToSpringBoardAfterLocalFailure(epoch: epoch, completion: completion)
+        } else {
+            rollbackGameLaunch(epoch: epoch, error: error, completion: completion)
+        }
+    }
+
+    private func installHostedWindows(adapter: CoreSetHUDHostingAdapter, localMode: Bool,
+                                       epoch: UInt64, completion: @escaping (String?) -> Void) {
+        aimSuspendedForHost = true
+        menu.suspendAimConsumer { [weak self] confirmed in
+            guard let self, self.gameLaunchCurrent(epoch) else { return }
+            guard confirmed, self.scene?.activationState == .foregroundActive,
+                  self.host.localSurfacesReady else {
+                self.finishGameLaunch(epoch: epoch,
+                    error: "目标动作停止或本地源窗口状态未确认", completion: completion)
+                return
+            }
+            // WZ retains the same menu/draw source windows and MenuVC. Stopping
+            // the menu host consumer here would also stop those windows.
+            if localMode { self.localHostingAdapter = adapter as? CoreSetLocalHostingAdapter }
+            else { self.remoteHostingAdapter = adapter as? CoreSetRemoteHostingAdapter }
+            self.host.attachHostingAdapter(adapter) { [weak self] registered in
+                guard let self, self.gameLaunchCurrent(epoch) else { return }
+                guard registered else {
+                    self.hostedInstallFailed(localMode: localMode, epoch: epoch,
+                        error: "双窗口注册或读回失败", completion: completion)
+                    return
+                }
+                if localMode { self.localHostingAdapter = adapter as? CoreSetLocalHostingAdapter }
+                else { self.remoteHostingAdapter = adapter as? CoreSetRemoteHostingAdapter }
+                self.remoteCleanupFailed = false
+                self.verifyHostedWindows(localMode: localMode, epoch: epoch,
+                                         completion: completion)
+            }
+        }
+    }
+
+    private func verifyHostedWindows(localMode: Bool, epoch: UInt64,
+                                     completion: @escaping (String?) -> Void) {
+        host.setApplicationActive(true)
         hostChanged()
+        gameLaunchStatus = localMode
+            ? "本地 SBS 双窗口已注册，正在复核" : "SpringBoard 双窗口已注册，正在复核"
+        publishStatus()
+        host.confirmHostedReadbackAsync { [weak self] firstObserved in
+            guard let self, self.gameLaunchCurrent(epoch) else { return }
+            guard firstObserved else {
+                self.hostedInstallFailed(localMode: localMode, epoch: epoch,
+                    error: "双窗口初次读回失败", completion: completion)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1200)) { [weak self] in
+                guard let self, self.gameLaunchCurrent(epoch) else { return }
+                self.host.confirmHostedReadbackAsync { [weak self] observed in
+                    guard let self, self.gameLaunchCurrent(epoch) else { return }
+                    NSLog("Core-SET: game launch epoch=%llu stage=dual-host mode=%@ observed=%d",
+                          epoch, localMode ? "local-controller" : "springboard", observed ? 1 : 0)
+                    guard observed else {
+                        self.hostedInstallFailed(localMode: localMode, epoch: epoch,
+                            error: "双窗口延迟读回失败", completion: completion)
+                        return
+                    }
+                    self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
+                }
+            }
+        }
+    }
+
+    private func showHostedMenuAndOpenGame(epoch: UInt64, completion: @escaping (String?) -> Void) {
+        guard gameLaunchCurrent(epoch), host.hostedRegistrationReceipt else {
+            rollbackGameLaunch(epoch: epoch, error: "跨应用双窗口未通过读回", completion: completion)
+            return
+        }
+        menu.requestMenuVisibility(true) { [weak self] confirmed in
+            guard let self, self.gameLaunchCurrent(epoch) else { return }
+            let panelVisible = self.host.panelVisible
+            let hosted = self.host.hostedRegistrationReceipt
+            NSLog("Core-SET: game launch epoch=%llu stage=menu-visible confirmed=%d panel=%d hosted=%d",
+                  epoch, confirmed ? 1 : 0, panelVisible ? 1 : 0, hosted ? 1 : 0)
+            guard confirmed, panelVisible, hosted else {
+                self.rollbackGameLaunch(epoch: epoch, error: "游戏内菜单显示未确认", completion: completion)
+                return
+            }
+            guard !self.aimSuspendedForHost || self.menu.resumeAimConsumer() else {
+                self.rollbackGameLaunch(epoch: epoch, error: "目标动作恢复未确认，已停止游戏启动", completion: completion)
+                return
+            }
+            self.aimSuspendedForHost = false
+            guard let scene = self.scene, scene.activationState == .foregroundActive else {
+                self.rollbackGameLaunch(epoch: epoch, error: "场景已失活，未发起游戏启动", completion: completion)
+                return
+            }
+            guard self.host.armHostedInput() else {
+                self.rollbackGameLaunch(epoch: epoch, error: "游戏内触控监听未就绪，已停止启动", completion: completion)
+                return
+            }
+            NSLog("Core-SET: game launch epoch=%llu stage=open-url targetBundle=%@",
+                  epoch, CoreSetGameTarget.bundleIdentifier)
+            CoreSetGameTarget.openApplication { [weak self] result in
+                guard let self, self.gameLaunchCurrent(epoch) else { return }
+                switch result {
+                case .opened:
+                    self.host.confirmHostedReadbackAsync { [weak self] observed in
+                        guard let self, self.gameLaunchCurrent(epoch) else { return }
+                        self.recordHostingDiagnostic("open-url-callback-opened", epoch: epoch,
+                                                     remoteDecision: observed ? 1 : 0)
+                        if observed {
+                            self.finishGameLaunch(epoch: epoch, error: nil, completion: completion)
+                        } else {
+                            self.rollbackGameLaunch(epoch: epoch,
+                                error: "游戏已打开，但跨应用窗口回读失效", completion: completion)
+                        }
+                    }
+                case .unavailable:
+                    self.recordHostingDiagnostic("open-url-callback-unavailable", epoch: epoch)
+                    self.rollbackGameLaunch(epoch: epoch, error: "未检测到可打开的和平精英，跨应用窗口已请求清理", completion: completion)
+                case .failed:
+                    self.recordHostingDiagnostic("open-url-callback-failed", epoch: epoch)
+                    self.rollbackGameLaunch(epoch: epoch, error: "系统未能打开和平精英，跨应用窗口已请求清理", completion: completion)
+                }
+            }
+        }
+    }
+
+    private func rollbackGameLaunch(epoch: UInt64, error: String,
+                                    completion: @escaping (String?) -> Void) {
+        host.whenHostedReadbackIdle { [weak self] in
+            guard let self, self.gameLaunchCurrent(epoch) else { return }
+            self.host.stopHostedAsync { [weak self] result in
+                guard let self, self.gameLaunchCurrent(epoch) else { return }
+                guard result.complete.boolValue, !self.host.cleanupPending else {
+                    self.remoteCleanupFailed = true
+                    self.finishGameLaunch(epoch: epoch,
+                        error: "\(error)；远端清理回执未确认，已保留句柄", completion: completion)
+                    return
+                }
+                self.remoteHostingAdapter = nil
+                if self.host.installRemoteHostingAdapter(nil), let scene = self.scene,
+                   scene.activationState == .foregroundActive,
+                   self.host.startLocal(in: scene, menuController: self.menu) {
+                    self.host.setApplicationActive(true)
+                    self.hostChanged()
+                    self.menu.requestMenuVisibility(false) { [weak self] _ in self?.publishStatus() }
+                }
+                self.finishGameLaunch(epoch: epoch, error: error, completion: completion)
+            }
+        }
+    }
+
+    // The launcher button explicitly retries a failed remote cleanup once.
+    // No background timer or lifecycle notification replays remote writes.
+    func retryRemoteCleanup(completion: @escaping (String?) -> Void) {
+        precondition(Thread.isMainThread)
+        guard remoteCleanupFailed, !returnToLocalPending, !stopping,
+              scene?.activationState == .foregroundActive else {
+            completion("当前没有可重试的远端清理任务"); return
+        }
+        remoteCleanupFailed = false
+        returnToLocalPending = true
+        host.whenHostedReadbackIdle { [weak self] in
+            guard let self else { return }
+            self.host.stopHostedAsync { [weak self] result in
+                guard let self else { return }
+                self.returnToLocalPending = false
+                guard !self.stopping else { return }
+                guard result.complete.boolValue, !self.host.cleanupPending else {
+                    self.remoteCleanupFailed = true
+                    self.publishStatus()
+                    completion("远端清理仍未确认，已保留句柄；不会自动重试")
+                    return
+                }
+                self.remoteHostingAdapter = nil
+                guard self.host.installRemoteHostingAdapter(nil), let scene = self.scene,
+                      scene.activationState == .foregroundActive,
+                      self.host.startLocal(in: scene, menuController: self.menu) else {
+                    self.publishStatus()
+                    completion("远端已清理，但本应用窗口恢复失败")
+                    return
+                }
+                self.host.setApplicationActive(true)
+                self.hostChanged()
+                self.menu.requestMenuVisibility(false) { [weak self] _ in self?.publishStatus() }
+                self.activate()
+                completion(nil)
+            }
+        }
+    }
+
+    func deactivate() {
+        guard !stopping, !aimSuspendedForHost else { return }
+        aimSuspendedForHost = true
+        menu.suspendAimConsumer { [weak self] confirmed in
+            guard let self, !self.stopping else { return }
+            if self.activateAfterAimStop, confirmed {
+                self.activateAfterAimStop = false
+                guard self.menu.resumeAimConsumer() else { self.publishStatus(); return }
+                self.aimSuspendedForHost = false
+                self.activate()
+                return
+            }
+            self.host.setApplicationActive(false)
+            self.recordHostingDiagnostic("deactivate-applied", epoch: self.gameLaunchEpoch)
+            self.hostChanged()
+        }
     }
 
     func toggleMenu() { requestVisibility(!host.panelVisible) }
@@ -320,9 +784,25 @@ final class CoreSetRuntimeCoordinator {
     }
 
     private func hostChanged() {
-        if !stopping, host.localSurfacesReady, let scene,
-           submittedGeneration != host.generation {
-            for expired in frameComposer.reset(to: host.generation) {
+        if let canvas = playerCanvas { menu.syncRadarCanvas(canvas.size) }
+        let canvasSize = host.logicalCanvasSize
+        if !stopping, host.localSurfacesReady,
+           submittedGeneration != host.renderGeneration {
+            if submittedGeneration != nil, !aimSuspendedForHost {
+                aimSuspendedForHost = true
+                menu.suspendAimConsumer { [weak self] confirmed in
+                    guard let self, !self.stopping, confirmed else { return }
+                    _ = self.menu.resumeAimConsumer()
+                    self.aimSuspendedForHost = false
+                    if self.activateAfterAimStop {
+                        self.activateAfterAimStop = false
+                        self.activate()
+                        return
+                    }
+                    self.publishStatus()
+                }
+            }
+            for expired in frameComposer.reset(to: host.renderGeneration) {
                 aimDisplayConsumer?.consumed(expired)
                 localFrameDidConsume?(expired)
             }
@@ -330,12 +810,21 @@ final class CoreSetRuntimeCoordinator {
             menu.invalidateLocalAimDisplayAfterHostReset()
             // No game collector and no fabricated entities: exercise a real empty
             // CA frame. The host rejects stale generation/sequence on delivery.
-            submittedGeneration = host.generation
-            let bounds = scene.coordinateSpace.bounds
-            if bounds.width > 0, bounds.height > 0 {
-                host.submitFrame(CoreSetRenderFrame(generation: host.generation, sequence: 1,
-                    canvasSize: bounds.size, commands: []))
+            submittedGeneration = host.renderGeneration
+            submittedCanvasSize = canvasSize
+            if canvasSize.width > 0, canvasSize.height > 0 {
+                host.submitFrame(CoreSetRenderFrame(generation: host.renderGeneration, sequence: 1,
+                    canvasSize: canvasSize, commands: []))
             }
+        } else if !stopping, host.localSurfacesReady,
+                  submittedCanvasSize != canvasSize {
+            for expired in frameComposer.invalidateGeometry() {
+                aimDisplayConsumer?.consumed(expired)
+                localFrameDidConsume?(expired)
+            }
+            aimDisplayConsumer?.invalidateFrame()
+            menu.invalidateLocalAimDisplayAfterHostReset()
+            submittedCanvasSize = canvasSize
         }
         menu.refreshConsumerAvailability()
         publishStatus()
@@ -368,36 +857,62 @@ final class CoreSetRuntimeCoordinator {
         let local = host.localSurfacesReady ? "本应用悬浮可用" : "本应用悬浮未就绪"
         let renderer = host.activeBackend == CoreSetHUDBackendMetal ? "Metal" : "CA"
         let frame = host.lastConsumedSequence > 0 ? "\(renderer) 本地帧已消费" : "\(renderer) 本地帧未确认"
-        let hosting = host.crossApplicationHosted ? "跨应用双面已回读" : "跨应用 unavailable"
+        // UI status is a structural registration receipt, never a live pixel
+        // or touch claim. Launch and post-open gates call a real async readback.
+        let remoteHosted = host.hostedRegistrationReceipt
+        let hosting = remoteHosted ? "跨应用注册回执有效" : "跨应用 unavailable"
         let cleanup = host.cleanupPending ? " · 清理待确认" : ""
+        let launch = gameLaunchStatus.map { " · \($0)" } ?? ""
         launcher?.updateRuntimePresentation(menuVisible: host.panelVisible,
-            status: "\(local) · \(frame) · \(hosting)\(cleanup)")
+            status: "\(local) · \(frame) · \(hosting)\(cleanup)\(launch)",
+            cleanupRetryRequired: remoteCleanupFailed)
         menu.updateRuntimeObservations(homeTelemetry.capture(
             hostReady: host.localSurfacesReady, panelVisible: host.panelVisible,
             cleanupPending: host.cleanupPending,
-            remoteHosted: host.crossApplicationHosted,
+            remoteHosted: remoteHosted,
             targetReadReady: playerConsumer?.availability == .ready))
     }
 
-    // Local UIKit cleanup is synchronous and its concrete result is returned.
-    // Channel stop receipts may complete later; retain the whole owner until all
-    // receipts confirm restoration. Failed cleanup never releases the handles.
+    private func releaseStoppedOwnerIfReady() {
+        guard stopping, !stopReceiptsPending, stopChannelsConfirmed,
+              stopWindowsConfirmed, !host.cleanupPending else { return }
+        host.stateDidChange = nil
+        host.frameDidConsume = nil
+        Self.retained.removeValue(forKey: identity)
+    }
+
+    // Local disarm/hide is immediate. Remote mirror cleanup is best-effort on
+    // the adapter's serial worker; termination does not wait for its callback.
     @discardableResult
     func stop() -> CoreSetHUDStopResult {
         precondition(Thread.isMainThread)
-        if stopReceiptsPending, let result = lastStopResult { return result }
+        if stopping, let result = lastStopResult { return result }
+        gameLaunchEpoch &+= 1
+        gameLaunchPending = false
         stopping = true
         performanceEpoch = UUID()
         performanceTimer?.cancel()
         performanceTimer = nil
         stopReceiptsPending = true
+        stopChannelsConfirmed = false
+        stopWindowsConfirmed = false
         for expired in frameComposer.reset(to: 0) {
             aimDisplayConsumer?.consumed(expired)
             localFrameDidConsume?(expired)
         }
         host.panelVisibilityRequested = nil
+        host.hostingInvalidated = nil
         let result = host.stop()
         lastStopResult = result
+        stopWindowsConfirmed = result.complete.boolValue
+        if host.hostedCleanupInFlight {
+            host.stopHostedAsync { [weak self] final in
+                guard let self else { return }
+                self.lastStopResult = final
+                self.stopWindowsConfirmed = final.complete.boolValue
+                self.releaseStoppedOwnerIfReady()
+            }
+        }
         let group = DispatchGroup()
         var channelsRestored = true
         group.enter()
@@ -414,21 +929,18 @@ final class CoreSetRuntimeCoordinator {
             let aimWriteClean = self.aimConsumer?.shutdownWriteSession() ?? true
             let recoilWriteClean = self.recoilConsumer?.shutdownWriteSession() ?? true
             channelsRestored = channelsRestored && playerReadClean && materialReadClean && radarReadClean && previewReadClean && aimWriteClean && recoilWriteClean
+            self.stopChannelsConfirmed = channelsRestored
             self.menu.refreshConsumerAvailability()
             self.publishStatus()
-            if result.complete.boolValue && channelsRestored && !self.host.cleanupPending {
-                self.host.stateDidChange = nil
-                self.host.frameDidConsume = nil
-                Self.retained.removeValue(forKey: self.identity)
-            }
+            self.releaseStoppedOwnerIfReady()
         }
         return result
     }
 
     static func stopAllForTermination() {
         // UIApplication will not promise time for an async continuation here.
-        // Await the synchronous window/adapter result, never block the main queue
-        // waiting for a callback that itself needs that queue.
+        // Disarm/hide synchronously and enqueue remote cleanup; never wait for
+        // a worker callback or claim it completed before process termination.
         for owner in Array(retained.values) {
             let result = owner.stop()
             if !result.complete.boolValue { NSLog("Core-SET: overlay cleanup remains unconfirmed") }
@@ -477,6 +989,14 @@ private final class CoreSetLocalHostConsumer: CoreSetFeatureConsumer {
 
     func stop(_ token: CoreSetRequestToken, completion: @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) {
         let result = host.stop()
-        completion(token, result.complete.boolValue ? .restored : .failed(reason: "窗口清理未确认"))
+        if result.complete.boolValue {
+            completion(token, .restored)
+        } else if host.hostedCleanupInFlight {
+            host.stopHostedAsync { final in
+                completion(token, final.complete.boolValue ? .restored : .failed(reason: "窗口清理未确认"))
+            }
+        } else {
+            completion(token, .failed(reason: "窗口清理未确认"))
+        }
     }
 }
