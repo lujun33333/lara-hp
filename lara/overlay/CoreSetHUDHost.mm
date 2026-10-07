@@ -238,6 +238,8 @@
     _panelVisible = NO; _panel.hidden = YES;
     [self layoutSurfaces];
     _drawWindow.hidden = NO; _menuWindow.hidden = NO;
+    [_drawWindow layoutIfNeeded]; [_menuWindow layoutIfNeeded];
+    [CATransaction flush];
     if (_adapter) {
         NSError *hostingError = nil;
         _menuCleanupNeeded = YES;

@@ -5,6 +5,8 @@
 #include <cstring>
 #include <cmath>
 extern "C" int proc_name(int pid, void *buffer, uint32_t buffersize);
+static const double kCoreSetRemoteDrawLevel = 10000009.0;
+static const double kCoreSetRemoteMenuLevel = 10000010.0;
 
 static NSError *CSHostError(NSInteger code, NSString *message) {
     return [NSError errorWithDomain:@"CoreSetRemoteHosting" code:code
@@ -268,7 +270,9 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     side.source = window; side.context = context;
     *slot = side; _busy = YES;
     BOOL success = NO;
-    @synchronized (_process) { success = [self createSide:side level:window.windowLevel]; }
+    const double remoteLevel = surface == CoreSetHUDSurfaceMenu
+        ? kCoreSetRemoteMenuLevel : kCoreSetRemoteDrawLevel;
+    @synchronized (_process) { success = [self createSide:side level:remoteLevel]; }
     _busy = NO;
     if (!success) {
         // Keep partial handles for the host's same-window rollback path.

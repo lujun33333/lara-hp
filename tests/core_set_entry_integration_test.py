@@ -69,6 +69,8 @@ for implicit in ["views/app/CoreSetMenuViewController.swift", "views/app/Content
 need(project, "PBXFileSystemSynchronizedRootGroup", "QuartzCore.framework in Frameworks", 'SWIFT_OBJC_BRIDGING_HEADER = "lara/lara-Bridging-Header.h"')
 assert bridge.count('#import "overlay/CoreSetHUDHost.h"') == 1
 need(header, "NS_SWIFT_NAME(startLocal(in:menuController:))", "NS_SWIFT_NAME(applyLocalMenu(visible:colors:))")
+start_host = objc(host, "startInScene")
+assert start_host.index("_drawWindow.hidden = NO; _menuWindow.hidden = NO;") < start_host.index("[CATransaction flush];") < start_host.index("registerWindow:_menuWindow")
 
 
 def validate_owner(text):
@@ -147,7 +149,13 @@ need(kernel_offsets, "fetchkcache()", "fetched && dlkcache()", "manager.hasOffse
 assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && dlkcache()") < kernel_offsets.index("manager.hasOffsets = loaded") < kernel_offsets.index("guard loaded else") < kernel_offsets.rindex("prepareSpringBoardHosting")
 hosting = swift(coordinator, "rebuildHostedWindows")
 need(hosting, "suspendAimConsumer", "host.stop()", "installRemoteHostingAdapter(adapter)",
-     "host.startLocal(in: scene", "host.crossApplicationHosted")
+     "host.startLocal(in: scene", "host.crossApplicationHosted", ".milliseconds(1200)",
+     "let observed = self.host.crossApplicationHosted", "guard observed else")
+assert hosting.index("let observed = self.host.crossApplicationHosted") < hosting.index("self.showHostedMenuAndOpenGame")
+remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
+need(remote_adapter, "kCoreSetRemoteDrawLevel = 10000009.0", "kCoreSetRemoteMenuLevel = 10000010.0",
+     "surface == CoreSetHUDSurfaceMenu", "createSide:side level:remoteLevel")
+assert "createSide:side level:window.windowLevel" not in remote_adapter
 open_game = swift(coordinator, "showHostedMenuAndOpenGame")
 need(open_game, "host.crossApplicationHosted", "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication")
 assert open_game.index("host.crossApplicationHosted") < open_game.index("CoreSetGameTarget.openApplication")

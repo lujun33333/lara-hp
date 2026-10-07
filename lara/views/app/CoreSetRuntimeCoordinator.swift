@@ -500,7 +500,20 @@ final class CoreSetRuntimeCoordinator {
             self.remoteHostingAdapter = adapter
             self.host.setApplicationActive(true)
             self.hostChanged()
-            self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
+            self.gameLaunchStatus = "跨应用双窗口已注册，正在复核"
+            self.publishStatus()
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1200)) { [weak self] in
+                guard let self, self.gameLaunchCurrent(epoch) else { return }
+                let observed = self.host.crossApplicationHosted
+                NSLog("Core-SET: game launch epoch=%llu stage=dual-host observed=%d",
+                      epoch, observed ? 1 : 0)
+                guard observed else {
+                    self.restoreLocalAfterHostingFailure()
+                    self.finishGameLaunch(epoch: epoch, error: "跨应用双窗口延迟读回失败", completion: completion)
+                    return
+                }
+                self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
+            }
         }
     }
 
