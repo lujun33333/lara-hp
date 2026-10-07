@@ -18,4 +18,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)prepareForHostGeneration:(uint64_t)generation;
 @end
 
+// WZ's first hosting tier: local SBS accessibility controllers own the two
+// source contexts. No RemoteCall is made by this adapter.
+@interface CoreSetLocalHostingAdapter : NSObject <CoreSetHUDHostingAdapter>
+@property(nonatomic, readonly) BOOL available;
+@property(nonatomic, readonly) uint64_t hostGeneration;
+- (NSString *)hostingDiagnosticSnapshot;
+@end
+
 NS_ASSUME_NONNULL_END

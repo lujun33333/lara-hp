@@ -4,7 +4,9 @@
 #import "../kexploit/offsets.h"
 #import "../kexploit/utils.h"
 #import <objc/message.h>
+#import <objc/runtime.h>
 #import <QuartzCore/QuartzCore.h>
+#include <dlfcn.h>
 #include <cstring>
 #include <cmath>
 #include <cerrno>
@@ -90,6 +92,148 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 @property(nonatomic) BOOL cleanupAmbiguous;
 @property(nonatomic) BOOL observed;
 @property(nonatomic, copy) NSString *lastReadbackStep;
+@end
+
+static Class CSLocalHostingClass(void) {
+    static void *backBoard = NULL;
+    static void *springBoardServices = NULL;
+    if (!backBoard) backBoard = dlopen(
+        "/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices",
+        RTLD_NOW | RTLD_GLOBAL);
+    Class cls = objc_getClass("SBSAccessibilityWindowHostingController");
+    if (!cls) {
+        if (!springBoardServices) springBoardServices = dlopen(
+            "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices",
+            RTLD_NOW | RTLD_GLOBAL);
+        cls = objc_getClass("SBSAccessibilityWindowHostingController");
+    }
+    return cls;
+}
+static uint32_t CSLocalContext(UIWindow *window) {
+    SEL selector = NSSelectorFromString(@"_contextId");
+    return window && [window respondsToSelector:selector]
+        ? ((uint32_t (*)(id, SEL))objc_msgSend)(window, selector) : 0;
+}
+static BOOL CSLocalInvoke(id controller, NSString *name, uint32_t context, double level) {
+    if (!controller || !context) return NO;
+    SEL selector = NSSelectorFromString(name);
+    if (![controller respondsToSelector:selector]) return NO;
+    NSMethodSignature *signature = [controller methodSignatureForSelector:selector];
+    const BOOL withLevel = [name hasSuffix:@"atLevel:"];
+    if (!signature || signature.numberOfArguments != (withLevel ? 4 : 3)) return NO;
+    const char *contextType = [signature getArgumentTypeAtIndex:2];
+    if (!contextType || (strcmp(contextType, @encode(uint32_t)) != 0 &&
+                         strcmp(contextType, @encode(int32_t)) != 0)) return NO;
+    if (withLevel) {
+        const char *levelType = [signature getArgumentTypeAtIndex:3];
+        if (!levelType || strcmp(levelType, @encode(double)) != 0) return NO;
+    }
+    NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
+    invocation.target = controller; invocation.selector = selector;
+    [invocation setArgument:&context atIndex:2];
+    if (withLevel) [invocation setArgument:&level atIndex:3];
+    @try { [invocation invoke]; return YES; }
+    @catch (__unused NSException *exception) { return NO; }
+}
+
+@implementation CoreSetLocalHostingAdapter {
+    __weak UIWindow *_menuSource;
+    __weak UIWindow *_drawSource;
+    id _menuController;
+    id _drawController;
+    uint32_t _menuContext;
+    uint32_t _drawContext;
+    uint64_t _hostGeneration;
+    BOOL _registered;
+}
+- (BOOL)available { return CSLocalHostingClass() != Nil; }
+- (BOOL)usesDirectSourceInteraction { return YES; }
+- (uint64_t)hostGeneration { return _hostGeneration; }
+- (NSString *)hostingDiagnosticSnapshot {
+    return [NSString stringWithFormat:@"mode=local-controller registered=%d contexts=%u/%u generation=%llu",
+        _registered, _drawContext, _menuContext, (unsigned long long)_hostGeneration];
+}
+- (BOOL)localSurfacesStillPublished {
+    return NSThread.isMainThread && _registered && _menuController && _drawController &&
+        _menuSource && _drawSource && _menuSource.windowScene &&
+        _menuSource.windowScene == _drawSource.windowScene &&
+        CSLocalContext(_menuSource) == _menuContext &&
+        CSLocalContext(_drawSource) == _drawContext;
+}
+- (void)prepareForHostGeneration:(uint64_t)generation {
+    if (!NSThread.isMainThread || !generation) return;
+    if (!_menuController && !_drawController) { _hostGeneration = generation; return; }
+    if (self.localSurfacesStillPublished) _hostGeneration = generation;
+    else _registered = NO;
+}
+- (void)registerBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
+                         completion:(void (^)(BOOL, uint64_t))completion {
+    if (!completion) return;
+    const uint64_t generation = _hostGeneration;
+    if (!NSThread.isMainThread || !self.available || _menuController || _drawController ||
+        !menuWindow || !drawWindow || !generation ||
+        menuWindow.windowScene != drawWindow.windowScene) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, generation); });
+        return;
+    }
+    _menuSource = menuWindow; _drawSource = drawWindow;
+    _menuContext = CSLocalContext(menuWindow);
+    _drawContext = CSLocalContext(drawWindow);
+    if (!_menuContext || !_drawContext || _menuContext == _drawContext) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, generation); });
+        return;
+    }
+    Class cls = CSLocalHostingClass();
+    id menu = [[cls alloc] init];
+    id draw = [[cls alloc] init];
+    const BOOL menuReady = CSLocalInvoke(menu, @"registerWindowWithContextID:atLevel:",
+                                         _menuContext, menuWindow.windowLevel);
+    const BOOL drawReady = CSLocalInvoke(draw, @"registerWindowWithContextID:atLevel:",
+                                         _drawContext, drawWindow.windowLevel);
+    _menuController = menuReady ? menu : nil;
+    _drawController = drawReady ? draw : nil;
+    _registered = menuReady && drawReady;
+    const BOOL invoked = self.localSurfacesStillPublished;
+    NSLog(@"Core-SET: hosting mode=local-controller menu=%d draw=%d contexts=%u/%u",
+          menuReady, drawReady, _menuContext, _drawContext);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 450 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        const BOOL stable = invoked && self.localSurfacesStillPublished &&
+            self->_hostGeneration == generation;
+        NSLog(@"Core-SET: hosting mode=local-controller stage=context-stable confirmed=%d",
+              stable);
+        completion(stable, generation);
+    });
+}
+- (void)observeBothSurfacesAsync:(void (^)(BOOL, uint64_t))completion {
+    if (!completion) return;
+    const BOOL ready = self.localSurfacesStillPublished;
+    const uint64_t generation = _hostGeneration;
+    dispatch_async(dispatch_get_main_queue(), ^{ completion(ready, generation); });
+}
+- (void)unregisterBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
+                         completion:(void (^)(BOOL, BOOL))completion {
+    if (!completion) return;
+    if (!NSThread.isMainThread || (_menuSource && _menuSource != menuWindow) ||
+        (_drawSource && _drawSource != drawWindow)) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, NO); });
+        return;
+    }
+    _registered = NO;
+    const BOOL drawRemoved = !_drawController ||
+        CSLocalInvoke(_drawController, @"unregisterWindowWithContextID:",
+                      _drawContext, drawWindow.windowLevel) ||
+        CSLocalInvoke(_drawController, @"unregisterWindowWithContextID:atLevel:",
+                      _drawContext, drawWindow.windowLevel);
+    const BOOL menuRemoved = !_menuController ||
+        CSLocalInvoke(_menuController, @"unregisterWindowWithContextID:",
+                      _menuContext, menuWindow.windowLevel) ||
+        CSLocalInvoke(_menuController, @"unregisterWindowWithContextID:atLevel:",
+                      _menuContext, menuWindow.windowLevel);
+    if (drawRemoved) { _drawController = nil; _drawContext = 0; _drawSource = nil; }
+    if (menuRemoved) { _menuController = nil; _menuContext = 0; _menuSource = nil; }
+    dispatch_async(dispatch_get_main_queue(), ^{ completion(menuRemoved, drawRemoved); });
+}
 @end
 @implementation CoreSetRemoteHostSide @end
 

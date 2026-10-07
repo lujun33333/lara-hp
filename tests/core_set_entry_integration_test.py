@@ -145,19 +145,33 @@ need(submit, "consumeFrame:frame", "} else {", "host->_lastConsumedSequence = fr
 assert submit.index("consumeFrame:frame") < submit.index("host->_lastConsumedSequence = frame.sequence")
 assert not re.search(r"smoba|UnityFramework|wzhud_|wzesp_", coordinator)
 launch = swift(coordinator, "launchGame")
-need(launch, "axDeviceSupportStatus()", "host.foregroundTouchCalibrationReady",
-     "host.beginForegroundTouchCalibration", "init_offsets()", "offsets_init()", "manager.run", "prepareKernelOffsets")
-assert launch.index("axDeviceSupportStatus()") < launch.index("host.beginForegroundTouchCalibration") < launch.index("init_offsets()") < launch.index("offsets_init()") < launch.index("manager.run") < launch.index("prepareKernelOffsets")
+need(launch, "axDeviceSupportStatus()", "init_offsets()", "offsets_init()", "manager.run", "prepareKernelOffsets")
+assert "ForegroundTouchCalibration" not in launch
+assert launch.index("axDeviceSupportStatus()") < launch.index("init_offsets()") < launch.index("offsets_init()") < launch.index("manager.run") < launch.index("prepareKernelOffsets")
 kernel_offsets = swift(coordinator, "prepareKernelOffsets")
-need(kernel_offsets, "fetchkcache()", "fetched && dlkcache()", "manager.hasOffsets = loaded", "prepareSpringBoardHosting", ".seconds(180)")
-assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && dlkcache()") < kernel_offsets.index("manager.hasOffsets = loaded") < kernel_offsets.index("guard loaded else") < kernel_offsets.rindex("prepareSpringBoardHosting")
-hosting = swift(coordinator, "rebuildHostedWindows")
-need(hosting, "suspendAimConsumer", "suspendMenuHostConsumer", "host.stop()",
-      "resumeMenuHostConsumer()", "installRemoteHostingAdapter(adapter)",
-      "host.startHosted(in: scene", "host.confirmHostedReadbackAsync", ".milliseconds(1200)",
-      "self.host.confirmHostedReadbackAsync", "guard observed else")
-assert hosting.index("suspendMenuHostConsumer") < hosting.index("host.stop()") < hosting.index("host.startHosted(in: scene") < hosting.index("resumeMenuHostConsumer()")
-assert hosting.index("self.host.confirmHostedReadbackAsync") < hosting.index("self.showHostedMenuAndOpenGame")
+need(kernel_offsets, "fetchkcache()", "fetched && dlkcache()", "manager.hasOffsets = loaded", "prepareLocalHosting", ".seconds(180)")
+assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && dlkcache()") < kernel_offsets.index("manager.hasOffsets = loaded") < kernel_offsets.index("guard loaded else") < kernel_offsets.rindex("prepareLocalHosting")
+local = swift(coordinator, "prepareLocalHosting")
+need(local, "CoreSetLocalHostingAdapter()", "adapter.available", "installHostedWindows(adapter: adapter, localMode: true")
+remote = swift(coordinator, "rebuildHostedWindows")
+need(remote, "host.transitionToRemoteHostingAdapter(adapter)", "installHostedWindows(adapter: adapter, localMode: false")
+assert "stopHostedAsync" not in swift(coordinator, "fallbackToSpringBoardAfterLocalFailure")
+hosting = swift(coordinator, "installHostedWindows")
+need(hosting, "suspendAimConsumer", "host.attachHostingAdapter(adapter)", "verifyHostedWindows")
+assert "host.stop()" not in hosting and "suspendMenuHostConsumer" not in hosting
+assert "CoreSetHostedInputCalibration" not in host
+attach = objc(host[host.index("@implementation CoreSetHUDHost {"):], "attachHostingAdapter")
+need(attach, "_adapter = adapter", "registerBothSurfacesAsync:menu drawWindow:draw")
+assert "alloc] initWithWindowScene" not in attach
+transition = objc(host[host.index("@implementation CoreSetHUDHost {"):], "transitionToRemoteHostingAdapter")
+need(transition, "unregisterBothSurfacesAsync:menu drawWindow:draw", "host->_adapter = adapter",
+     "registerBothSurfacesAsync:menu drawWindow:draw")
+assert transition.index("unregisterBothSurfacesAsync:") < transition.index("registerBothSurfacesAsync:")
+assert "alloc] initWithWindowScene" not in transition
+verify = swift(coordinator, "verifyHostedWindows")
+need(verify, "host.confirmHostedReadbackAsync", ".milliseconds(1200)",
+     "self.host.confirmHostedReadbackAsync", "guard observed else")
+assert verify.index("host.confirmHostedReadbackAsync") < verify.index("self.showHostedMenuAndOpenGame")
 need(swift(coordinator, "showHostedMenuAndOpenGame"), "stage=menu-visible confirmed=%d panel=%d hosted=%d")
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
 need(remote_adapter, "kCoreSetRemoteDrawLevel = 10000009.0", "kCoreSetRemoteMenuLevel = 10000010.0",

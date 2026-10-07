@@ -1,52 +1,16 @@
 #import "CoreSetHUDHost.h"
-#include "CoreSetHostedInputCalibration.h"
+#include "../kexploit/wz/WZHUDPendingTouchQueue.h"
 #import <QuartzCore/QuartzCore.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
-#import <mach/mach_time.h>
 #include <dlfcn.h>
 #include <atomic>
 #include <cmath>
-#include <vector>
+#include <memory>
 
 typedef struct __IOHIDEvent *CoreSetIOHIDEventRef;
 typedef struct __IOHIDService *CoreSetIOHIDServiceRef;
 typedef struct __IOHIDEventSystemClient *CoreSetIOHIDEventSystemClientRef;
-
-// Apple IOHIDFamily-701.60.2 IOHIDEventTypes.h and current WebKit
-// IOKitSPIIOS.h agree on these digitizer field offsets and event mask bits.
-// Raw X/Y are never assumed to be points or normalized coordinates.
-static constexpr uint32_t kCoreSetDigitizerType = 11;
-static constexpr uint32_t kCoreSetDigitizerBase = kCoreSetDigitizerType << 16;
-static constexpr uint32_t kCoreSetDigitizerX = kCoreSetDigitizerBase;
-static constexpr uint32_t kCoreSetDigitizerY = kCoreSetDigitizerBase + 1;
-static constexpr uint32_t kCoreSetDigitizerIndex = kCoreSetDigitizerBase + 5;
-static constexpr uint32_t kCoreSetDigitizerMask = kCoreSetDigitizerBase + 7;
-static constexpr uint32_t kCoreSetDigitizerRange = kCoreSetDigitizerBase + 8;
-static constexpr uint32_t kCoreSetDigitizerTouch = kCoreSetDigitizerBase + 9;
-static constexpr uint32_t kCoreSetDigitizerMaskTouch = 1u << 1;
-static constexpr uint32_t kCoreSetDigitizerMaskPosition = 1u << 2;
-static constexpr uint32_t kCoreSetDigitizerMaskCancel = 1u << 7;
-typedef uint32_t (*CoreSetHIDGetType)(CoreSetIOHIDEventRef);
-typedef CFArrayRef (*CoreSetHIDGetChildren)(CoreSetIOHIDEventRef);
-typedef CFIndex (*CoreSetHIDGetInteger)(CoreSetIOHIDEventRef, uint32_t);
-typedef double (*CoreSetHIDGetFloat)(CoreSetIOHIDEventRef, uint32_t);
-typedef uint64_t (*CoreSetHIDGetTimestamp)(CoreSetIOHIDEventRef);
-struct CoreSetNativeDigitizer {
-    uint32_t index = 0;
-    uint32_t mask = 0;
-    BOOL range = NO;
-    BOOL touching = NO;
-    double x = 0;
-    double y = 0;
-    double timestamp = 0;
-};
-struct CoreSetForegroundContact {
-    CoreSetHostedInputCalibration::Phase phase;
-    double timestamp = 0;
-    double x = 0;
-    double y = 0;
-};
 
 @interface CoreSetAXEventPath : NSObject
 @property(nonatomic, readonly) unsigned char pathIdentity;
@@ -93,7 +57,7 @@ static void CoreSetLogAXDrop(const char *reason, std::atomic_uint_fast64_t *coun
 
 @interface CoreSetDrawWindow : UIWindow @end
 @implementation CoreSetDrawWindow
-+ (BOOL)_isSystemWindow { return NO; }
++ (BOOL)_isSystemWindow { return YES; }
 - (BOOL)_isSecure { return NO; }
 - (BOOL)_canBecomeKeyWindow { return YES; }
 - (BOOL)_isApplicationKeyWindow { return NO; }
@@ -105,17 +69,12 @@ static void CoreSetLogAXDrop(const char *reason, std::atomic_uint_fast64_t *coun
 
 @interface CoreSetMenuWindow : UIWindow
 @property(nonatomic) BOOL backgroundPassThrough;
-@property(nonatomic, weak) UIView *calibrationRegion;
 @property(nonatomic, weak) UIView *panelRegion;
 @property(nonatomic, weak) UIView *floatingRegion;
 @property(nonatomic, copy) NSArray<UIView *> * (^contentHitRegions)(void);
 @end
-@interface CoreSetMirroredDrawWindow : CoreSetDrawWindow @end
-@implementation CoreSetMirroredDrawWindow
-+ (BOOL)_isSystemWindow { return YES; }
-@end
 @implementation CoreSetMenuWindow
-+ (BOOL)_isSystemWindow { return NO; }
++ (BOOL)_isSystemWindow { return YES; }
 - (BOOL)_isSecure { return NO; }
 - (BOOL)_canBecomeKeyWindow { return YES; }
 - (BOOL)_isApplicationKeyWindow { return NO; }
@@ -125,10 +84,6 @@ static void CoreSetLogAXDrop(const char *reason, std::atomic_uint_fast64_t *coun
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     if (self.backgroundPassThrough) return nil;
     if (!self.rootViewController) return nil;
-    if (self.calibrationRegion && !self.calibrationRegion.hidden &&
-        [self.calibrationRegion pointInside:
-            [self.calibrationRegion convertPoint:point fromView:self] withEvent:event])
-        return [super hitTest:point withEvent:event];
     // UIKit color sheets/pickers are local modal UI, not game touch transport.
     NSMutableArray<UIViewController *> *controllers = [NSMutableArray arrayWithObject:self.rootViewController];
     while (controllers.count) {
@@ -154,111 +109,6 @@ static void CoreSetLogAXDrop(const char *reason, std::atomic_uint_fast64_t *coun
 }
 @end
 
-@interface CoreSetCalibrationView : UIView
-@property(nonatomic) NSUInteger targetIndex;
-@property(nonatomic, copy) void (^contact)(CoreSetHostedPointerPhase, CGPoint, double);
-@property(nonatomic, copy) void (^cancel)(void);
-- (CGPoint)targetPoint;
-@end
-@implementation CoreSetCalibrationView {
-    UILabel *_instruction;
-    UIButton *_cancelButton;
-}
-- (instancetype)initWithFrame:(CGRect)frame {
-    if ((self = [super initWithFrame:frame])) {
-        self.backgroundColor = [UIColor colorWithWhite:0.04 alpha:0.96];
-        self.multipleTouchEnabled = YES;
-        _instruction = [UILabel new];
-        _instruction.textColor = UIColor.whiteColor;
-        _instruction.textAlignment = NSTextAlignmentCenter;
-        _instruction.numberOfLines = 3;
-        _instruction.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
-        [self addSubview:_instruction];
-        _cancelButton = [UIButton buttonWithType:UIButtonTypeSystem];
-        [_cancelButton setTitle:@"取消校准" forState:UIControlStateNormal];
-        [_cancelButton addTarget:self action:@selector(cancelTapped) forControlEvents:UIControlEventTouchUpInside];
-        [self addSubview:_cancelButton];
-        [self updateInstruction];
-    }
-    return self;
-}
-- (void)setTargetIndex:(NSUInteger)targetIndex {
-    _targetIndex = targetIndex;
-    [self updateInstruction];
-    [self setNeedsLayout];
-    [self setNeedsDisplay];
-}
-- (void)updateInstruction {
-    _instruction.text = [NSString stringWithFormat:
-        @"触控校准 %lu/7\n每次只用一根手指短按圆点。失败将停止游戏启动。",
-        (unsigned long)MIN(_targetIndex + 1, 7)];
-}
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    const CGFloat instructionY = self.targetPoint.y < CGRectGetMidY(self.bounds)
-        ? CGRectGetHeight(self.bounds) * .62 : CGRectGetHeight(self.bounds) * .27;
-    _instruction.frame = CGRectMake(20, instructionY,
-                                    CGRectGetWidth(self.bounds) - 40, 84);
-    _cancelButton.frame = CGRectMake(CGRectGetWidth(self.bounds) - 130, 72, 110, 44);
-}
-- (CGPoint)targetPoint {
-    static const double positions[7][2] = {
-        {.20, .20}, {.80, .20}, {.20, .80},
-        {.50, .10}, {.50, .90}, {.10, .50}, {.90, .50}
-    };
-    const NSUInteger index = MIN(_targetIndex, 6);
-    return CGPointMake(self.bounds.size.width * positions[index][0],
-                       self.bounds.size.height * positions[index][1]);
-}
-- (void)drawRect:(CGRect)rect {
-    [super drawRect:rect];
-    (void)rect;
-    CGPoint center = self.targetPoint;
-    UIBezierPath *ring = [UIBezierPath bezierPathWithOvalInRect:
-        CGRectMake(center.x - 23, center.y - 23, 46, 46)];
-    ring.lineWidth = 4;
-    [UIColor.systemTealColor setStroke]; [ring stroke];
-    UIBezierPath *dot = [UIBezierPath bezierPathWithOvalInRect:
-        CGRectMake(center.x - 6, center.y - 6, 12, 12)];
-    [UIColor.whiteColor setFill]; [dot fill];
-}
-- (void)cancelTapped { if (self.cancel) self.cancel(); }
-- (void)reportTouch:(UITouch *)touch phase:(CoreSetHostedPointerPhase)phase {
-    if (!touch || !self.window || !self.contact) return;
-    CGPoint windowPoint = [touch locationInView:self.window];
-    CGPoint fixed = [self.window.screen.fixedCoordinateSpace
-        convertPoint:windowPoint fromCoordinateSpace:self.window];
-    self.contact(phase, fixed, touch.timestamp);
-}
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    if (event.allTouches.count != 1 || touches.count != 1) {
-        if (self.cancel) self.cancel(); return;
-    }
-    [self reportTouch:touches.anyObject phase:CoreSetHostedPointerPhaseBegan];
-}
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    (void)event;
-    if (touches.count != 1) { if (self.cancel) self.cancel(); return; }
-    [self reportTouch:touches.anyObject phase:CoreSetHostedPointerPhaseEnded];
-}
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    (void)touches; (void)event;
-    if (self.cancel) self.cancel();
-}
-@end
-
-// Created only for a CALayerHost source context. Keep the source UIWindow
-// non-interactive from its first registration, independent of background
-// lifecycle notifications or a dynamic WindowServer input-region refresh.
-@interface CoreSetMirroredMenuWindow : CoreSetMenuWindow @end
-@implementation CoreSetMirroredMenuWindow
-+ (BOOL)_isSystemWindow { return YES; }
-- (BOOL)_ignoresHitTest { return YES; }
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    (void)point; (void)event; return nil;
-}
-@end
-
 @interface CoreSetLayoutController : UIViewController
 @property(nonatomic, copy) void (^layoutCallback)(void);
 @end
@@ -275,12 +125,9 @@ static void CoreSetLogAXDrop(const char *reason, std::atomic_uint_fast64_t *coun
 - (void)disarmHostedInput;
 - (void)failClosedHostedInput;
 - (void)requestHostedReadback;
-- (void)receiveNativeContact:(CoreSetNativeDigitizer)contact;
-- (BOOL)extractNativeDigitizer:(CoreSetIOHIDEventRef)event
-                        into:(CoreSetNativeDigitizer *)contact;
 - (BOOL)startInputMonitor;
-- (void)completeForegroundCalibration:(BOOL)success;
-- (void)pairCalibrationContacts;
+- (void)invalidatePendingTouchActions;
+- (void)drainPendingTouchActionsOnQueue;
 - (void)drainHostedReadbackIdleWaiters;
 - (BOOL)startPreparedInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
                        error:(NSError **)error hostedCompletion:(void (^)(BOOL))hostedCompletion;
@@ -288,6 +135,7 @@ static void CoreSetLogAXDrop(const char *reason, std::atomic_uint_fast64_t *coun
 
 // The monitor does not retain a host. A queued callback after stop sees nil.
 static __weak CoreSetHUDHost *gCoreSetHostedInputOwner;
+static BOOL gCoreSetBKCallbackInstalled = NO; // BKSHID has no unregister API.
 static void CoreSetHostedHIDCallback(void *target, void *refcon,
                                      CoreSetIOHIDServiceRef service,
                                      CoreSetIOHIDEventRef event) {
@@ -311,6 +159,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     BOOL _running;
     BOOL _foreground;
     BOOL _panelVisible;
+    BOOL _localUIKitPointerActive;
     BOOL _menuRegistered;
     BOOL _drawRegistered;
     BOOL _menuCleanupNeeded;
@@ -331,6 +180,12 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     CoreSetIOHIDEventSystemClientRef _touchClient;
     void *_ioKitHandle;
     void *_accessibilityHandle;
+    void *_backBoardHandle;
+    BOOL _bkInputRegistered;
+    dispatch_queue_t _pendingTouchSerialQueue;
+    wzhud_pending_touch::PendingTouchQueue _pendingTouchActions;
+    std::atomic_uint_fast64_t _pendingTouchGeneration;
+    BOOL _pendingTouchDrainInFlight;
     std::atomic_bool _inputArmed;
     std::atomic_uint_fast64_t _hidCallbacks;
     std::atomic_uint_fast64_t _axParsed;
@@ -339,8 +194,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     std::atomic_uint_fast64_t _axHandMissing;
     std::atomic_uint_fast64_t _axPathsMissing;
     std::atomic_uint_fast64_t _axException;
-    std::atomic_uint_fast64_t _nativeParsed;
-    std::atomic_int _inputSource; // 0 undecided, 1 AX, 2 calibrated digitizer.
     int64_t _touchPointerID;
     NSString *_touchControlID;
     uint64_t _touchMenuRevision;
@@ -361,23 +214,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     BOOL _hostedAsyncStopPending;
     BOOL _hostedCleanupFailed;
     NSMutableArray *_hostedAsyncStopWaiters;
-    CoreSetHIDGetType _hidGetType;
-    CoreSetHIDGetChildren _hidGetChildren;
-    CoreSetHIDGetInteger _hidGetInteger;
-    CoreSetHIDGetFloat _hidGetFloat;
-    CoreSetHIDGetTimestamp _hidGetTimestamp;
-    double _machSecondsPerTick;
-    BOOL _nativeTouching;
-    uint32_t _nativeIndex;
-    std::atomic_bool _calibrating;
-    CoreSetCalibrationView *_calibrationView;
-    void (^_calibrationCompletion)(BOOL);
-    __weak UIScreen *_calibrationScreen;
-    CoreSetHostedInputCalibration::SurfaceIdentity _calibrationIdentity;
-    CoreSetHostedInputCalibration::PairRecorder _pairRecorder;
-    CoreSetHostedInputCalibration::AffineCalibration _nativeCalibration;
-    std::vector<CoreSetHostedInputCalibration::RawContact> _pendingRawContacts;
-    std::vector<CoreSetForegroundContact> _pendingForegroundContacts;
 }
 - (instancetype)init { return [self initWithHostingAdapter:nil]; }
 - (instancetype)initWithHostingAdapter:(id<CoreSetHUDHostingAdapter>)adapter {
@@ -390,12 +226,12 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         _hidCallbacks.store(0); _axParsed.store(0);
         _axClassMissing.store(0); _axFactoryNil.store(0);
         _axHandMissing.store(0); _axPathsMissing.store(0); _axException.store(0);
-        _nativeParsed.store(0); _inputSource.store(0);
+        _pendingTouchGeneration.store(1);
+        _pendingTouchActions.reset(1);
+        _pendingTouchSerialQueue = dispatch_queue_create("com.coldcheat.simtouch", DISPATCH_QUEUE_SERIAL);
         _hostedReadbackWaiters = [NSMutableArray array];
         _hostedReadbackIdleWaiters = [NSMutableArray array];
         _hostedAsyncStopWaiters = [NSMutableArray array];
-        _calibrating.store(false);
-        _calibrationIdentity = {0, 0, 1};
     }
     return self;
 }
@@ -413,7 +249,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 }
 - (BOOL)hostedRegistrationReceipt { return [self hasHostedRegistrationReceipt]; }
 - (CGSize)logicalCanvasSize { return _drawCanvas ? _drawCanvas.bounds.size : CGSizeZero; }
-- (BOOL)hostedInputMonitorArmed { return _inputArmed.load() && _touchClient != NULL; }
+- (BOOL)hostedInputMonitorArmed { return _inputArmed.load() && (_touchClient != NULL || _bkInputRegistered); }
 - (NSString *)hostingDiagnosticSnapshot {
     const NSInteger sceneState = _menuWindow.windowScene
         ? _menuWindow.windowScene.activationState : -1;
@@ -485,6 +321,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (void)publishState { if (self.stateDidChange) self.stateDidChange(); }
 - (void)invalidateFrames {
     [self resetHostedPointer];
+    [self invalidatePendingTouchActions];
     NSArray *cancelledWaiters = [_hostedReadbackWaiters copy];
     [_hostedReadbackWaiters removeAllObjects];
     for (id waiter in cancelledWaiters) ((void (^)(BOOL))waiter)(NO);
@@ -510,6 +347,91 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     if (!NSThread.isMainThread || _running || self.cleanupPending) return NO;
     _adapter = adapter;
     return YES;
+}
+- (void)attachHostingAdapter:(id<CoreSetHUDHostingAdapter>)adapter
+                 completion:(void (^)(BOOL))completion {
+    if (!completion) return;
+    if (!NSThread.isMainThread || !_running || _adapter || !adapter ||
+        !self.localSurfacesReady || self.cleanupPending) {
+        completion(NO); return;
+    }
+    _adapter = adapter;
+    if (![self installHostedOrientationObserver]) {
+        _adapter = nil; completion(NO); return;
+    }
+    [self invalidateFrames];
+    [self layoutSurfaces];
+    [_drawWindow layoutIfNeeded]; [_menuWindow layoutIfNeeded];
+    [CATransaction flush];
+    _menuCleanupNeeded = YES; _drawCleanupNeeded = YES;
+    const uint64_t generation = self.generation;
+    CoreSetMenuWindow *menu = _menuWindow;
+    CoreSetDrawWindow *draw = _drawWindow;
+    __weak CoreSetHUDHost *weakSelf = self;
+    [adapter registerBothSurfacesAsync:menu drawWindow:draw
+        completion:^(BOOL observed, uint64_t adapterGeneration) {
+            CoreSetHUDHost *host = weakSelf;
+            const BOOL ready = host && observed && host->_running &&
+                host.generation == generation && adapterGeneration == generation &&
+                host->_menuWindow == menu && host->_drawWindow == draw &&
+                [adapter localSurfacesStillPublished];
+            if (host) {
+                host->_menuRegistered = ready; host->_drawRegistered = ready;
+                host->_hostedReadbackGeneration = ready ? generation : 0;
+                [host selectBackend]; [host publishState];
+            }
+            completion(ready);
+        }];
+}
+- (void)transitionToRemoteHostingAdapter:(id<CoreSetHUDHostingAdapter>)adapter
+                              completion:(void (^)(BOOL))completion {
+    if (!completion) return;
+    const BOOL local = _adapter &&
+        [_adapter respondsToSelector:@selector(usesDirectSourceInteraction)] &&
+        [_adapter usesDirectSourceInteraction];
+    if (!NSThread.isMainThread || !local || !adapter || !_running ||
+        !_menuWindow || !_drawWindow || _hostedReadbackInFlight ||
+        ![_adapter respondsToSelector:@selector(unregisterBothSurfacesAsync:drawWindow:completion:)]) {
+        completion(NO); return;
+    }
+    [self disarmHostedInput];
+    CoreSetMenuWindow *menu = _menuWindow;
+    CoreSetDrawWindow *draw = _drawWindow;
+    const uint64_t generation = self.generation;
+    __weak CoreSetHUDHost *weakSelf = self;
+    [_adapter unregisterBothSurfacesAsync:menu drawWindow:draw
+        completion:^(BOOL menuRemoved, BOOL drawRemoved) {
+            CoreSetHUDHost *host = weakSelf;
+            if (!host || !menuRemoved || !drawRemoved || !host->_running ||
+                host.generation != generation || host->_menuWindow != menu ||
+                host->_drawWindow != draw) { completion(NO); return; }
+            host->_menuRegistered = NO; host->_drawRegistered = NO;
+            host->_hostedReadbackGeneration = 0;
+            // Keep WZ's source/context and its local UIKit hit-test policy;
+            // SpringBoard's mirror remains non-interactive.
+            [CATransaction flush];
+            host->_adapter = adapter;
+            [host layoutSurfaces];
+            [CATransaction flush];
+            [adapter prepareForHostGeneration:generation];
+            [adapter registerBothSurfacesAsync:menu drawWindow:draw
+                completion:^(BOOL observed, uint64_t adapterGeneration) {
+                    CoreSetHUDHost *current = weakSelf;
+                    const BOOL ready = current && observed && current->_running &&
+                        current.generation == generation && adapterGeneration == generation &&
+                        current->_menuWindow == menu && current->_drawWindow == draw &&
+                        [adapter localSurfacesStillPublished];
+                    if (current) {
+                        current->_menuRegistered = ready;
+                        current->_drawRegistered = ready;
+                        current->_hostedReadbackGeneration = ready ? generation : 0;
+                        current->_menuCleanupNeeded = YES;
+                        current->_drawCleanupNeeded = YES;
+                        [current selectBackend]; [current publishState];
+                    }
+                    completion(ready);
+                }];
+        }];
 }
 - (BOOL)installLocalMetalConsumer:(id<CoreSetFrameConsumer>)consumer {
     return [self setMetalConsumer:consumer error:nil];
@@ -611,19 +533,24 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     _touchFloatingDownLogical = CGPointZero; _touchFloatingOrigin = CGPointZero;
     _touchFloatingDragged = NO;
 }
+- (CGPoint)menuWindowPointFromFixedSurface:(CGPoint)point {
+    return [_menuWindow convertPoint:point
+        fromCoordinateSpace:_menuWindow.windowScene.screen.fixedCoordinateSpace];
+}
 - (NSString *)hostedControlIDAtSurfacePoint:(CGPoint)point {
     if (!_menuWindow || !_floating || !_menuController ||
         !std::isfinite(point.x) || !std::isfinite(point.y)) return nil;
     CGRect surface = _menuWindow.windowScene.screen.fixedCoordinateSpace.bounds;
     if (!CGRectContainsPoint(surface, point)) return nil;
-    CGPoint floatPoint = [_floating convertPoint:point fromView:_menuWindow];
+    const CGPoint windowPoint = [self menuWindowPointFromFixedSurface:point];
+    CGPoint floatPoint = [_floating convertPoint:windowPoint fromView:_menuWindow];
     if (!_floating.hidden && _floating.alpha > 0.01 && _floating.userInteractionEnabled &&
         [_floating pointInside:floatPoint withEvent:nil]) return @"host.floating";
     if (!_panelVisible || _panel.hidden ||
         ![_menuController conformsToProtocol:@protocol(CoreSetHostedMenuTapConsumer)]) return nil;
     if (_menuController.presentedViewController ||
         _menuWindow.rootViewController.presentedViewController) return nil;
-    CGPoint menuPoint = [_menuController.view convertPoint:point fromView:_menuWindow];
+    CGPoint menuPoint = [_menuController.view convertPoint:windowPoint fromView:_menuWindow];
     id<CoreSetHostedMenuTapConsumer> consumer = (id)_menuController;
     return [consumer hostedControlIDAtPoint:menuPoint];
 }
@@ -631,7 +558,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
                      point:(CGPoint)point generation:(uint64_t)generation
                   timestamp:(CFAbsoluteTime)timestamp {
     if (!NSThread.isMainThread || !_inputArmed.load() || !_running || _foreground ||
-        UIApplication.sharedApplication.applicationState != UIApplicationStateBackground) {
+        UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
         [self resetHostedPointer]; return;
     }
     if (CFAbsoluteTimeGetCurrent() - timestamp > 0.75) {
@@ -662,13 +589,13 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         if ([identifier isEqualToString:@"host.floating"]) {
             _touchContinuous = YES;
             _touchFloatingDownLogical = [_menuWindow.rootViewController.view
-                convertPoint:point fromView:_menuWindow];
+                convertPoint:[self menuWindowPointFromFixedSurface:point] fromView:_menuWindow];
             _touchFloatingOrigin = _floatingCenter;
         }
         if (![identifier isEqualToString:@"host.floating"] && consumer) {
             _touchMenuRevision = consumer.hostedMenuRevision;
             _touchContinuous = [consumer hostedControlAllowsDrag:identifier];
-            CGPoint menuPoint = [_menuController.view convertPoint:point fromView:_menuWindow];
+            CGPoint menuPoint = [_menuController.view convertPoint:[self menuWindowPointFromFixedSurface:point] fromView:_menuWindow];
             (void)[consumer handleHostedControlID:identifier
                 phase:CoreSetHostedPointerPhaseBegan atPoint:menuPoint];
         }
@@ -685,7 +612,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     }
     if (phase == CoreSetHostedPointerPhaseMoved) {
         if ([_touchControlID isEqualToString:@"host.floating"]) {
-            CGPoint logical = [_menuWindow.rootViewController.view convertPoint:point fromView:_menuWindow];
+            CGPoint logical = [_menuWindow.rootViewController.view convertPoint:[self menuWindowPointFromFixedSurface:point] fromView:_menuWindow];
             CGFloat dx = logical.x - _touchFloatingDownLogical.x;
             CGFloat dy = logical.y - _touchFloatingDownLogical.y;
             if (hypot(dx, dy) > 9) _touchFloatingDragged = YES;
@@ -694,7 +621,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
                 [self layoutSurfaces];
             }
         } else if (_touchContinuous && consumer) {
-            CGPoint menuPoint = [_menuController.view convertPoint:point fromView:_menuWindow];
+            CGPoint menuPoint = [_menuController.view convertPoint:[self menuWindowPointFromFixedSurface:point] fromView:_menuWindow];
             (void)[consumer handleHostedControlID:_touchControlID
                 phase:CoreSetHostedPointerPhaseMoved atPoint:menuPoint];
         }
@@ -722,7 +649,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         NSLog(@"Core-SET: hosted input stage=actual capability=floatingDrag confirmed=%d",
               floatingDragged ? 1 : 0);
     } else if (consumer) {
-        CGPoint menuPoint = [_menuController.view convertPoint:point fromView:_menuWindow];
+        CGPoint menuPoint = [_menuController.view convertPoint:[self menuWindowPointFromFixedSurface:point] fromView:_menuWindow];
         dispatched = [consumer handleHostedControlID:identifier
             phase:CoreSetHostedPointerPhaseEnded atPoint:menuPoint];
     }
@@ -730,187 +657,122 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     NSLog(@"Core-SET: hosted input stage=dispatch control=%@ dispatched=%d generation=%llu",
           identifier, dispatched, (unsigned long long)generation);
 }
-- (BOOL)extractNativeDigitizer:(CoreSetIOHIDEventRef)event
-                        into:(CoreSetNativeDigitizer *)contact {
-    if (!event || !contact || !_hidGetType || !_hidGetChildren ||
-        !_hidGetInteger || !_hidGetFloat || _hidGetType(event) != kCoreSetDigitizerType)
-        return NO;
-    CFArrayRef children = _hidGetChildren(event);
-    if (!children || CFGetTypeID(children) != CFArrayGetTypeID() ||
-        CFArrayGetCount(children) != 1) return NO;
-    CoreSetIOHIDEventRef child = (CoreSetIOHIDEventRef)CFArrayGetValueAtIndex(children, 0);
-    if (!child || _hidGetType(child) != kCoreSetDigitizerType) return NO;
-    const CFIndex index = _hidGetInteger(child, kCoreSetDigitizerIndex);
-    const CFIndex mask = _hidGetInteger(child, kCoreSetDigitizerMask);
-    if (index < 0 || (uint64_t)index > UINT32_MAX || mask < 0 ||
-        (uint64_t)mask > UINT32_MAX) return NO;
-    contact->index = (uint32_t)index;
-    contact->mask = (uint32_t)mask;
-    contact->range = _hidGetInteger(child, kCoreSetDigitizerRange) != 0;
-    contact->touching = _hidGetInteger(child, kCoreSetDigitizerTouch) != 0;
-    contact->x = _hidGetFloat(child, kCoreSetDigitizerX);
-    contact->y = _hidGetFloat(child, kCoreSetDigitizerY);
-    const uint64_t ticks = _hidGetTimestamp ? _hidGetTimestamp(event) : 0;
-    contact->timestamp = ticks * _machSecondsPerTick;
-    const double now = mach_absolute_time() * _machSecondsPerTick;
-    return std::isfinite(contact->x) && std::isfinite(contact->y) &&
-           std::isfinite(contact->timestamp) && contact->timestamp > 0 &&
-           contact->timestamp <= now + 0.05 && now - contact->timestamp <= 1.0;
+- (void)invalidatePendingTouchActions {
+    const uint64_t next = _pendingTouchGeneration.fetch_add(1) + 1;
+    dispatch_async(_pendingTouchSerialQueue, ^{
+        self->_pendingTouchActions.reset(next);
+    });
 }
-- (void)receiveNativeContact:(CoreSetNativeDigitizer)contact {
-    if (!NSThread.isMainThread || !_touchClient ||
-        (!_calibrating.load() && !_inputArmed.load())) return;
-    const BOOL cancel = (contact.mask & kCoreSetDigitizerMaskCancel) != 0;
-    const BOOL active = contact.range && contact.touching;
-    CoreSetHostedInputCalibration::Phase phase;
-    if (cancel) {
-        _nativeTouching = NO;
-        if (_calibrating.load()) { [self completeForegroundCalibration:NO]; return; }
-        [self resetHostedPointer];
-        return;
-    }
-    if (active) {
-        if (!_nativeTouching) {
-            phase = CoreSetHostedInputCalibration::Phase::Began;
-            _nativeIndex = contact.index; _nativeTouching = YES;
-        } else if (_nativeIndex == contact.index) {
-            if (!(contact.mask & (kCoreSetDigitizerMaskPosition | kCoreSetDigitizerMaskTouch))) return;
-            phase = CoreSetHostedInputCalibration::Phase::Moved;
-        } else {
-            if (_calibrating.load()) [self completeForegroundCalibration:NO];
-            else [self resetHostedPointer];
-            _nativeTouching = NO;
-            return;
-        }
-    } else if (_nativeTouching && _nativeIndex == contact.index) {
-        phase = CoreSetHostedInputCalibration::Phase::Ended;
-        _nativeTouching = NO;
-    } else return;
-    CoreSetHostedInputCalibration::RawContact raw = {
-        contact.index, phase, contact.timestamp, contact.x, contact.y,
-        (uint32_t)(active ? 1 : 0)
-    };
-    if (_calibrating.load()) {
-        if (phase != CoreSetHostedInputCalibration::Phase::Moved) {
-            _pendingRawContacts.push_back(raw);
-            [self pairCalibrationContacts];
-        }
-        return;
-    }
-    if (_foreground || UIApplication.sharedApplication.applicationState != UIApplicationStateBackground)
-        return;
-    if (_inputSource.load() == 1) return;
-    if (!_nativeCalibration.valid(_calibrationIdentity) ||
-        _calibrationScreen != _menuWindow.windowScene.screen) {
-        [self failClosedHostedInput]; return;
-    }
-    double fixedX = 0, fixedY = 0;
-    if (!_nativeCalibration.map(raw.x, raw.y, _calibrationIdentity, &fixedX, &fixedY)) {
-        [self failClosedHostedInput]; return;
-    }
-    _inputSource.store(2);
-    const uint64_t count = _nativeParsed.fetch_add(1) + 1;
-    if (count == 1 || count % 64 == 0)
-        NSLog(@"Core-SET: hosted input stage=native-map count=%llu", (unsigned long long)count);
-    [self handleHostedPointer:(NSInteger)phase pointerID:(int64_t)raw.index
-                      point:CGPointMake(fixedX, fixedY) generation:self.generation
-                   timestamp:CFAbsoluteTimeGetCurrent()];
-}
-- (void)receiveHostedHIDEvent:(CoreSetIOHIDEventRef)event {
-    if ((!_inputArmed.load() && !_calibrating.load()) || !event) return;
-    if (_hidGetType && _hidGetChildren &&
-        _hidGetType(event) == kCoreSetDigitizerType) {
-        CFArrayRef children = _hidGetChildren(event);
-        if (!children || CFGetTypeID(children) != CFArrayGetTypeID() ||
-            CFArrayGetCount(children) != 1) {
-            __weak CoreSetHUDHost *weakSelf = self;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                CoreSetHUDHost *host = weakSelf;
-                if (!host) return;
-                if (host->_calibrating.load()) [host completeForegroundCalibration:NO];
-                else [host resetHostedPointer];
-            });
-            return;
-        }
-    }
-    CoreSetNativeDigitizer native;
-    const BOOL nativePresent = [self extractNativeDigitizer:event into:&native];
-    if (nativePresent) {
-        __weak CoreSetHUDHost *weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [weakSelf receiveNativeContact:native];
-        });
-    }
-    if (_calibrating.load()) return;
-    const uint64_t callbacks = _hidCallbacks.fetch_add(1) + 1;
-    if (callbacks == 1 || callbacks % 64 == 0)
-        NSLog(@"Core-SET: hosted input stage=callback count=%llu",
-              (unsigned long long)callbacks);
-    if (callbacks == 64) {
+- (void)drainPendingTouchActionsOnQueue {
+    if (_pendingTouchDrainInFlight) return;
+    const uint64_t generation = _pendingTouchGeneration.load();
+    wzhud_pending_touch::PendingTouchAction action;
+    int64_t expiredPointerID = -1;
+    const auto result = _pendingTouchActions.popNext(CFAbsoluteTimeGetCurrent(),
+        generation, &action, &expiredPointerID);
+    if (result == wzhud_pending_touch::PopResult::DroppedExpiredLifecycle) {
         __weak CoreSetHUDHost *weakSelf = self;
         dispatch_async(dispatch_get_main_queue(), ^{
             CoreSetHUDHost *host = weakSelf;
-            if (host && host->_inputArmed.load() && !host->_foreground &&
-                host->_axParsed.load() == 0 && host->_nativeParsed.load() == 0) {
-                NSLog(@"Core-SET: hosted input stage=invalidated reason=ax-unusable");
-                [host failClosedHostedInput];
-            }
+            if (host && generation == host->_pendingTouchGeneration.load() &&
+                host->_touchPointerID == expiredPointerID) [host resetHostedPointer];
         });
+        return;
     }
+    if (result != wzhud_pending_touch::PopResult::Action) return;
+    _pendingTouchDrainInFlight = YES;
+    auto pending = std::make_shared<wzhud_pending_touch::PendingTouchAction>(std::move(action));
+    __weak CoreSetHUDHost *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        CoreSetHUDHost *host = weakSelf;
+        const double now = CFAbsoluteTimeGetCurrent();
+        const BOOL current = host && generation == host->_pendingTouchGeneration.load();
+        const BOOL expired = current && now >= pending->expirationTime &&
+            wzhud_pending_touch::isLifecycle(pending->kind);
+        if (current && host->_running && host->_inputArmed.load() && !host->_foreground &&
+            wzhud_pending_touch::canExecute(*pending, now, generation)) {
+            pending->actionBlock();
+        } else if (expired && host->_touchPointerID == pending->pointerID) {
+            [host resetHostedPointer];
+        }
+        dispatch_async(host ? host->_pendingTouchSerialQueue : dispatch_get_main_queue(), ^{
+            if (!host) return;
+            if (expired) host->_pendingTouchActions.discardAll();
+            host->_pendingTouchDrainInFlight = NO;
+            [host drainPendingTouchActionsOnQueue];
+        });
+    });
+}
+- (void)receiveHostedHIDEvent:(CoreSetIOHIDEventRef)event {
+    if (!_inputArmed.load() || !event) return;
+    const uint64_t callbacks = _hidCallbacks.fetch_add(1) + 1;
+    if (callbacks == 1 || callbacks % 64 == 0)
+        NSLog(@"Core-SET: hosted input stage=callback count=%llu", (unsigned long long)callbacks);
+    // AX decodes the HID pointer while the callback owns it. Only value types
+    // enter the serial queue; the IOHIDEventRef is never retained asynchronously.
     @autoreleasepool { @try {
         Class eventClass = NSClassFromString(@"AXEventRepresentation");
-        if (!eventClass) {
-            CoreSetLogAXDrop("class-missing", &_axClassMissing); return;
-        }
+        if (!eventClass) { CoreSetLogAXDrop("class-missing", &_axClassMissing); return; }
         CoreSetAXEvent *representation = ((id (*)(id, SEL, CoreSetIOHIDEventRef, NSString *))objc_msgSend)(
             eventClass, @selector(representationWithHIDEvent:hidStreamIdentifier:),
             event, @"UIApplicationEvents");
-        if (!representation) {
-            CoreSetLogAXDrop("factory-nil", &_axFactoryNil); return;
-        }
+        if (!representation) { CoreSetLogAXDrop("factory-nil", &_axFactoryNil); return; }
         CoreSetAXEventHand *hand = representation.handInfo;
         if (!hand || ![hand respondsToSelector:@selector(paths)]) {
-            CoreSetLogAXDrop("hand-missing", &_axHandMissing);
-            dispatch_async(dispatch_get_main_queue(), ^{ [self resetHostedPointer]; });
-            return;
+            CoreSetLogAXDrop("hand-missing", &_axHandMissing); return;
         }
         NSArray<CoreSetAXEventPath *> *paths = hand.paths;
         if (![paths isKindOfClass:NSArray.class]) {
-            CoreSetLogAXDrop("paths-missing", &_axPathsMissing);
-            dispatch_async(dispatch_get_main_queue(), ^{ [self resetHostedPointer]; });
-            return;
+            CoreSetLogAXDrop("paths-missing", &_axPathsMissing); return;
         }
+        if (!paths.count) return;
         if (paths.count != 1) {
+            [self invalidatePendingTouchActions];
             dispatch_async(dispatch_get_main_queue(), ^{ [self resetHostedPointer]; });
             return;
         }
         const int64_t pointerID = (int64_t)paths.firstObject.pathIdentity;
-        if (pointerID == 9) return; // Exclude WZ-style synthetic sender echo.
+        if (pointerID == 9) return;
         NSInteger phase = -1;
-        if (representation.isCancel) phase = 3;
-        else if (representation.isLift || representation.isInRangeLift) phase = 2;
-        else if (representation.isTouchDown) phase = 0;
-        else if (representation.isMove || representation.isChordChange) phase = 1;
+        if (representation.isCancel) phase = CoreSetHostedPointerPhaseCancelled;
+        else if (representation.isLift || representation.isInRangeLift) phase = CoreSetHostedPointerPhaseEnded;
+        else if (representation.isTouchDown) phase = CoreSetHostedPointerPhaseBegan;
+        else if (representation.isMove || representation.isChordChange) phase = CoreSetHostedPointerPhaseMoved;
         if (phase < 0) return;
         const CGPoint point = representation.location;
-        if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
-            point.x < 0 || point.y < 0 ||
-            point.x > _calibrationIdentity.width ||
-            point.y > _calibrationIdentity.height) return;
-        if (!_running || _foreground || !_inputArmed.load()) return;
-        if (_inputSource.load() == 2) return;
-        _inputSource.store(1);
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
+        if (phase == CoreSetHostedPointerPhaseCancelled) {
+            [self invalidatePendingTouchActions];
+            dispatch_async(dispatch_get_main_queue(), ^{ [self resetHostedPointer]; });
+            return;
+        }
         const uint64_t parsed = _axParsed.fetch_add(1) + 1;
         if (parsed == 1 || parsed % 64 == 0)
             NSLog(@"Core-SET: hosted input stage=ax-parse count=%llu single=1",
                   (unsigned long long)parsed);
-        const uint64_t generation = self.generation;
-        const CFAbsoluteTime timestamp = CFAbsoluteTimeGetCurrent();
+        const uint64_t hostGeneration = self.generation;
+        const uint64_t queueGeneration = _pendingTouchGeneration.load();
+        const double timestamp = CFAbsoluteTimeGetCurrent();
+        const auto kind = phase == CoreSetHostedPointerPhaseBegan
+            ? wzhud_pending_touch::Kind::Began
+            : (phase == CoreSetHostedPointerPhaseMoved
+                ? wzhud_pending_touch::Kind::Moved : wzhud_pending_touch::Kind::Ended);
         __weak CoreSetHUDHost *weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{
+        wzhud_pending_touch::PendingTouchAction action{
+            pointerID, kind, timestamp + wzhud_pending_touch::kExpirationInterval,
+            queueGeneration, [=] {
+                CoreSetHUDHost *host = weakSelf;
+                if (host) [host handleHostedPointer:phase pointerID:pointerID point:point
+                                         generation:hostGeneration timestamp:timestamp];
+            }
+        };
+        dispatch_async(_pendingTouchSerialQueue, ^{
             CoreSetHUDHost *host = weakSelf;
-            [host handleHostedPointer:phase pointerID:pointerID point:point
-                          generation:generation timestamp:timestamp];
+            if (!host) return;
+            if (host->_pendingTouchActions.enqueue(std::move(action),
+                    CFAbsoluteTimeGetCurrent(), host->_pendingTouchGeneration.load()) !=
+                wzhud_pending_touch::EnqueueResult::Rejected)
+                [host drainPendingTouchActionsOnQueue];
         });
     } @catch (__unused NSException *exception) {
         CoreSetLogAXDrop("exception", &_axException);
@@ -935,26 +797,26 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         NSLog(@"Core-SET: hosted input monitor armed=0 reason=host-orientation"); return NO;
     }
     if (!self.hostedRegistrationReceipt) {
-        NSLog(@"Core-SET: hosted input monitor armed=0 reason=hosting-readback"); return NO;
-    }
-    if (!self.foregroundTouchCalibrationReady) {
-        NSLog(@"Core-SET: hosted input monitor armed=0 reason=calibration"); return NO;
+        NSLog(@"Core-SET: hosted input monitor armed=0 reason=hosting-registration"); return NO;
     }
     if (self.hostedInputMonitorArmed) return YES;
     const BOOL armed = [self startInputMonitor];
-    if (armed) NSLog(@"Core-SET: hosted input monitor armed=1 passive=1 calibrated=1");
+    NSLog(@"Core-SET: hosted input monitor armed=%d mode=%@",
+          armed, _bkInputRegistered ? @"BKSHID" : @"IOHID");
     return armed;
 }
 - (BOOL)startInputMonitor {
-    if (!NSThread.isMainThread || !_running || _touchClient) return NO;
+    if (!NSThread.isMainThread || !_running || _touchClient || _bkInputRegistered) return NO;
     if (gCoreSetHostedInputOwner && gCoreSetHostedInputOwner != self) {
         NSLog(@"Core-SET: hosted input monitor armed=0 reason=another-owner"); return NO;
     }
     if (!_accessibilityHandle) _accessibilityHandle = dlopen(
         "/System/Library/PrivateFrameworks/AccessibilityUtilities.framework/AccessibilityUtilities",
         RTLD_LAZY | RTLD_LOCAL);
-    // AX can be absent on iOS 26. Native digitizer access is required for
-    // both foreground calibration and the background fallback.
+    Class axClass = NSClassFromString(@"AXEventRepresentation");
+    if (!axClass) {
+        NSLog(@"Core-SET: hosted input monitor armed=0 reason=AX-class"); return NO;
+    }
     if (!_ioKitHandle) _ioKitHandle = dlopen(
         "/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
     typedef CoreSetIOHIDEventSystemClientRef (*Create)(CFAllocatorRef);
@@ -966,32 +828,37 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         "IOHIDEventSystemClientRegisterEventCallback") : NULL;
     Schedule schedule = _ioKitHandle ? (Schedule)dlsym(_ioKitHandle,
         "IOHIDEventSystemClientScheduleWithRunLoop") : NULL;
-    _hidGetType = _ioKitHandle ? (CoreSetHIDGetType)dlsym(_ioKitHandle, "IOHIDEventGetType") : NULL;
-    _hidGetChildren = _ioKitHandle ? (CoreSetHIDGetChildren)dlsym(_ioKitHandle, "IOHIDEventGetChildren") : NULL;
-    _hidGetInteger = _ioKitHandle ? (CoreSetHIDGetInteger)dlsym(_ioKitHandle, "IOHIDEventGetIntegerValue") : NULL;
-    _hidGetFloat = _ioKitHandle ? (CoreSetHIDGetFloat)dlsym(_ioKitHandle, "IOHIDEventGetFloatValue") : NULL;
-    _hidGetTimestamp = _ioKitHandle ? (CoreSetHIDGetTimestamp)dlsym(_ioKitHandle, "IOHIDEventGetTimeStamp") : NULL;
-    mach_timebase_info_data_t timebase = {};
-    const BOOL timebaseReady = mach_timebase_info(&timebase) == KERN_SUCCESS &&
-        timebase.numer != 0 && timebase.denom != 0;
-    _machSecondsPerTick = timebaseReady
-        ? (double)timebase.numer / (double)timebase.denom * 1e-9 : 0;
-    // Require a cleanup route before registering any process-wide callback.
-    if (!create || !reg || !schedule || !_hidGetType || !_hidGetChildren ||
-        !_hidGetInteger || !_hidGetFloat || !_hidGetTimestamp || !timebaseReady ||
-        !dlsym(_ioKitHandle, "IOHIDEventSystemClientUnscheduleWithRunLoop")) {
-        NSLog(@"Core-SET: hosted input monitor armed=0 reason=IOHID-symbols"); return NO;
+    const BOOL canUnschedule = _ioKitHandle &&
+        dlsym(_ioKitHandle, "IOHIDEventSystemClientUnscheduleWithRunLoop");
+    if (create && reg && schedule && canUnschedule) {
+        _touchClient = create(kCFAllocatorDefault);
+        if (_touchClient) {
+            gCoreSetHostedInputOwner = self;
+            reg(_touchClient, CoreSetHostedHIDCallback, NULL, NULL);
+            schedule(_touchClient, CFRunLoopGetMain(), kCFRunLoopCommonModes);
+            _inputArmed.store(true);
+            return YES;
+        }
     }
-    _touchClient = create(kCFAllocatorDefault);
-    if (!_touchClient) {
-        NSLog(@"Core-SET: hosted input monitor armed=0 reason=IOHID-create"); return NO;
+    // WZ compatibility tier: BKSHID registration is process-scoped and has
+    // no unregister. The weak owner and armed bit make later callbacks inert.
+    if (!_backBoardHandle) _backBoardHandle = dlopen(
+        "/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices",
+        RTLD_NOW | RTLD_GLOBAL);
+    typedef void *(*RegisterBK)(void (*)(void *, void *, CoreSetIOHIDServiceRef, CoreSetIOHIDEventRef));
+    RegisterBK registerBK = _backBoardHandle ? (RegisterBK)dlsym(
+        _backBoardHandle, "BKSHIDEventRegisterEventCallback") : NULL;
+    if (!gCoreSetBKCallbackInstalled && !registerBK) {
+        NSLog(@"Core-SET: hosted input monitor armed=0 reason=IOHID-and-BK-unavailable");
+        return NO;
     }
-    [self resetHostedPointer];
-    _nativeTouching = NO; _inputSource.store(0);
+    if (!gCoreSetBKCallbackInstalled) {
+        (void)registerBK(CoreSetHostedHIDCallback);
+        gCoreSetBKCallbackInstalled = YES;
+    }
+    _bkInputRegistered = YES;
     gCoreSetHostedInputOwner = self;
-    reg(_touchClient, CoreSetHostedHIDCallback, NULL, NULL);
-    schedule(_touchClient, CFRunLoopGetMain(), kCFRunLoopCommonModes);
-    _inputArmed.store(!_calibrating.load());
+    _inputArmed.store(true);
     return YES;
 }
 - (void)requestHostedReadback {
@@ -1061,10 +928,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 }
 - (void)disarmHostedInput {
     _inputArmed.store(false);
-    _calibrating.store(false);
-    _nativeTouching = NO;
-    _inputSource.store(0);
-    _pendingRawContacts.clear(); _pendingForegroundContacts.clear();
+    [self invalidatePendingTouchActions];
+    _bkInputRegistered = NO;
     NSArray *cancelledWaiters = [_hostedReadbackWaiters copy];
     [_hostedReadbackWaiters removeAllObjects];
     for (id waiter in cancelledWaiters) ((void (^)(BOOL))waiter)(NO);
@@ -1084,104 +949,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     // If the OS loses its unschedule symbol, leave a dormant client scheduled;
     // the weak global owner and _inputArmed prevent dispatch into a dead host.
     _touchClient = NULL;
-}
-- (BOOL)foregroundTouchCalibrationReady {
-    if (!_nativeCalibration.valid(_calibrationIdentity) || !_calibrationScreen) return NO;
-    if (_menuWindow && _menuWindow.windowScene.screen != _calibrationScreen) return NO;
-    const CGSize size = _calibrationScreen.fixedCoordinateSpace.bounds.size;
-    return _calibrationIdentity.width == size.width &&
-        _calibrationIdentity.height == size.height;
-}
-- (BOOL)beginForegroundTouchCalibration:(void (^)(BOOL))completion {
-    if (!NSThread.isMainThread || !completion || !_running || _adapter ||
-        !_foreground || !_menuWindow || !_menuWindow.userInteractionEnabled ||
-        _menuWindow.windowScene.activationState != UISceneActivationStateForegroundActive ||
-        _calibrating.load()) return NO;
-    if (self.foregroundTouchCalibrationReady) { completion(YES); return YES; }
-    const CGSize size = _menuWindow.windowScene.screen.fixedCoordinateSpace.bounds.size;
-    if (size.width <= 0 || size.height <= 0) return NO;
-    _calibrationIdentity = {size.width, size.height,
-        CoreSetHUDNextGeneration(_calibrationIdentity.generation)};
-    _calibrationScreen = _menuWindow.windowScene.screen;
-    _nativeCalibration.reset(); _pairRecorder.reset();
-    _pendingRawContacts.clear(); _pendingForegroundContacts.clear();
-    _calibrationCompletion = [completion copy];
-    _calibrationView = [[CoreSetCalibrationView alloc]
-        initWithFrame:_menuWindow.rootViewController.view.bounds];
-    _calibrationView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    __weak CoreSetHUDHost *weakSelf = self;
-    _calibrationView.cancel = ^{ [weakSelf completeForegroundCalibration:NO]; };
-    _calibrationView.contact = ^(CoreSetHostedPointerPhase phase, CGPoint fixed, double timestamp) {
-        CoreSetHUDHost *host = weakSelf;
-        if (!host || !host->_calibrating.load()) return;
-        CoreSetForegroundContact touch = {
-            (CoreSetHostedInputCalibration::Phase)phase, timestamp, fixed.x, fixed.y
-        };
-        host->_pendingForegroundContacts.push_back(touch);
-        [host pairCalibrationContacts];
-    };
-    [_menuWindow.rootViewController.view addSubview:_calibrationView];
-    _menuWindow.calibrationRegion = _calibrationView;
-    _calibrating.store(true);
-    if (![self startInputMonitor]) {
-        [self completeForegroundCalibration:NO]; return YES;
-    }
-    NSLog(@"Core-SET: hosted input stage=calibration-start targets=7");
-    const uint64_t epoch = _calibrationIdentity.generation;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 45 * NSEC_PER_SEC),
-                   dispatch_get_main_queue(), ^{
-        CoreSetHUDHost *host = weakSelf;
-        if (host && host->_calibrating.load() &&
-            host->_calibrationIdentity.generation == epoch)
-            [host completeForegroundCalibration:NO];
-    });
-    return YES;
-}
-- (void)pairCalibrationContacts {
-    if (!_calibrating.load()) return;
-    using namespace CoreSetHostedInputCalibration;
-    while (!_pendingRawContacts.empty() && !_pendingForegroundContacts.empty()) {
-        const RawContact raw = _pendingRawContacts.front();
-        const CoreSetForegroundContact touch = _pendingForegroundContacts.front();
-        _pendingRawContacts.erase(_pendingRawContacts.begin());
-        _pendingForegroundContacts.erase(_pendingForegroundContacts.begin());
-        PairedSample paired = {raw, touch.timestamp, touch.phase, touch.x, touch.y};
-        CGPoint target = [_calibrationScreen.fixedCoordinateSpace convertPoint:
-            _calibrationView.targetPoint fromCoordinateSpace:_calibrationView];
-        if (hypot(touch.x - target.x, touch.y - target.y) > 30.0 ||
-            !_pairRecorder.add(paired)) {
-            [self completeForegroundCalibration:NO]; return;
-        }
-        if (raw.phase != Phase::Ended) continue;
-        const NSUInteger next = _calibrationView.targetIndex + 1;
-        if (next < 7) { _calibrationView.targetIndex = next; continue; }
-        const auto &samples = _pairRecorder.samples();
-        if (samples.size() != 7) { [self completeForegroundCalibration:NO]; return; }
-        std::vector<PairedSample> training(samples.begin(), samples.begin() + 3);
-        std::vector<PairedSample> heldout(samples.begin() + 3, samples.end());
-        const BOOL valid = _nativeCalibration.fit(training, heldout, _calibrationIdentity);
-        NSLog(@"Core-SET: hosted input stage=calibration-finish valid=%d pairs=%lu",
-              valid, (unsigned long)samples.size());
-        [self completeForegroundCalibration:valid];
-        return;
-    }
-    if (_pendingRawContacts.size() > 2 || _pendingForegroundContacts.size() > 2)
-        [self completeForegroundCalibration:NO];
-}
-- (void)completeForegroundCalibration:(BOOL)success {
-    if (!NSThread.isMainThread || !_calibrating.load()) return;
-    void (^completion)(BOOL) = [_calibrationCompletion copy];
-    _calibrationCompletion = nil;
-    _calibrationView.contact = nil; _calibrationView.cancel = nil;
-    [_calibrationView removeFromSuperview];
-    _menuWindow.calibrationRegion = nil; _calibrationView = nil;
-    [self disarmHostedInput];
-    if (!success) _nativeCalibration.reset();
-    NSLog(@"Core-SET: hosted input stage=calibration-complete confirmed=%d", success);
-    if (completion) completion(success);
-}
-- (void)cancelForegroundTouchCalibration {
-    if (_calibrating.load()) [self completeForegroundCalibration:NO];
 }
 - (BOOL)startLocalInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController {
     return [self startInScene:scene menuController:menuController error:nil];
@@ -1216,20 +983,13 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     }
     if (!scene || !menuController || menuController.parentViewController || menuController.presentingViewController)
         return [self fail:5 message:@"A scene and unowned menu controller are required" error:error];
-    if (_adapter && (!self.foregroundTouchCalibrationReady ||
-                     scene.screen != _calibrationScreen))
-        return [self fail:12 message:@"Foreground digitizer calibration is required before a system source window" error:error];
     self.lastError = nil;
     [self invalidateFrames];
     _foreground = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
-    _drawWindow = _adapter
-        ? [[CoreSetMirroredDrawWindow alloc] initWithWindowScene:scene]
-        : [[CoreSetDrawWindow alloc] initWithWindowScene:scene];
-    _menuWindow = _adapter
-        ? [[CoreSetMirroredMenuWindow alloc] initWithWindowScene:scene]
-        : [[CoreSetMenuWindow alloc] initWithWindowScene:scene];
-    _menuWindow.backgroundPassThrough = _adapter != nil || !_foreground;
-    _menuWindow.userInteractionEnabled = _adapter == nil && _foreground;
+    _drawWindow = [[CoreSetDrawWindow alloc] initWithWindowScene:scene];
+    _menuWindow = [[CoreSetMenuWindow alloc] initWithWindowScene:scene];
+    _menuWindow.backgroundPassThrough = NO;
+    _menuWindow.userInteractionEnabled = YES;
     _drawWindow.windowLevel = kCoreSetHUDWindowLevel;
     _menuWindow.windowLevel = kCoreSetHUDWindowLevel + 1.0;
     _drawWindow.backgroundColor = _menuWindow.backgroundColor = UIColor.clearColor;
@@ -1258,6 +1018,11 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     _floating.titleLabel.font = [UIFont systemFontOfSize:12];
     _floating.accessibilityLabel = @"打开菜单";
     [_floating addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
+    [_floating addTarget:self action:@selector(localFloatingTouchDown)
+        forControlEvents:UIControlEventTouchDown];
+    [_floating addTarget:self action:@selector(localFloatingTouchEnded)
+        forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside |
+                          UIControlEventTouchCancel];
     [_floating addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragFloating:)]];
     [menuRoot.view addSubview:_floating];
     _menuWindow.panelRegion = _panel; _menuWindow.floatingRegion = _floating;
@@ -1312,10 +1077,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (void)layoutSurfaces {
     if (!_menuWindow || !_drawWindow || _layoutApplying) return;
     _layoutApplying = YES;
-    CGRect bounds = _adapter ? _menuWindow.windowScene.screen.fixedCoordinateSpace.bounds
-                             : _menuWindow.windowScene.coordinateSpace.bounds;
+    CGRect bounds = _menuWindow.windowScene.screen.fixedCoordinateSpace.bounds;
     bounds = CGRectMake(0, 0, CGRectGetWidth(bounds), CGRectGetHeight(bounds));
-    if (!CGRectEqualToRect(_menuWindow.frame, bounds)) _menuWindow.frame = bounds;
     if (!CGRectEqualToRect(_drawWindow.frame, bounds)) _drawWindow.frame = bounds;
     UIView *root = _menuWindow.rootViewController.view;
     UIView *drawRoot = _drawWindow.rootViewController.view;
@@ -1326,14 +1089,32 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     const CGFloat angle = _adapter ? CoreSetHostedOrientationAngle(_hostedOrientation) : 0;
     const CGAffineTransform transform = CGAffineTransformMakeRotation(angle);
     const CGPoint center = CGPointMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds));
+    const BOOL directHosted = !_adapter ||
+        ([_adapter respondsToSelector:@selector(usesDirectSourceInteraction)] &&
+         [_adapter usesDirectSourceInteraction]);
+    CGRect desired = bounds;
+    if (directHosted && !_panelVisible && !_localUIKitPointerActive &&
+        _touchPointerID < 0 && std::isfinite(_floatingCenter.x) &&
+        std::isfinite(_floatingCenter.y)) {
+        CGPoint relative = CGPointMake(_floatingCenter.x - CGRectGetMidX(logical),
+                                        _floatingCenter.y - CGRectGetMidY(logical));
+        CGPoint rotated = CGPointApplyAffineTransform(relative, transform);
+        CGPoint fixed = CGPointMake(center.x + rotated.x, center.y + rotated.y);
+        CGRect compact = CGRectIntersection(bounds, CGRectInset(
+            CGRectMake(fixed.x - 22, fixed.y - 22, 44, 44), -4, -4));
+        if (!CGRectIsNull(compact) && !CGRectIsEmpty(compact)) desired = compact;
+    }
+    if (!CGRectEqualToRect(_menuWindow.frame, desired)) _menuWindow.frame = desired;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (UIView *surface in @[root, drawRoot]) {
+        const CGPoint surfaceCenter = surface == root
+            ? CGPointMake(center.x - desired.origin.x, center.y - desired.origin.y) : center;
         if (CGRectEqualToRect(surface.bounds, logical) &&
-            CGPointEqualToPoint(surface.center, center) &&
+            CGPointEqualToPoint(surface.center, surfaceCenter) &&
             CGAffineTransformEqualToTransform(surface.transform, transform)) continue;
         surface.transform = CGAffineTransformIdentity;
         surface.bounds = logical;
-        surface.center = center;
+        surface.center = surfaceCenter;
         surface.transform = transform;
     }
     [CATransaction commit];
@@ -1349,21 +1130,33 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         _panel.transform = CGAffineTransformMakeScale(scale, scale);
     }
     _menuController.view.frame = _panel.bounds;
-    if (!std::isfinite(_floatingCenter.x) || !std::isfinite(_floatingCenter.y))
+    const BOOL floatingInitialized = std::isfinite(_floatingCenter.x) &&
+        std::isfinite(_floatingCenter.y);
+    if (!floatingInitialized)
         _floatingCenter = CGPointMake(CGRectGetMaxX(safe) - 30, CGRectGetMidY(safe));
     _floatingCenter.x = MIN(MAX(_floatingCenter.x, CGRectGetMinX(safe) + 22), MAX(CGRectGetMinX(safe) + 22, CGRectGetMaxX(safe) - 22));
     _floatingCenter.y = MIN(MAX(_floatingCenter.y, CGRectGetMinY(safe) + 22), MAX(CGRectGetMinY(safe) + 22, CGRectGetMaxY(safe) - 22));
     _floating.center = _floatingCenter;
     _layoutApplying = NO;
+    if (directHosted && !floatingInitialized && !_panelVisible) [self layoutSurfaces];
 }
 - (void)togglePanel {
     if (self.panelVisibilityRequested) self.panelVisibilityRequested(!_panelVisible);
     else [self setPanelVisible:!_panelVisible];
 }
+- (void)localFloatingTouchDown {
+    _localUIKitPointerActive = YES;
+    [self layoutSurfaces];
+}
+- (void)localFloatingTouchEnded {
+    _localUIKitPointerActive = NO;
+    [self layoutSurfaces];
+}
 - (void)setPanelVisible:(BOOL)visible {
     if (!NSThread.isMainThread || !_running) return;
     _panelVisible = visible; _panel.hidden = !visible;
     _floating.accessibilityLabel = visible ? @"收起菜单" : @"打开菜单";
+    [self layoutSurfaces];
     [self publishState];
 }
 - (void)dragFloating:(UIPanGestureRecognizer *)gesture {
@@ -1394,12 +1187,11 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 }
 - (void)setApplicationActive:(BOOL)active {
     if (!NSThread.isMainThread || !_running || _foreground == active) return;
-    if (!active && _calibrating.load()) [self completeForegroundCalibration:NO];
     const uint64_t previousGeneration = self.generation;
     if (active) [self disarmHostedInput];
     _foreground = active;
-    _menuWindow.backgroundPassThrough = _adapter != nil || !active;
-    _menuWindow.userInteractionEnabled = _adapter == nil && active;
+    _menuWindow.backgroundPassThrough = NO;
+    _menuWindow.userInteractionEnabled = YES;
     [self invalidateFrames]; [self selectBackend]; [self layoutSurfaces]; [self publishState];
     if (!active && _inputArmed.load()) [self requestHostedReadback];
     NSLog(@"Core-SET: host active-transition active=%d previousGeneration=%llu state={%@}",
@@ -1452,7 +1244,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         CoreSetHUDStopResult pending = {YES, NO, NO, NO};
         return pending;
     }
-    if (_calibrating.load()) [self completeForegroundCalibration:NO];
     [self disarmHostedInput];
     [self stopHostedOrientationObserver];
     (void)[self restoreRenderFPS];

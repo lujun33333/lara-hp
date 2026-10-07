@@ -67,7 +67,8 @@ invalidate = body(host, "- (void)invalidateFrames")
 assert "[self requestHostedReadback]" not in invalidate
 assert "[self failClosedHostedInput]" in end_gate
 assert "[self requestHostedReadback]" not in end_gate
-readback = body(adapter, "- (void)observeBothSurfacesAsync:")
+readback = body(adapter[adapter.index("@implementation CoreSetRemoteHostingAdapter {"):],
+                "- (void)observeBothSurfacesAsync:")
 assert "[self localSideObserved:menu]" in readback
 assert "dispatch_async(_readbackQueue" in readback
 assert "[self remoteSideObserved:menu]" in readback
@@ -78,7 +79,8 @@ assert "host.crossApplicationHosted" not in status
 select_backend = body(host, "- (void)selectBackend")
 assert "self.hostedRegistrationReceipt" in select_backend
 assert "self.crossApplicationHosted" not in select_backend
-prepare = body(adapter, "- (void)prepareForHostGeneration:")
+remote_adapter = adapter[adapter.index("@implementation CoreSetRemoteHostingAdapter {"):]
+prepare = body(remote_adapter, "- (void)prepareForHostGeneration:")
 assert "self.bothSurfacesObserved" not in prepare
 assert "self.localSurfacesStillPublished" in prepare
 assert "age <= 3.5" not in prepare
@@ -87,7 +89,8 @@ assert "confirmHostedReadbackAsync" in owner
 assert "case UIInterfaceOrientationLandscapeLeft: return (CGFloat)-M_PI_2" in host
 assert "case UIInterfaceOrientationLandscapeRight: return (CGFloat)M_PI_2" in host
 assert "? CGRectMake(0, 0, bounds.size.height, bounds.size.width) : bounds" in host
-assert "[_menuController.view convertPoint:point fromView:_menuWindow]" in host
+assert "menuWindowPointFromFixedSurface" in host
+assert "fromCoordinateSpace:_menuWindow.windowScene.screen.fixedCoordinateSpace" in host
 orientation = body(host, "- (void)applyHostedOrientation:")
 assert "[self invalidateFrames]" not in orientation
 assert "[_layers clear]; [_metal clear]" in orientation
@@ -95,43 +98,41 @@ assert "[CATransaction flush]" in orientation
 geometry = body(owner, "func invalidateGeometry()")
 assert "nextSequence =" not in geometry
 assert "!CGSizeEqualToSize(frame.canvasSize, host.logicalCanvasSize)" in host
-assert "CoreSetMirroredMenuWindow" in host
-assert "- (BOOL)_ignoresHitTest { return YES; }" in host
-assert "_menuWindow.userInteractionEnabled = _adapter == nil && _foreground" in host
+assert "+ (BOOL)_isSystemWindow { return YES; }" in host
+assert "- (BOOL)_ignoresHitTest { return self.backgroundPassThrough; }" in host
+assert "_menuWindow.userInteractionEnabled = YES" in host
+assert "CGRectInset(" in body(host, "- (void)layoutSurfaces")
 ax_callback = body(host[host.index("@implementation CoreSetHUDHost {") :],
                    "- (void)receiveHostedHIDEvent:")
 for reason in ("factory-nil", "hand-missing", "paths-missing", "exception"):
     assert f'CoreSetLogAXDrop("{reason}"' in ax_callback
 assert 'stage=ax-drop reason=%s count=%llu' in host
 assert not re.search(r"NSLog\([^;]*point\.[xy]", ax_callback, re.S)
-assert "callbacks == 64" in ax_callback
-assert "[host failClosedHostedInput]" in ax_callback
-assert "IOHIDEventGetTimeStamp" in host and "mach_timebase_info" in host
-assert "NSProcessInfo.processInfo.systemUptime" not in host
-assert ax_callback.index("if (paths.count != 1)") < ax_callback.index("_inputSource.store(1)")
-assert ax_callback.index("if (phase < 0) return") < ax_callback.index("_inputSource.store(1)")
-assert "_axParsed.load() != 0" not in body(host, "- (void)receiveNativeContact:")
-assert "CFArrayGetCount(children) != 1" in ax_callback
-assert "[host completeForegroundCalibration:NO]" in ax_callback
-calibration = body(host, "- (BOOL)beginForegroundTouchCalibration:")
-assert calibration.index("_calibrating.store(true)") < calibration.index("[self startInputMonitor]")
-assert "[self completeForegroundCalibration:NO]; return YES;" in calibration
-assert "CoreSetMirroredDrawWindow" in host and "CoreSetMirroredMenuWindow" in host
-assert "scene.screen != _calibrationScreen" in body(
-    host[host.index("@implementation CoreSetHUDHost {"):], "- (BOOL)startPreparedInScene:")
+assert "[self invalidatePendingTouchActions]" in ax_callback
+assert "_pendingTouchActions.enqueue" in ax_callback
+assert "_pendingTouchSerialQueue" in ax_callback
+assert "CoreSetHostedInputCalibration" not in host
+assert "IOHIDEventGetTimeStamp" not in host
+assert "BKSHIDEventRegisterEventCallback" in body(
+    host[host.index("@implementation CoreSetHUDHost {"):], "- (BOOL)startInputMonitor")
+assert ax_callback.index("if (paths.count != 1)") < ax_callback.index("_pendingTouchActions.enqueue")
+assert ax_callback.index("if (phase < 0) return") < ax_callback.index("_pendingTouchActions.enqueue")
+assert "CoreSetDrawWindow" in host and "CoreSetMenuWindow" in host
+assert "CoreSetMirroredMenuWindow" not in host
+assert "foregroundTouchCalibrationReady" not in host
 forced_readback = body(host, "- (void)confirmHostedReadbackAsync:")
 assert "[self requestHostedReadback]" in forced_readback
 assert "if ([self hasFreshHostedReadback]) { completion(YES)" not in forced_readback
 assert "host.renderGeneration" in owner
 assert "self.renderGeneration = CoreSetHUDNextGeneration(self.renderGeneration)" in orientation
 assert "_lastSequence = 0; _lastConsumedSequence = 0" in orientation
-assert "host.whenHostedReadbackIdle" in body(owner, "func activate()")
-assert "host.stopHostedAsync" in body(owner, "func activate()")
+assert "host.setApplicationActive(true)" in body(owner, "func activate()")
+assert "host.stopHostedAsync" not in body(owner, "func activate()")
 assert "host.stopHostedAsync" in body(owner, "private func rollbackGameLaunch(")
 assert "host.stop()" not in body(owner, "private func rollbackGameLaunch(")
 assert "unregisterBothSurfacesAsync" in adapter
-assert "dispatch_async(_readbackQueue" in body(adapter, "- (void)unregisterBothSurfacesAsync:")
-registration = body(adapter, "- (void)registerBothSurfacesAsync:")
+assert "dispatch_async(_readbackQueue" in body(remote_adapter, "- (void)unregisterBothSurfacesAsync:")
+registration = body(remote_adapter, "- (void)registerBothSurfacesAsync:")
 assert registration.index("menuWindow.bounds") < registration.index("dispatch_async(_readbackQueue")
 assert registration.index("drawWindow.bounds") < registration.index("dispatch_async(_readbackQueue")
 assert registration.index('NSSelectorFromString(@"_contextId")') < registration.index("dispatch_async(_readbackQueue")

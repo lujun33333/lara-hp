@@ -38,6 +38,7 @@ typedef NS_ENUM(NSInteger, CoreSetHostedPointerPhase) {
 - (void)unregisterBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
                          completion:(void (^)(BOOL menuRemoved, BOOL drawRemoved))completion;
 @optional
+- (BOOL)usesDirectSourceInteraction;
 - (void)prepareForHostGeneration:(uint64_t)generation;
 - (uint64_t)hostGeneration;
 - (BOOL)localSurfacesStillPublished;
@@ -67,11 +68,6 @@ typedef struct CoreSetHUDStopResult {
 @property(nonatomic, readonly) BOOL hostedRegistrationReceipt;
 // Registration only, not a physical-touch or UIKit action receipt.
 @property(nonatomic, readonly) BOOL hostedInputMonitorArmed;
-@property(nonatomic, readonly) BOOL foregroundTouchCalibrationReady;
-// A normal foreground window pairs raw digitizer contacts with real UITouch
-// points before any SpringBoard source context is created.
-- (BOOL)beginForegroundTouchCalibration:(void (^)(BOOL confirmed))completion;
-- (void)cancelForegroundTouchCalibration;
 // Uses the next serialized background readback when the current receipt is
 // stale. Completion is on the main thread and tied to this host generation.
 - (void)confirmHostedReadbackAsync:(void (^)(BOOL observed))completion;
@@ -106,6 +102,13 @@ typedef struct CoreSetHUDStopResult {
 // May be installed only before start and with no pending cleanup.
 - (BOOL)installRemoteHostingAdapter:(nullable id<CoreSetHUDHostingAdapter>)adapter
     NS_SWIFT_NAME(installRemoteHostingAdapter(_:));
+// Attach the first hosting tier to the already visible system source windows.
+- (void)attachHostingAdapter:(id<CoreSetHUDHostingAdapter>)adapter
+                 completion:(void (^)(BOOL registered))completion;
+// Local SBS failure may switch to SpringBoard while retaining both UIWindow
+// source contexts. Completion is a registration receipt, not device visibility.
+- (void)transitionToRemoteHostingAdapter:(id<CoreSetHUDHostingAdapter>)adapter
+                              completion:(void (^)(BOOL registered))completion;
 // All lifecycle methods require the main thread. Local-only start is supported;
 // Remote registration remains false until its async worker returns a receipt.
 - (BOOL)startInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
