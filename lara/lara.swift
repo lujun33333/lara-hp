@@ -71,6 +71,7 @@ final class LaraSceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
+        coreSetRuntime?.recordSceneLifecycle("didBecomeActive", scene: scene)
         coreSetRuntime?.activate()
     }
 
@@ -78,14 +79,17 @@ final class LaraSceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneWillResignActive(_ scene: UIScene) {
+        coreSetRuntime?.recordSceneLifecycle("willResignActive", scene: scene)
         coreSetRuntime?.deactivate()
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {
+        coreSetRuntime?.recordSceneLifecycle("didEnterBackground", scene: scene)
         coreSetRuntime?.deactivate()
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
+        coreSetRuntime?.recordSceneLifecycle("didDisconnect", scene: scene)
         // Coordinator retains itself until window cleanup AND stop receipts finish.
         _ = coreSetRuntime?.stop()
         coreSetRuntime = nil

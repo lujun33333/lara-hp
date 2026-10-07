@@ -415,6 +415,22 @@ final class CoreSetRuntimeCoordinator {
         !stopping && gameLaunchPending && gameLaunchEpoch == epoch
     }
 
+    // Logs cached state only. The remote readback is performed by the existing
+    // crossApplicationHosted decision, never by this diagnostic path.
+    private func recordHostingDiagnostic(_ stage: String, epoch: UInt64, remoteDecision: Int = -1) {
+        NSLog("Core-SET: hosting stage=%@ epoch=%llu remoteDecision=%d sceneState=%ld appState=%ld host={%@} remote={%@}",
+              stage, epoch, remoteDecision, scene?.activationState.rawValue ?? -1,
+              UIApplication.shared.applicationState.rawValue,
+              host.hostingDiagnosticSnapshot(),
+              remoteHostingAdapter?.hostingDiagnosticSnapshot() ?? "adapter-not-installed")
+    }
+
+    func recordSceneLifecycle(_ event: String, scene eventScene: UIScene) {
+        precondition(Thread.isMainThread)
+        NSLog("Core-SET: scene event=%@ state=%ld", event, eventScene.activationState.rawValue)
+        recordHostingDiagnostic("scene-\(event)", epoch: gameLaunchEpoch)
+    }
+
     private func finishGameLaunch(epoch: UInt64, error: String?, completion: @escaping (String?) -> Void) {
         guard gameLaunchCurrent(epoch) else { return }
         gameLaunchPending = false
@@ -559,17 +575,24 @@ final class CoreSetRuntimeCoordinator {
                 self.finishGameLaunch(epoch: epoch, error: "场景已失活，未发起游戏启动", completion: completion)
                 return
             }
+            NSLog("Core-SET: game launch epoch=%llu stage=open-url targetBundle=%@",
+                  epoch, CoreSetGameTarget.bundleIdentifier)
             CoreSetGameTarget.openApplication { [weak self] result in
                 guard let self, self.gameLaunchCurrent(epoch) else { return }
                 switch result {
                 case .opened:
+                    let observed = self.host.crossApplicationHosted
+                    self.recordHostingDiagnostic("open-url-callback-opened", epoch: epoch,
+                                                 remoteDecision: observed ? 1 : 0)
                     self.finishGameLaunch(epoch: epoch,
-                        error: self.host.crossApplicationHosted ? nil : "游戏已打开，但跨应用窗口回读失效",
+                        error: observed ? nil : "游戏已打开，但跨应用窗口回读失效",
                         completion: completion)
                 case .unavailable:
+                    self.recordHostingDiagnostic("open-url-callback-unavailable", epoch: epoch)
                     self.restoreLocalAfterHostingFailure()
                     self.finishGameLaunch(epoch: epoch, error: "未检测到可打开的和平精英，跨应用窗口已请求清理", completion: completion)
                 case .failed:
+                    self.recordHostingDiagnostic("open-url-callback-failed", epoch: epoch)
                     self.restoreLocalAfterHostingFailure()
                     self.finishGameLaunch(epoch: epoch, error: "系统未能打开和平精英，跨应用窗口已请求清理", completion: completion)
                 }
@@ -602,6 +625,7 @@ final class CoreSetRuntimeCoordinator {
                 return
             }
             self.host.setApplicationActive(false)
+            self.recordHostingDiagnostic("deactivate-applied", epoch: self.gameLaunchEpoch)
             self.hostChanged()
         }
     }

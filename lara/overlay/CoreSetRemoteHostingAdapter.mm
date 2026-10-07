@@ -90,6 +90,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 @property(nonatomic) BOOL layerInitialized;
 @property(nonatomic) BOOL cleanupAmbiguous;
 @property(nonatomic) BOOL observed;
+@property(nonatomic, copy) NSString *lastReadbackStep;
 @end
 @implementation CoreSetRemoteHostSide @end
 
@@ -101,12 +102,24 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     pid_t _pid;
     BOOL _busy;
     BOOL _loggedKernelNameFallback;
+    uint64_t _observationSequence;
+    BOOL _lastIdentityObserved;
 }
 - (instancetype)initWithRemoteCall:(RemoteCall *)remoteCall {
     if ((self = [super init])) { _process = remoteCall; _pid = remoteCall.pid; }
     return self;
 }
 - (uint64_t)hostGeneration { return _hostGeneration; }
+- (NSString *)hostingDiagnosticSnapshot {
+    @synchronized (_process) {
+        return [NSString stringWithFormat:
+            @"observationSequence=%llu identityObserved=%d menuPublished=%d drawPublished=%d menuReadback=%@ drawReadback=%@",
+            (unsigned long long)_observationSequence, _lastIdentityObserved,
+            _menu.observed, _draw.observed,
+            _menu.lastReadbackStep ?: @"not-checked",
+            _draw.lastReadbackStep ?: @"not-checked"];
+    }
+}
 - (BOOL)sessionIdentityReady { return self.sessionIdentityFailureReason == nil; }
 - (BOOL)cleanupPending {
     @synchronized (_process) {
@@ -116,7 +129,9 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 }
 - (BOOL)bothSurfacesObserved {
     @synchronized (_process) {
-        return [self identityValid] && _menu.observed && _draw.observed &&
+        _observationSequence++;
+        _lastIdentityObserved = [self identityValid];
+        return _lastIdentityObserved && _menu.observed && _draw.observed &&
             [self sideObserved:_menu] && [self sideObserved:_draw];
     }
 }
@@ -170,20 +185,39 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 - (BOOL)identityValid { return self.sessionIdentityFailureReason == nil; }
 - (BOOL)sideObserved:(CoreSetRemoteHostSide *)side {
     if (!side || !side.source || !side.window || !side.layer || !side.windowLayer ||
-        !side.context || !side.scene || ![self identityValid]) return NO;
+        !side.context || !side.scene) {
+        side.lastReadbackStep = @"local-handle-missing";
+        return NO;
+    }
+    if (![self identityValid]) { side.lastReadbackStep = @"identity"; return NO; }
     SEL contextSelector = NSSelectorFromString(@"_contextId");
     uint32_t current = [side.source respondsToSelector:contextSelector]
         ? ((uint32_t (*)(id, SEL))objc_msgSend)(side.source, contextSelector) : 0;
-    if (current != side.context) return NO;
+    if (current != side.context) { side.lastReadbackStep = @"local-context"; return NO; }
     uint64_t remoteScene = 0, remoteLayer = 0, remoteContext = 0;
     uint64_t parent = 0, hidden = 1;
-    return CSMessage(_process, side.window, CSSel(_process, "windowScene"), 0, 0, &remoteScene) &&
-        CSMessage(_process, side.window, CSSel(_process, "layer"), 0, 0, &remoteLayer) &&
-        CSMessage(_process, side.layer, CSSel(_process, "contextId"), 0, 0, &remoteContext) &&
-        CSMessage(_process, side.layer, CSSel(_process, "superlayer"), 0, 0, &parent) &&
-        CSMessage(_process, side.window, CSSel(_process, "isHidden"), 0, 0, &hidden) &&
-        remoteScene == side.scene && remoteLayer == side.windowLayer &&
-        remoteContext == side.context && parent == side.windowLayer && (hidden & 0xff) == 0;
+    if (!CSMessage(_process, side.window, CSSel(_process, "windowScene"), 0, 0, &remoteScene)) {
+        side.lastReadbackStep = @"remote-scene-call"; return NO;
+    }
+    if (!CSMessage(_process, side.window, CSSel(_process, "layer"), 0, 0, &remoteLayer)) {
+        side.lastReadbackStep = @"remote-window-layer-call"; return NO;
+    }
+    if (!CSMessage(_process, side.layer, CSSel(_process, "contextId"), 0, 0, &remoteContext)) {
+        side.lastReadbackStep = @"remote-context-call"; return NO;
+    }
+    if (!CSMessage(_process, side.layer, CSSel(_process, "superlayer"), 0, 0, &parent)) {
+        side.lastReadbackStep = @"remote-parent-call"; return NO;
+    }
+    if (!CSMessage(_process, side.window, CSSel(_process, "isHidden"), 0, 0, &hidden)) {
+        side.lastReadbackStep = @"remote-hidden-call"; return NO;
+    }
+    if (remoteScene != side.scene) { side.lastReadbackStep = @"remote-scene-mismatch"; return NO; }
+    if (remoteLayer != side.windowLayer) { side.lastReadbackStep = @"remote-window-layer-mismatch"; return NO; }
+    if (remoteContext != side.context) { side.lastReadbackStep = @"remote-context-mismatch"; return NO; }
+    if (parent != side.windowLayer) { side.lastReadbackStep = @"remote-parent-mismatch"; return NO; }
+    if ((hidden & 0xff) != 0) { side.lastReadbackStep = @"remote-hidden"; return NO; }
+    side.lastReadbackStep = @"ok";
+    return YES;
 }
 - (BOOL)removeSide:(CoreSetRemoteHostSide *)side {
     if (!side) return YES;

@@ -98,6 +98,20 @@
         [_adapter hostGeneration] == self.generation &&
         [_adapter bothSurfacesObserved];
 }
+- (NSString *)hostingDiagnosticSnapshot {
+    const NSInteger sceneState = _menuWindow.windowScene
+        ? _menuWindow.windowScene.activationState : -1;
+    const BOOL adapterGenerationAvailable = _adapter &&
+        [_adapter respondsToSelector:@selector(hostGeneration)];
+    const uint64_t adapterGeneration = adapterGenerationAvailable ? [_adapter hostGeneration] : 0;
+    return [NSString stringWithFormat:
+        @"running=%d foreground=%d sceneState=%ld localReady=%d menuRegistered=%d drawRegistered=%d adapter=%d adapterGenerationAvailable=%d hostGeneration=%llu adapterGeneration=%llu panel=%d menuWindowHidden=%d drawWindowHidden=%d floatingHidden=%d floatingAttached=%d",
+        _running, _foreground, (long)sceneState, self.localSurfacesReady,
+        _menuRegistered, _drawRegistered, _adapter != nil, adapterGenerationAvailable,
+        (unsigned long long)self.generation, (unsigned long long)adapterGeneration, _panelVisible,
+        _menuWindow.hidden, _drawWindow.hidden, _floating.hidden,
+        _floating.superview != nil];
+}
 - (BOOL)cleanupPending { return !_running && (_menuCleanupNeeded || _drawCleanupNeeded || _schedulerCleanupNeeded); }
 - (BOOL)panelVisible { return _panelVisible; }
 - (uint64_t)lastConsumedSequence { return _lastConsumedSequence; }
@@ -326,8 +340,11 @@
 }
 - (void)setApplicationActive:(BOOL)active {
     if (!NSThread.isMainThread || !_running || _foreground == active) return;
+    const uint64_t previousGeneration = self.generation;
     _foreground = active;
     [self invalidateFrames]; [self selectBackend]; [self layoutSurfaces]; [self publishState];
+    NSLog(@"Core-SET: host active-transition active=%d previousGeneration=%llu state={%@}",
+          active, (unsigned long long)previousGeneration, [self hostingDiagnosticSnapshot]);
 }
 - (void)submitFrame:(CoreSetRenderFrame *)frame {
     if (!frame) return;

@@ -34,6 +34,8 @@ typedef struct CoreSetHUDStopResult {
 @property(atomic, readonly) uint64_t generation;
 @property(nonatomic, readonly) BOOL localSurfacesReady;
 @property(nonatomic, readonly) BOOL crossApplicationHosted;
+// Cached local state only. Does not call the remote readback gate.
+- (NSString *)hostingDiagnosticSnapshot;
 @property(nonatomic, readonly) BOOL cleanupPending;
 @property(nonatomic, readonly) BOOL panelVisible;
 @property(nonatomic, copy, readonly) NSArray<UIColor *> *observedFloatingColors;
