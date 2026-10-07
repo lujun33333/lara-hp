@@ -33,22 +33,17 @@ typedef NS_ENUM(NSInteger, CoreSetHostedPointerPhase) {
 // A failed registration must either leave no resource or allow unregister to
 // retry cleanup for the same window. This module never creates a RemoteCall.
 @protocol CoreSetHUDHostingAdapter <NSObject>
-- (BOOL)registerWindow:(UIWindow *)window surface:(CoreSetHUDSurface)surface
-                error:(NSError * _Nullable * _Nullable)error;
-- (BOOL)unregisterWindow:(UIWindow *)window surface:(CoreSetHUDSurface)surface
-                  error:(NSError * _Nullable * _Nullable)error;
+- (void)registerBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
+                         completion:(void (^)(BOOL observed, uint64_t generation))completion;
+- (void)unregisterBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
+                         completion:(void (^)(BOOL menuRemoved, BOOL drawRemoved))completion;
 @optional
 - (void)prepareForHostGeneration:(uint64_t)generation;
-- (BOOL)bothSurfacesObserved;
 - (uint64_t)hostGeneration;
 - (BOOL)localSurfacesStillPublished;
 // Captures local UIKit context on the main thread, then verifies remote
 // mirrors on a serialized worker and completes on the main thread.
 - (void)observeBothSurfacesAsync:(void (^)(BOOL observed, uint64_t generation))completion;
-// Serial worker removal; completion is delivered on the main thread. A failed
-// side keeps its remote handle for an explicit later cleanup attempt.
-- (void)unregisterBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
-                         completion:(void (^)(BOOL menuRemoved, BOOL drawRemoved))completion;
 @end
 
 typedef struct CoreSetHUDStopResult {
@@ -65,7 +60,6 @@ typedef struct CoreSetHUDStopResult {
 @property(atomic, readonly) uint64_t renderGeneration;
 @property(nonatomic, readonly) BOOL localSurfacesReady;
 @property(nonatomic, readonly) CGSize logicalCanvasSize;
-@property(nonatomic, readonly) BOOL crossApplicationHosted;
 // Cached registration receipt: generation, source context and process identity
 // remain structurally valid. A separate async remote readback is mandatory
 // during launch and after openURL; external remote destruction is not observed
@@ -87,6 +81,7 @@ typedef struct CoreSetHUDStopResult {
 // Cached local state only. Does not call the remote readback gate.
 - (NSString *)hostingDiagnosticSnapshot;
 @property(nonatomic, readonly) BOOL cleanupPending;
+@property(nonatomic, readonly) BOOL hostedCleanupInFlight;
 @property(nonatomic, readonly) BOOL panelVisible;
 @property(nonatomic, copy, readonly) NSArray<UIColor *> *observedFloatingColors;
 // Accepted by the CA/Metal consumer, not proof of a displayed device pixel.
@@ -112,12 +107,15 @@ typedef struct CoreSetHUDStopResult {
 - (BOOL)installRemoteHostingAdapter:(nullable id<CoreSetHUDHostingAdapter>)adapter
     NS_SWIFT_NAME(installRemoteHostingAdapter(_:));
 // All lifecycle methods require the main thread. Local-only start is supported;
-// crossApplicationHosted stays false if no confirmed adapter is supplied.
+// Remote registration remains false until its async worker returns a receipt.
 - (BOOL)startInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
               error:(NSError * _Nullable * _Nullable)error;
 // Explicit Swift boundary: do not depend on NSError importer heuristics.
 - (BOOL)startLocalInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
     NS_SWIFT_NAME(startLocal(in:menuController:));
+- (BOOL)startHostedInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
+                completion:(void (^)(BOOL observed))completion
+    NS_SWIFT_NAME(startHosted(in:menuController:completion:));
 - (BOOL)applyLocalMenuVisible:(BOOL)visible colors:(NSArray<UIColor *> *)colors
     NS_SWIFT_NAME(applyLocalMenu(visible:colors:));
 - (BOOL)setMetalConsumer:(nullable id<CoreSetFrameConsumer>)consumer

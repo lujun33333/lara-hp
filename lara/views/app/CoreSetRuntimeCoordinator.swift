@@ -186,6 +186,8 @@ final class CoreSetRuntimeCoordinator {
     private var performanceEpoch = UUID()
     private var stopping = false
     private var stopReceiptsPending = false
+    private var stopChannelsConfirmed = false
+    private var stopWindowsConfirmed = false
     private var submittedGeneration: UInt64?
     private var submittedCanvasSize: CGSize?
     private var aimSuspendedForHost = false
@@ -576,7 +578,39 @@ final class CoreSetRuntimeCoordinator {
                 }
                 self.remoteHostingAdapter = nil
                 guard self.host.installRemoteHostingAdapter(adapter),
-                      self.host.startLocal(in: scene, menuController: self.menu) else {
+                      self.host.startHosted(in: scene, menuController: self.menu,
+                          completion: { [weak self] registered in
+                    guard let self, self.gameLaunchCurrent(epoch) else { return }
+                    guard registered else {
+                        self.rollbackGameLaunch(epoch: epoch,
+                            error: "SpringBoard 异步双窗口注册或读回失败", completion: completion)
+                        return
+                    }
+                    self.host.setApplicationActive(true)
+                    self.hostChanged()
+                    self.gameLaunchStatus = "跨应用双窗口已注册，正在复核"
+                    self.publishStatus()
+                    self.host.confirmHostedReadbackAsync { [weak self] firstObserved in
+                        guard let self, self.gameLaunchCurrent(epoch) else { return }
+                        guard firstObserved, self.menu.resumeMenuHostConsumer() else {
+                            self.rollbackGameLaunch(epoch: epoch, error: "跨应用双窗口初次读回或菜单恢复失败", completion: completion)
+                            return
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1200)) { [weak self] in
+                            guard let self, self.gameLaunchCurrent(epoch) else { return }
+                            self.host.confirmHostedReadbackAsync { [weak self] observed in
+                                guard let self, self.gameLaunchCurrent(epoch) else { return }
+                                NSLog("Core-SET: game launch epoch=%llu stage=dual-host observed=%d",
+                                      epoch, observed ? 1 : 0)
+                                guard observed else {
+                                    self.rollbackGameLaunch(epoch: epoch, error: "跨应用双窗口延迟读回失败", completion: completion)
+                                    return
+                                }
+                                self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
+                            }
+                        }
+                    }
+                })) else {
                     let detail = self.host.lastError?.localizedDescription ?? "双窗口注册或读回失败"
                     _ = self.menu.resumeMenuHostConsumer()
                     self.rollbackGameLaunch(epoch: epoch, error: "SpringBoard 托管失败：\(detail)", completion: completion)
@@ -584,30 +618,6 @@ final class CoreSetRuntimeCoordinator {
                 }
                 self.remoteHostingAdapter = adapter
                 self.remoteCleanupFailed = false
-                self.host.setApplicationActive(true)
-                self.hostChanged()
-                self.gameLaunchStatus = "跨应用双窗口已注册，正在复核"
-                self.publishStatus()
-                self.host.confirmHostedReadbackAsync { [weak self] firstObserved in
-                    guard let self, self.gameLaunchCurrent(epoch) else { return }
-                    guard firstObserved, self.menu.resumeMenuHostConsumer() else {
-                        self.rollbackGameLaunch(epoch: epoch, error: "跨应用双窗口初次读回或菜单恢复失败", completion: completion)
-                        return
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1200)) { [weak self] in
-                        guard let self, self.gameLaunchCurrent(epoch) else { return }
-                        self.host.confirmHostedReadbackAsync { [weak self] observed in
-                            guard let self, self.gameLaunchCurrent(epoch) else { return }
-                            NSLog("Core-SET: game launch epoch=%llu stage=dual-host observed=%d",
-                                  epoch, observed ? 1 : 0)
-                            guard observed else {
-                                self.rollbackGameLaunch(epoch: epoch, error: "跨应用双窗口延迟读回失败", completion: completion)
-                                return
-                            }
-                            self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
-                        }
-                    }
-                }
             }
         }
     }
@@ -850,13 +860,20 @@ final class CoreSetRuntimeCoordinator {
             targetReadReady: playerConsumer?.availability == .ready))
     }
 
-    // Local UIKit cleanup is synchronous and its concrete result is returned.
-    // Channel stop receipts may complete later; retain the whole owner until all
-    // receipts confirm restoration. Failed cleanup never releases the handles.
+    private func releaseStoppedOwnerIfReady() {
+        guard stopping, !stopReceiptsPending, stopChannelsConfirmed,
+              stopWindowsConfirmed, !host.cleanupPending else { return }
+        host.stateDidChange = nil
+        host.frameDidConsume = nil
+        Self.retained.removeValue(forKey: identity)
+    }
+
+    // Local disarm/hide is immediate. Remote mirror cleanup is best-effort on
+    // the adapter's serial worker; termination does not wait for its callback.
     @discardableResult
     func stop() -> CoreSetHUDStopResult {
         precondition(Thread.isMainThread)
-        if stopReceiptsPending, let result = lastStopResult { return result }
+        if stopping, let result = lastStopResult { return result }
         gameLaunchEpoch &+= 1
         gameLaunchPending = false
         stopping = true
@@ -864,6 +881,8 @@ final class CoreSetRuntimeCoordinator {
         performanceTimer?.cancel()
         performanceTimer = nil
         stopReceiptsPending = true
+        stopChannelsConfirmed = false
+        stopWindowsConfirmed = false
         for expired in frameComposer.reset(to: 0) {
             aimDisplayConsumer?.consumed(expired)
             localFrameDidConsume?(expired)
@@ -872,6 +891,15 @@ final class CoreSetRuntimeCoordinator {
         host.hostingInvalidated = nil
         let result = host.stop()
         lastStopResult = result
+        stopWindowsConfirmed = result.complete.boolValue
+        if host.hostedCleanupInFlight {
+            host.stopHostedAsync { [weak self] final in
+                guard let self else { return }
+                self.lastStopResult = final
+                self.stopWindowsConfirmed = final.complete.boolValue
+                self.releaseStoppedOwnerIfReady()
+            }
+        }
         let group = DispatchGroup()
         var channelsRestored = true
         group.enter()
@@ -888,21 +916,18 @@ final class CoreSetRuntimeCoordinator {
             let aimWriteClean = self.aimConsumer?.shutdownWriteSession() ?? true
             let recoilWriteClean = self.recoilConsumer?.shutdownWriteSession() ?? true
             channelsRestored = channelsRestored && playerReadClean && materialReadClean && radarReadClean && previewReadClean && aimWriteClean && recoilWriteClean
+            self.stopChannelsConfirmed = channelsRestored
             self.menu.refreshConsumerAvailability()
             self.publishStatus()
-            if result.complete.boolValue && channelsRestored && !self.host.cleanupPending {
-                self.host.stateDidChange = nil
-                self.host.frameDidConsume = nil
-                Self.retained.removeValue(forKey: self.identity)
-            }
+            self.releaseStoppedOwnerIfReady()
         }
         return result
     }
 
     static func stopAllForTermination() {
         // UIApplication will not promise time for an async continuation here.
-        // Await the synchronous window/adapter result, never block the main queue
-        // waiting for a callback that itself needs that queue.
+        // Disarm/hide synchronously and enqueue remote cleanup; never wait for
+        // a worker callback or claim it completed before process termination.
         for owner in Array(retained.values) {
             let result = owner.stop()
             if !result.complete.boolValue { NSLog("Core-SET: overlay cleanup remains unconfirmed") }
@@ -951,6 +976,14 @@ private final class CoreSetLocalHostConsumer: CoreSetFeatureConsumer {
 
     func stop(_ token: CoreSetRequestToken, completion: @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) {
         let result = host.stop()
-        completion(token, result.complete.boolValue ? .restored : .failed(reason: "窗口清理未确认"))
+        if result.complete.boolValue {
+            completion(token, .restored)
+        } else if host.hostedCleanupInFlight {
+            host.stopHostedAsync { final in
+                completion(token, final.complete.boolValue ? .restored : .failed(reason: "窗口清理未确认"))
+            }
+        } else {
+            completion(token, .failed(reason: "窗口清理未确认"))
+        }
     }
 }

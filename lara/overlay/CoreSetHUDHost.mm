@@ -282,6 +282,8 @@ static void CoreSetLogAXDrop(const char *reason, std::atomic_uint_fast64_t *coun
 - (void)completeForegroundCalibration:(BOOL)success;
 - (void)pairCalibrationContacts;
 - (void)drainHostedReadbackIdleWaiters;
+- (BOOL)startPreparedInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
+                       error:(NSError **)error hostedCompletion:(void (^)(BOOL))hostedCompletion;
 @end
 
 // The monitor does not retain a host. A queued callback after stop sees nil.
@@ -357,6 +359,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     NSMutableArray *_hostedReadbackWaiters;
     NSMutableArray *_hostedReadbackIdleWaiters;
     BOOL _hostedAsyncStopPending;
+    BOOL _hostedCleanupFailed;
     NSMutableArray *_hostedAsyncStopWaiters;
     CoreSetHIDGetType _hidGetType;
     CoreSetHIDGetChildren _hidGetChildren;
@@ -400,15 +403,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     return _running && _drawWindow && _menuWindow && _drawCanvas && _panel &&
         _menuWindow.windowScene.activationState != UISceneActivationStateUnattached;
 }
-- (BOOL)crossApplicationHosted {
-    const BOOL observed = self.localSurfacesReady && CoreSetHUDHostingReady(_menuRegistered, _drawRegistered) &&
-        _adapter && [_adapter respondsToSelector:@selector(bothSurfacesObserved)] &&
-        [_adapter respondsToSelector:@selector(hostGeneration)] &&
-        [_adapter hostGeneration] == self.generation &&
-        [_adapter bothSurfacesObserved];
-    _hostedReadbackGeneration = observed ? self.generation : 0;
-    return observed;
-}
 - (BOOL)hasHostedRegistrationReceipt {
     return self.localSurfacesReady && _menuRegistered && _drawRegistered &&
         _adapter && [_adapter respondsToSelector:@selector(hostGeneration)] &&
@@ -438,6 +432,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         self.hostedInputMonitorArmed];
 }
 - (BOOL)cleanupPending { return !_running && (_menuCleanupNeeded || _drawCleanupNeeded || _schedulerCleanupNeeded); }
+- (BOOL)hostedCleanupInFlight { return _hostedAsyncStopPending; }
 - (BOOL)panelVisible { return _panelVisible; }
 - (uint64_t)lastConsumedSequence { return _lastConsumedSequence; }
 - (NSArray<UIColor *> *)observedFloatingColors {
@@ -1191,6 +1186,12 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (BOOL)startLocalInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController {
     return [self startInScene:scene menuController:menuController error:nil];
 }
+- (BOOL)startHostedInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
+                completion:(void (^)(BOOL))completion {
+    if (!_adapter || !completion) return NO;
+    return [self startPreparedInScene:scene menuController:menuController
+                               error:nil hostedCompletion:completion];
+}
 - (BOOL)applyLocalMenuVisible:(BOOL)visible colors:(NSArray<UIColor *> *)colors {
     if (!NSThread.isMainThread || !self.localSurfacesReady || !colors.count) return NO;
     [self setFloatingColors:colors];
@@ -1198,9 +1199,18 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     return self.localSurfacesReady && self.panelVisible == visible;
 }
 - (BOOL)startInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController error:(NSError **)error {
+    return [self startPreparedInScene:scene menuController:menuController
+                               error:error hostedCompletion:nil];
+}
+- (BOOL)startPreparedInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
+                       error:(NSError **)error hostedCompletion:(void (^)(BOOL))hostedCompletion {
     if (!NSThread.isMainThread) return [self fail:1 message:@"Main thread required" error:error];
+    if ((_adapter != nil) != (hostedCompletion != nil))
+        return [self fail:14 message:@"Hosted sources require asynchronous registration" error:error];
     if (self.cleanupPending) return [self fail:4 message:@"Prior hosting cleanup is still pending" error:error];
     if (_running) {
+        if (hostedCompletion)
+            return [self fail:9 message:@"Hosted registration already in progress" error:error];
         if (_drawWindow.windowScene == scene && _menuController == menuController) return self.localSurfacesReady;
         return [self fail:9 message:@"Stop the current scene before attaching another menu" error:error];
     }
@@ -1268,31 +1278,35 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     _drawWindow.hidden = NO; _menuWindow.hidden = NO;
     [_drawWindow layoutIfNeeded]; [_menuWindow layoutIfNeeded];
     [CATransaction flush];
-    if (_adapter) {
-        NSError *hostingError = nil;
-        _menuCleanupNeeded = YES;
-        _menuRegistered = [_adapter registerWindow:_menuWindow surface:CoreSetHUDSurfaceMenu error:&hostingError];
-        if (_menuRegistered) {
-            _drawCleanupNeeded = YES;
-            _drawRegistered = [_adapter registerWindow:_drawWindow surface:CoreSetHUDSurfaceDraw error:&hostingError];
-        }
-        if (!CoreSetHUDHostingReady(_menuRegistered, _drawRegistered)) {
-            [self stopHostedAsync:^(__unused CoreSetHUDStopResult result) {}];
-            return [self fail:6 message:hostingError.localizedDescription ?: @"Hosting registration failed" error:error];
-        }
-    }
     _running = YES;
     for (NSNotificationName name in @[UIApplicationDidBecomeActiveNotification, UIApplicationDidEnterBackgroundNotification]) {
         id token = [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:NSOperationQueue.mainQueue
             usingBlock:^(NSNotification *note) { [weakSelf setApplicationActive:[note.name isEqualToString:UIApplicationDidBecomeActiveNotification]]; }];
         [_observers addObject:token];
     }
-    id disconnect = [NSNotificationCenter.defaultCenter addObserverForName:UISceneDidDisconnectNotification
-        object:scene queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *note) {
-            [weakSelf stop];
-        }];
-    [_observers addObject:disconnect];
     [self selectBackend]; [self publishState];
+    if (_adapter) {
+        _menuCleanupNeeded = YES; _drawCleanupNeeded = YES;
+        const uint64_t generation = self.generation;
+        CoreSetMenuWindow *menuWindow = _menuWindow;
+        CoreSetDrawWindow *drawWindow = _drawWindow;
+        [_adapter registerBothSurfacesAsync:menuWindow drawWindow:drawWindow
+            completion:^(BOOL observed, uint64_t adapterGeneration) {
+                CoreSetHUDHost *host = weakSelf;
+                if (!host) return;
+                const BOOL current = observed && host->_running &&
+                    host.generation == generation && adapterGeneration == generation &&
+                    host->_menuWindow == menuWindow && host->_drawWindow == drawWindow &&
+                    host.localSurfacesReady &&
+                    [host->_adapter respondsToSelector:@selector(hostGeneration)] &&
+                    [host->_adapter hostGeneration] == generation;
+                host->_menuRegistered = current; host->_drawRegistered = current;
+                host->_hostedReadbackGeneration = current ? generation : 0;
+                if (!current) [host fail:6 message:@"Asynchronous remote registration/readback failed" error:nil];
+                [host selectBackend]; [host publishState];
+                hostedCompletion(current);
+            }];
+    }
     return YES;
 }
 - (void)layoutSurfaces {
@@ -1427,6 +1441,17 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         CoreSetHUDStopResult pending = {NO, !_menuCleanupNeeded, !_drawCleanupNeeded, NO};
         return pending;
     }
+    if (_adapter && (_menuCleanupNeeded || _drawCleanupNeeded)) {
+        if (_hostedCleanupFailed) {
+            CoreSetHUDStopResult pending = {YES, !_menuCleanupNeeded, !_drawCleanupNeeded, NO};
+            return pending;
+        }
+        // Termination/disconnect cannot wait for a RemoteCall. Disarm and hide
+        // immediately, enqueue best-effort cleanup, retain handles on failure.
+        [self stopHostedAsync:^(__unused CoreSetHUDStopResult result) {}];
+        CoreSetHUDStopResult pending = {YES, NO, NO, NO};
+        return pending;
+    }
     if (_calibrating.load()) [self completeForegroundCalibration:NO];
     [self disarmHostedInput];
     [self stopHostedOrientationObserver];
@@ -1437,9 +1462,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     [_observers removeAllObjects];
     _drawWindow.hidden = YES; _menuWindow.hidden = YES;
     [CATransaction flush];
-    NSError *cleanupError = nil;
-    if (_drawCleanupNeeded && [_adapter unregisterWindow:_drawWindow surface:CoreSetHUDSurfaceDraw error:&cleanupError]) _drawCleanupNeeded = NO;
-    if (_menuCleanupNeeded && [_adapter unregisterWindow:_menuWindow surface:CoreSetHUDSurfaceMenu error:&cleanupError]) _menuCleanupNeeded = NO;
     _drawRegistered = NO; _menuRegistered = NO;
     [_layers detach];
     if (!_schedulerCleanupNeeded) [_metal detach];
@@ -1450,8 +1472,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     // Retain failed cleanup handles; retry stop before allowing another start.
     if (!_drawCleanupNeeded) _drawWindow = nil;
     if (!_menuCleanupNeeded) _menuWindow = nil;
-    if (cleanupError) self.lastError = cleanupError;
-    else if (self.cleanupPending) [self fail:8 message:@"Hosting cleanup has not been confirmed; retry stop" error:nil];
+    if (self.cleanupPending) [self fail:8 message:@"Hosting cleanup has not been confirmed; retry stop" error:nil];
     CoreSetHUDStopResult result = {YES, !_menuCleanupNeeded, !_drawCleanupNeeded, !self.cleanupPending};
     [self publishState];
     return result;
@@ -1470,6 +1491,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     }
     [_hostedAsyncStopWaiters addObject:[completion copy]];
     _hostedAsyncStopPending = YES;
+    _hostedCleanupFailed = NO;
     [self disarmHostedInput];
     [self stopHostedOrientationObserver];
     _running = NO; _panelVisible = NO;
@@ -1489,6 +1511,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
             host->_menuRegistered = NO; host->_drawRegistered = NO;
             host->_hostedAsyncStopPending = NO;
             if (!menuRemoved || !drawRemoved) {
+                host->_hostedCleanupFailed = YES;
                 [host fail:13 message:@"Asynchronous remote cleanup unconfirmed; handles retained" error:nil];
                 CoreSetHUDStopResult incomplete = {YES, menuRemoved, drawRemoved, NO};
                 [host publishState];

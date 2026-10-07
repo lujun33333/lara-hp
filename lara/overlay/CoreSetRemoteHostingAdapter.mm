@@ -8,14 +8,11 @@
 #include <cstring>
 #include <cmath>
 #include <cerrno>
+#include <atomic>
 extern "C" int proc_name(int pid, void *buffer, uint32_t buffersize);
 static const double kCoreSetRemoteDrawLevel = 10000009.0;
 static const double kCoreSetRemoteMenuLevel = 10000010.0;
 
-static NSError *CSHostError(NSInteger code, NSString *message) {
-    return [NSError errorWithDomain:@"CoreSetRemoteHosting" code:code
-        userInfo:@{NSLocalizedDescriptionKey:message}];
-}
 static BOOL CSChecked(RemoteCall *process, const char *label, void *function,
                       const uint64_t *arguments, NSUInteger count, uint64_t *value) {
     if (!process || !function || !label || count > 8 || (count && !arguments)) return NO;
@@ -82,6 +79,8 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 @interface CoreSetRemoteHostSide : NSObject
 @property(nonatomic, weak) UIWindow *source;
 @property(nonatomic) uint32_t context;
+@property(nonatomic) CGRect sourceFrame;
+@property(nonatomic, weak) UIWindowScene *sourceScene;
 @property(nonatomic) uint64_t window;
 @property(nonatomic) uint64_t layer;
 @property(nonatomic) uint64_t windowLayer;
@@ -107,16 +106,20 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     uint64_t _pendingHostGeneration;
     pid_t _pid;
     BOOL _busy;
+    BOOL _registrationInFlight;
     BOOL _loggedKernelNameFallback;
     uint64_t _observationSequence;
     BOOL _lastIdentityObserved;
     BOOL _lastBothObserved;
     dispatch_queue_t _readbackQueue;
+    std::atomic_bool _registerCancelled;
+    dispatch_block_t _deferredCleanup;
 }
 - (instancetype)initWithRemoteCall:(RemoteCall *)remoteCall {
     if ((self = [super init])) {
         _process = remoteCall; _pid = remoteCall.pid;
         _readbackQueue = dispatch_queue_create("core-set.remote-readback", DISPATCH_QUEUE_SERIAL);
+        _registerCancelled.store(false);
     }
     return self;
 }
@@ -124,6 +127,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 - (NSString *)hostingDiagnosticSnapshot {
     // Called from scene lifecycle on the main thread. Never wait for the
     // remote worker's process lock merely to print a diagnostic.
+    if (_busy) return @"remote-operation-pending";
     return [NSString stringWithFormat:
         @"cachedObserved=%d menuPublished=%d drawPublished=%d hostGeneration=%llu",
         _lastBothObserved, _menu.observed, _draw.observed,
@@ -131,20 +135,9 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 }
 - (BOOL)sessionIdentityReady { return self.sessionIdentityFailureReason == nil; }
 - (BOOL)cleanupPending {
-    @synchronized (_process) {
-        return (_menu && (!_menu.observed || ![self sideObserved:_menu])) ||
-               (_draw && (!_draw.observed || ![self sideObserved:_draw]));
-    }
-}
-- (BOOL)bothSurfacesObserved {
-    @synchronized (_process) {
-        _observationSequence++;
-        _lastIdentityObserved = [self identityValid];
-        const BOOL observed = _lastIdentityObserved && _menu.observed && _draw.observed &&
-            [self sideObserved:_menu] && [self sideObserved:_draw];
-        _lastBothObserved = observed;
-        return observed;
-    }
+    // Main-owned registration state only; the remote worker can hold the
+    // process lock across multiple timed calls.
+    return _busy || (_menu && !_menu.observed) || (_draw && !_draw.observed);
 }
 - (BOOL)localSurfacesStillPublished {
     return NSThread.isMainThread && !_busy && _lastBothObserved &&
@@ -219,7 +212,12 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     SEL contextSelector = NSSelectorFromString(@"_contextId");
     uint32_t current = [side.source respondsToSelector:contextSelector]
         ? ((uint32_t (*)(id, SEL))objc_msgSend)(side.source, contextSelector) : 0;
-    if (current != side.context) { side.lastReadbackStep = @"local-context"; return NO; }
+    CGRect localFrame = CGRectStandardize(side.source.bounds);
+    localFrame.origin = CGPointZero;
+    if (current != side.context || side.source.windowScene != side.sourceScene ||
+        !CGRectEqualToRect(localFrame, side.sourceFrame)) {
+        side.lastReadbackStep = @"local-context"; return NO;
+    }
     return YES;
 }
 - (BOOL)remoteSideObserved:(CoreSetRemoteHostSide *)side {
@@ -247,11 +245,6 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     if ((hidden & 0xff) != 0) { side.lastReadbackStep = @"remote-hidden"; return NO; }
     side.lastReadbackStep = @"ok";
     return YES;
-}
-- (BOOL)sideObserved:(CoreSetRemoteHostSide *)side {
-    if (![self localSideObserved:side]) return NO;
-    if (![self identityValid]) { side.lastReadbackStep = @"identity"; return NO; }
-    return [self remoteSideObserved:side];
 }
 - (void)observeBothSurfacesAsync:(void (^)(BOOL, uint64_t))completion {
     if (!completion) return;
@@ -320,7 +313,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     return YES;
 }
 - (BOOL)createSide:(CoreSetRemoteHostSide *)side level:(double)level {
-    if (![self identityValid] || !side.context || !side.source ||
+    if (![self identityValid] || !side.context ||
         !std::isfinite(level)) return NO;
     uint64_t workspace = 0, scene = 0, clsWindow = CSClass(_process, "UIWindow");
     uint64_t clsHost = CSClass(_process, "CALayerHost");
@@ -355,7 +348,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     if (!initialized) { side.cleanupAmbiguous = YES; return NO; }
     side.layer = initialized;
     side.layerInitialized = YES;
-    CGRect frame = CGRectStandardize(side.source.bounds);
+    CGRect frame = side.sourceFrame;
     frame.origin = CGPointZero;
     if (!(frame.size.width > 0 && frame.size.height > 0)) return NO;
     BOOL disabled = NO;
@@ -391,71 +384,90 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
                           &disabled, sizeof(disabled), nullptr) ||
         !CSMainInvocation(_process, CSClass(_process, "CATransaction"),
                           CSSel(_process, "flush"), nullptr, 0, nullptr)) return NO;
-    side.observed = [self sideObserved:side];
+    side.observed = [self remoteSideObserved:side];
     return side.observed;
 }
-- (BOOL)registerWindow:(UIWindow *)window surface:(CoreSetHUDSurface)surface error:(NSError **)error {
-    if (!NSThread.isMainThread || _busy || !window || !_hostGeneration ||
-        ![self identityValid] || self.cleanupPending) {
-        if (error) *error = CSHostError(1, @"SpringBoard session or prior cleanup is not ready");
-        return NO;
+- (void)registerBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
+                         completion:(void (^)(BOOL, uint64_t))completion {
+    if (!completion) return;
+    const uint64_t generation = _hostGeneration;
+    if (!NSThread.isMainThread || _busy || _menu || _draw || !generation ||
+        !menuWindow || !drawWindow || ![self identityValid] ||
+        !menuWindow.windowScene || menuWindow.windowScene != drawWindow.windowScene) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, generation); });
+        return;
     }
     SEL selector = NSSelectorFromString(@"_contextId");
-    uint32_t context = [window respondsToSelector:selector]
-        ? ((uint32_t (*)(id, SEL))objc_msgSend)(window, selector) : 0;
-    if (!context || (surface != CoreSetHUDSurfaceMenu && surface != CoreSetHUDSurfaceDraw)) {
-        if (error) *error = CSHostError(2, @"Local window context is unavailable");
-        return NO;
+    const uint32_t menuContext = [menuWindow respondsToSelector:selector]
+        ? ((uint32_t (*)(id, SEL))objc_msgSend)(menuWindow, selector) : 0;
+    const uint32_t drawContext = [drawWindow respondsToSelector:selector]
+        ? ((uint32_t (*)(id, SEL))objc_msgSend)(drawWindow, selector) : 0;
+    CGRect menuFrame = CGRectStandardize(menuWindow.bounds);
+    CGRect drawFrame = CGRectStandardize(drawWindow.bounds);
+    menuFrame.origin = CGPointZero; drawFrame.origin = CGPointZero;
+    if (!menuContext || !drawContext || menuContext == drawContext ||
+        !std::isfinite(menuFrame.size.width) || !std::isfinite(menuFrame.size.height) ||
+        menuFrame.size.width <= 0 || menuFrame.size.height <= 0 ||
+        !CGRectEqualToRect(menuFrame, drawFrame)) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, generation); });
+        return;
     }
-    CoreSetRemoteHostSide * __strong *slot = surface == CoreSetHUDSurfaceMenu ? &_menu : &_draw;
-    if (*slot) {
-        BOOL unchanged = (*slot).source == window && (*slot).context == context &&
-            [self sideObserved:*slot];
-        if (!unchanged && error) *error = CSHostError(3, @"Existing remote surface changed");
-        return unchanged;
-    }
-    CoreSetRemoteHostSide *side = [CoreSetRemoteHostSide new];
-    side.source = window; side.context = context;
-    *slot = side; _busy = YES;
-    BOOL success = NO;
-    const double remoteLevel = surface == CoreSetHUDSurfaceMenu
-        ? kCoreSetRemoteMenuLevel : kCoreSetRemoteDrawLevel;
-    @synchronized (_process) { success = [self createSide:side level:remoteLevel]; }
-    _busy = NO;
-    if (!success) {
-        // Keep partial handles for the host's same-window rollback path.
-        if (error) *error = CSHostError(4, @"Remote mirror creation or independent readback failed");
-    }
-    return success;
-}
-- (BOOL)unregisterWindow:(UIWindow *)window surface:(CoreSetHUDSurface)surface error:(NSError **)error {
-    if (!NSThread.isMainThread || _busy) {
-        if (error) *error = CSHostError(5, @"Main-thread serialized cleanup required");
-        return NO;
-    }
+    UIWindowScene *scene = menuWindow.windowScene;
+    CoreSetRemoteHostSide *menu = [CoreSetRemoteHostSide new];
+    CoreSetRemoteHostSide *draw = [CoreSetRemoteHostSide new];
+    menu.source = menuWindow; menu.context = menuContext;
+    menu.sourceFrame = menuFrame; menu.sourceScene = scene;
+    draw.source = drawWindow; draw.context = drawContext;
+    draw.sourceFrame = drawFrame; draw.sourceScene = scene;
+    _menu = menu; _draw = draw; _busy = YES; _registrationInFlight = YES;
     _lastBothObserved = NO;
-    CoreSetRemoteHostSide * __strong *slot = surface == CoreSetHUDSurfaceMenu ? &_menu : &_draw;
-    CoreSetRemoteHostSide *side = *slot;
-    if (!side) return YES;
-    if (side.source != window) {
-        if (error) *error = CSHostError(6, @"Cleanup window identity changed");
-        return NO;
-    }
-    _busy = YES;
-    BOOL cleaned = NO;
-    @synchronized (_process) { cleaned = [self removeSide:side]; }
-    _busy = NO;
-    if (cleaned) *slot = nil;
-    else if (error) *error = CSHostError(7, @"Remote side cleanup/readback pending; handles retained");
-    return cleaned;
+    _registerCancelled.store(false);
+    // The block strongly retains both source windows while the worker uses
+    // only immutable context/frame snapshots and SpringBoard RemoteCall.
+    dispatch_async(_readbackQueue, ^{
+        BOOL menuReady = NO, drawReady = NO;
+        @synchronized (self->_process) {
+            if (!self->_registerCancelled.load())
+                menuReady = [self createSide:menu level:kCoreSetRemoteMenuLevel];
+            if (menuReady && !self->_registerCancelled.load())
+                drawReady = [self createSide:draw level:kCoreSetRemoteDrawLevel];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            const BOOL current = self->_busy && self->_menu == menu && self->_draw == draw &&
+                self->_hostGeneration == generation && self->_process.pid == self->_pid &&
+                menuWindow.windowScene == scene && drawWindow.windowScene == scene &&
+                !self->_registerCancelled.load() && menuReady && drawReady &&
+                [self localSideObserved:menu] && [self localSideObserved:draw];
+            self->_busy = NO; self->_registrationInFlight = NO;
+            self->_lastBothObserved = current;
+            menu.observed = current; draw.observed = current;
+            dispatch_block_t deferred = self->_deferredCleanup;
+            self->_deferredCleanup = nil;
+            if (deferred) deferred();
+            completion(current, generation);
+        });
+    });
 }
 - (void)unregisterBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
                          completion:(void (^)(BOOL, BOOL))completion {
     if (!completion) return;
-    if (!NSThread.isMainThread || _busy ||
+    if (!NSThread.isMainThread ||
         (_menu && _menu.source != menuWindow) ||
         (_draw && _draw.source != drawWindow)) {
         dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, NO); });
+        return;
+    }
+    if (_busy) {
+        if (!_registrationInFlight || _deferredCleanup) {
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, NO); });
+            return;
+        }
+        _registerCancelled.store(true);
+        __weak CoreSetRemoteHostingAdapter *weakSelf = self;
+        _deferredCleanup = ^{
+            [weakSelf unregisterBothSurfacesAsync:menuWindow drawWindow:drawWindow
+                                        completion:completion];
+        };
         return;
     }
     CoreSetRemoteHostSide *menu = _menu;

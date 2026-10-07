@@ -117,7 +117,8 @@ calibration = body(host, "- (BOOL)beginForegroundTouchCalibration:")
 assert calibration.index("_calibrating.store(true)") < calibration.index("[self startInputMonitor]")
 assert "[self completeForegroundCalibration:NO]; return YES;" in calibration
 assert "CoreSetMirroredDrawWindow" in host and "CoreSetMirroredMenuWindow" in host
-assert "scene.screen != _calibrationScreen" in body(host, "- (BOOL)startInScene:")
+assert "scene.screen != _calibrationScreen" in body(
+    host[host.index("@implementation CoreSetHUDHost {"):], "- (BOOL)startPreparedInScene:")
 forced_readback = body(host, "- (void)confirmHostedReadbackAsync:")
 assert "[self requestHostedReadback]" in forced_readback
 assert "if ([self hasFreshHostedReadback]) { completion(YES)" not in forced_readback
@@ -130,6 +131,23 @@ assert "host.stopHostedAsync" in body(owner, "private func rollbackGameLaunch(")
 assert "host.stop()" not in body(owner, "private func rollbackGameLaunch(")
 assert "unregisterBothSurfacesAsync" in adapter
 assert "dispatch_async(_readbackQueue" in body(adapter, "- (void)unregisterBothSurfacesAsync:")
+registration = body(adapter, "- (void)registerBothSurfacesAsync:")
+assert registration.index("menuWindow.bounds") < registration.index("dispatch_async(_readbackQueue")
+assert registration.index("drawWindow.bounds") < registration.index("dispatch_async(_readbackQueue")
+assert registration.index('NSSelectorFromString(@"_contextId")') < registration.index("dispatch_async(_readbackQueue")
+remote_work = registration[registration.index("dispatch_async(_readbackQueue"):]
+assert "source.bounds" not in remote_work and 'NSSelectorFromString(@"_contextId")' not in remote_work
+create_side = body(adapter, "- (BOOL)createSide:")
+assert "side.sourceFrame" in create_side and "side.source.bounds" not in create_side
+assert "[self remoteSideObserved:side]" in create_side and "[self localSideObserved:side]" not in create_side
+assert "@synchronized" not in body(adapter, "- (BOOL)cleanupPending")
+assert "@synchronized" not in body(adapter, "- (NSString *)hostingDiagnosticSnapshot")
+stop_host = body(host, "- (CoreSetHUDStopResult)stop")
+assert "[self stopHostedAsync:" in stop_host and "unregisterWindow:" not in stop_host
+assert "host.stopHostedAsync" in body(owner, "func stop()")
+release = body(owner, "private func releaseStoppedOwnerIfReady()")
+assert "stopChannelsConfirmed" in release and "stopWindowsConfirmed" in release
+assert "Self.retained.removeValue" in release
 
 radar = body(menu, "private func refreshRadarRangeRows()")
 assert "featureState.radar.desired.placement.canvas" in radar

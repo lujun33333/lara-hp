@@ -68,9 +68,9 @@ for implicit in ["views/app/CoreSetMenuViewController.swift", "views/app/Content
     assert not any(re.search(r'path = "?' + re.escape("lara/" + implicit) + r'"?;', text) for text in objects.values())
 need(project, "PBXFileSystemSynchronizedRootGroup", "QuartzCore.framework in Frameworks", 'SWIFT_OBJC_BRIDGING_HEADER = "lara/lara-Bridging-Header.h"')
 assert bridge.count('#import "overlay/CoreSetHUDHost.h"') == 1
-need(header, "NS_SWIFT_NAME(startLocal(in:menuController:))", "NS_SWIFT_NAME(applyLocalMenu(visible:colors:))")
-start_host = objc(host, "startInScene")
-assert start_host.index("_drawWindow.hidden = NO; _menuWindow.hidden = NO;") < start_host.index("[CATransaction flush];") < start_host.index("registerWindow:_menuWindow")
+need(header, "NS_SWIFT_NAME(startLocal(in:menuController:))", "NS_SWIFT_NAME(startHosted(in:menuController:completion:))", "NS_SWIFT_NAME(applyLocalMenu(visible:colors:))")
+start_host = objc(host[host.index("@implementation CoreSetHUDHost {"):], "startPreparedInScene")
+assert start_host.index("_drawWindow.hidden = NO; _menuWindow.hidden = NO;") < start_host.index("[CATransaction flush];") < start_host.index("registerBothSurfacesAsync:menuWindow")
 
 
 def validate_owner(text):
@@ -86,11 +86,13 @@ def validate_owner(text):
     need(swift(owner, "hostChanged"), "submittedGeneration != host.renderGeneration", "generation: host.renderGeneration, sequence: 1", "commands: []")
     need(swift(owner, "publishStatus"), "host.lastConsumedSequence > 0", "跨应用 unavailable")
     stop = swift(owner, "stop")
-    need(stop, "precondition(Thread.isMainThread)", "if stopReceiptsPending, let result = lastStopResult", "stopReceiptsPending = true",
+    need(stop, "precondition(Thread.isMainThread)", "if stopping, let result = lastStopResult", "stopReceiptsPending = true",
          "let result = host.stop()", "menu.suspendGameConsumers", "menu.suspendMenuHostConsumer", "self.stopReceiptsPending = false",
-         "if result.complete.boolValue && channelsRestored && !self.host.cleanupPending", "Self.retained.removeValue(forKey: self.identity)")
-    assert "if stopping, let result" not in stop
-    assert stop.index("if result.complete.boolValue && channelsRestored") < stop.index("Self.retained.removeValue")
+         "host.hostedCleanupInFlight", "self.stopChannelsConfirmed = channelsRestored",
+         "self.releaseStoppedOwnerIfReady()")
+    release = swift(owner, "releaseStoppedOwnerIfReady")
+    need(release, "stopChannelsConfirmed", "stopWindowsConfirmed", "!host.cleanupPending",
+         "Self.retained.removeValue(forKey: identity)")
     assert not re.search(r"\.wait\(|DispatchQueue\.main\.sync|semaphore", swift(owner, "stopAllForTermination"), re.I)
     consumer = text.split("private final class CoreSetLocalHostConsumer:")[1]
     apply = swift(consumer, "apply")
@@ -98,12 +100,13 @@ def validate_owner(text):
          "observed.count == colors.count", "zip(observed, colors).allSatisfy", "host.panelVisible == request.desired.menuVisible",
          ".applied(observed: State(menuVisible: host.panelVisible, floatingPalette: palette))")
     assert apply.index("host.observedFloatingColors") < apply.index(".applied(observed:")
-    need(swift(consumer, "stop"), "let result = host.stop()", "result.complete.boolValue ? .restored : .failed")
+    need(swift(consumer, "stop"), "let result = host.stop()", "host.hostedCleanupInFlight",
+         "host.stopHostedAsync", "final.complete.boolValue ? .restored : .failed")
     assert "crossApplicationHosted" not in consumer
 
 
 validate_owner(coordinator)
-for old in ["if result.complete.boolValue && channelsRestored && !self.host.cleanupPending", "host.observedFloatingColors",
+for old in ["stopWindowsConfirmed", "host.observedFloatingColors",
             "submittedGeneration != host.renderGeneration", "CoreSetHUDHost(hostingAdapter: nil)"]:
     try:
         validate_owner(coordinator.replace(old, "REMOVED_GATE"))
@@ -151,14 +154,15 @@ assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && 
 hosting = swift(coordinator, "rebuildHostedWindows")
 need(hosting, "suspendAimConsumer", "suspendMenuHostConsumer", "host.stop()",
       "resumeMenuHostConsumer()", "installRemoteHostingAdapter(adapter)",
-      "host.startLocal(in: scene", "host.confirmHostedReadbackAsync", ".milliseconds(1200)",
+      "host.startHosted(in: scene", "host.confirmHostedReadbackAsync", ".milliseconds(1200)",
       "self.host.confirmHostedReadbackAsync", "guard observed else")
-assert hosting.index("suspendMenuHostConsumer") < hosting.index("host.stop()") < hosting.index("host.startLocal(in: scene") < hosting.index("resumeMenuHostConsumer()")
+assert hosting.index("suspendMenuHostConsumer") < hosting.index("host.stop()") < hosting.index("host.startHosted(in: scene") < hosting.index("resumeMenuHostConsumer()")
 assert hosting.index("self.host.confirmHostedReadbackAsync") < hosting.index("self.showHostedMenuAndOpenGame")
 need(swift(coordinator, "showHostedMenuAndOpenGame"), "stage=menu-visible confirmed=%d panel=%d hosted=%d")
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
 need(remote_adapter, "kCoreSetRemoteDrawLevel = 10000009.0", "kCoreSetRemoteMenuLevel = 10000010.0",
-     "surface == CoreSetHUDSurfaceMenu", "createSide:side level:remoteLevel")
+     "registerBothSurfacesAsync:", "createSide:menu level:kCoreSetRemoteMenuLevel",
+     "createSide:draw level:kCoreSetRemoteDrawLevel")
 assert "createSide:side level:window.windowLevel" not in remote_adapter
 open_game = swift(coordinator, "showHostedMenuAndOpenGame")
 need(open_game, "host.hostedRegistrationReceipt", "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication", "self.host.confirmHostedReadbackAsync")

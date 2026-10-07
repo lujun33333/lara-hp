@@ -7,7 +7,6 @@ NS_ASSUME_NONNULL_BEGIN
 // No RemoteCall is created or destroyed here. Failed cleanup retains handles
 // and makes the capability unavailable until an explicit retry succeeds.
 @interface CoreSetRemoteHostingAdapter : NSObject <CoreSetHUDHostingAdapter>
-@property(nonatomic, readonly) BOOL bothSurfacesObserved;
 @property(nonatomic, readonly) BOOL cleanupPending;
 @property(nonatomic, readonly) BOOL sessionIdentityReady;
 @property(nonatomic, copy, readonly, nullable) NSString *sessionIdentityFailureReason;
