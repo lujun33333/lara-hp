@@ -610,7 +610,7 @@ final class CoreSetRuntimeCoordinator {
                             }
                         }
                     }
-                })) else {
+                }) else {
                     let detail = self.host.lastError?.localizedDescription ?? "双窗口注册或读回失败"
                     _ = self.menu.resumeMenuHostConsumer()
                     self.rollbackGameLaunch(epoch: epoch, error: "SpringBoard 托管失败：\(detail)", completion: completion)
