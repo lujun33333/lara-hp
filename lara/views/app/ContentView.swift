@@ -206,6 +206,7 @@ final class CoreSetLauncherViewController: UIViewController, AVAudioPlayerDelega
     weak var coreSetRuntime: CoreSetRuntimeCoordinator?
     private let runtimeStatusLabel = UILabel()
     private var runtimeStatus = "本应用悬浮未就绪 · 跨应用 unavailable"
+    private var cleanupRetryRequired = false
     init(authorizationState: CoreSetAuthorizationState) {
         self.authorizationState = .applyingBuildPolicy(to: authorizationState)
         super.init(nibName: nil, bundle: nil)
@@ -422,7 +423,7 @@ final class CoreSetLauncherViewController: UIViewController, AVAudioPlayerDelega
             let c = palettes[index]
             button.colors(coreColor(c[0],c[1],c[2]), coreColor(c[3],c[4],c[5]),
                           shadow: coreColor(c[6],c[7],c[8]))
-            button.setTitle(title, for: .normal)
+            button.setTitle(index == 3 && cleanupRetryRequired ? "重试清理" : title, for: .normal)
             button.tag = index
             if index == 3 {
                 button.addTarget(self, action: #selector(launchApplication), for: .touchUpInside)
@@ -1067,12 +1068,17 @@ final class CoreSetLauncherViewController: UIViewController, AVAudioPlayerDelega
         coreSetRuntime.toggleMenu()
     }
 
-    func updateRuntimePresentation(menuVisible: Bool, status: String) {
+    func updateRuntimePresentation(menuVisible: Bool, status: String,
+                                   cleanupRetryRequired: Bool) {
         precondition(Thread.isMainThread)
         menuRequestedVisible = menuVisible
         runtimeStatus = status
+        self.cleanupRetryRequired = cleanupRetryRequired
         guard isViewLoaded else { return }
         runtimeStatusLabel.text = status
+        if sideButtons.count > 3 {
+            sideButtons[3].setTitle(cleanupRetryRequired ? "重试清理" : "启动游戏", for: .normal)
+        }
         updatePresentation()
         if !menuVisible { presentPendingNotices() }
     }
@@ -1151,6 +1157,13 @@ final class CoreSetLauncherViewController: UIViewController, AVAudioPlayerDelega
         particleEmitter.add(response, forKey: "q47.background.response")
     }
     @objc private func launchApplication() {
+        if cleanupRetryRequired {
+            guard let coreSetRuntime else { presentNotice("悬浮宿主未接入"); return }
+            coreSetRuntime.retryRemoteCleanup { [weak self] error in
+                if let error { self?.presentNotice(error) }
+            }
+            return
+        }
         guard authorizationState.canLaunch else { presentNotice("授权未就绪，无法启动游戏"); return }
         guard let coreSetRuntime else { presentNotice("悬浮宿主未接入，无法启动游戏"); return }
         coreSetRuntime.launchGame { [weak self] error in

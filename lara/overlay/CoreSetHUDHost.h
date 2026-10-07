@@ -41,9 +41,14 @@ typedef NS_ENUM(NSInteger, CoreSetHostedPointerPhase) {
 - (void)prepareForHostGeneration:(uint64_t)generation;
 - (BOOL)bothSurfacesObserved;
 - (uint64_t)hostGeneration;
+- (BOOL)localSurfacesStillPublished;
 // Captures local UIKit context on the main thread, then verifies remote
 // mirrors on a serialized worker and completes on the main thread.
 - (void)observeBothSurfacesAsync:(void (^)(BOOL observed, uint64_t generation))completion;
+// Serial worker removal; completion is delivered on the main thread. A failed
+// side keeps its remote handle for an explicit later cleanup attempt.
+- (void)unregisterBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
+                         completion:(void (^)(BOOL menuRemoved, BOOL drawRemoved))completion;
 @end
 
 typedef struct CoreSetHUDStopResult {
@@ -55,16 +60,30 @@ typedef struct CoreSetHUDStopResult {
 
 @interface CoreSetHUDHost : NSObject
 @property(atomic, readonly) uint64_t generation;
+// Local geometry and frame provenance. A pure orientation change advances
+// this token without replacing the remote source/context generation.
+@property(atomic, readonly) uint64_t renderGeneration;
 @property(nonatomic, readonly) BOOL localSurfacesReady;
 @property(nonatomic, readonly) CGSize logicalCanvasSize;
 @property(nonatomic, readonly) BOOL crossApplicationHosted;
-// Read-only short-lived receipt for UI status and hosted touch. No RemoteCall.
-@property(nonatomic, readonly) BOOL recentCrossApplicationHosted;
+// Cached registration receipt: generation, source context and process identity
+// remain structurally valid. A separate async remote readback is mandatory
+// during launch and after openURL; external remote destruction is not observed
+// until such a readback or an explicit local invalidation.
+@property(nonatomic, readonly) BOOL hostedRegistrationReceipt;
 // Registration only, not a physical-touch or UIKit action receipt.
 @property(nonatomic, readonly) BOOL hostedInputMonitorArmed;
+@property(nonatomic, readonly) BOOL foregroundTouchCalibrationReady;
+// A normal foreground window pairs raw digitizer contacts with real UITouch
+// points before any SpringBoard source context is created.
+- (BOOL)beginForegroundTouchCalibration:(void (^)(BOOL confirmed))completion;
+- (void)cancelForegroundTouchCalibration;
 // Uses the next serialized background readback when the current receipt is
 // stale. Completion is on the main thread and tied to this host generation.
 - (void)confirmHostedReadbackAsync:(void (^)(BOOL observed))completion;
+// Lifecycle teardown waits for a serialized remote readback worker to leave
+// its process lock; this method itself never performs RemoteCall.
+- (void)whenHostedReadbackIdle:(dispatch_block_t)completion;
 // Cached local state only. Does not call the remote readback gate.
 - (NSString *)hostingDiagnosticSnapshot;
 @property(nonatomic, readonly) BOOL cleanupPending;
@@ -81,6 +100,8 @@ typedef struct CoreSetHUDStopResult {
 // Queue acceptance, host readiness and lastConsumedSequence are not feature receipts.
 @property(nonatomic, copy, nullable) void (^frameDidConsume)(CoreSetRenderFrame *frame, BOOL accepted, NSError * _Nullable error);
 @property(nonatomic, copy, nullable) void (^panelVisibilityRequested)(BOOL visible);
+// A confirmed hosted source/context becoming invalid requires owner teardown.
+@property(nonatomic, copy, nullable) void (^hostingInvalidated)(void);
 // Configure before start. Embedded content may own its layout and return its
 // actual interactive views; hit testing reevaluates these after every layout.
 @property(nonatomic) BOOL contentOwnsLayout;
@@ -121,6 +142,9 @@ typedef struct CoreSetHUDStopResult {
 // The owner must call stop before releasing the host, and retain it while
 // cleanupPending is true so failed adapter cleanup can be retried explicitly.
 - (CoreSetHUDStopResult)stop;
+// Detaches the local owner only after both remote sides finish their serialized
+// cleanup. The caller may start a normal local owner on complete == YES.
+- (void)stopHostedAsync:(void (^)(CoreSetHUDStopResult result))completion;
 @end
 
 NS_ASSUME_NONNULL_END

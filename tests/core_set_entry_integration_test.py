@@ -83,7 +83,7 @@ def validate_owner(text):
     assert "CoreSetPlayerConsumer(coordinator: self)" in owner
     assert "playerConsumer?.consumed(receipt)" in owner
     need(swift(owner, "activate"), "guard !stopping, let scene", "host.startLocal(in: scene, menuController: menu)")
-    need(swift(owner, "hostChanged"), "submittedGeneration != host.generation", "generation: host.generation, sequence: 1", "commands: []")
+    need(swift(owner, "hostChanged"), "submittedGeneration != host.renderGeneration", "generation: host.renderGeneration, sequence: 1", "commands: []")
     need(swift(owner, "publishStatus"), "host.lastConsumedSequence > 0", "跨应用 unavailable")
     stop = swift(owner, "stop")
     need(stop, "precondition(Thread.isMainThread)", "if stopReceiptsPending, let result = lastStopResult", "stopReceiptsPending = true",
@@ -104,7 +104,7 @@ def validate_owner(text):
 
 validate_owner(coordinator)
 for old in ["if result.complete.boolValue && channelsRestored && !self.host.cleanupPending", "host.observedFloatingColors",
-            "submittedGeneration != host.generation", "CoreSetHUDHost(hostingAdapter: nil)"]:
+            "submittedGeneration != host.renderGeneration", "CoreSetHUDHost(hostingAdapter: nil)"]:
     try:
         validate_owner(coordinator.replace(old, "REMOVED_GATE"))
     except AssertionError:
@@ -142,26 +142,27 @@ need(submit, "consumeFrame:frame", "} else {", "host->_lastConsumedSequence = fr
 assert submit.index("consumeFrame:frame") < submit.index("host->_lastConsumedSequence = frame.sequence")
 assert not re.search(r"smoba|UnityFramework|wzhud_|wzesp_", coordinator)
 launch = swift(coordinator, "launchGame")
-need(launch, "axDeviceSupportStatus()", "init_offsets()", "offsets_init()", "manager.run", "prepareKernelOffsets")
-assert launch.index("axDeviceSupportStatus()") < launch.index("init_offsets()") < launch.index("offsets_init()") < launch.index("manager.run") < launch.index("prepareKernelOffsets")
+need(launch, "axDeviceSupportStatus()", "host.foregroundTouchCalibrationReady",
+     "host.beginForegroundTouchCalibration", "init_offsets()", "offsets_init()", "manager.run", "prepareKernelOffsets")
+assert launch.index("axDeviceSupportStatus()") < launch.index("host.beginForegroundTouchCalibration") < launch.index("init_offsets()") < launch.index("offsets_init()") < launch.index("manager.run") < launch.index("prepareKernelOffsets")
 kernel_offsets = swift(coordinator, "prepareKernelOffsets")
 need(kernel_offsets, "fetchkcache()", "fetched && dlkcache()", "manager.hasOffsets = loaded", "prepareSpringBoardHosting", ".seconds(180)")
 assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && dlkcache()") < kernel_offsets.index("manager.hasOffsets = loaded") < kernel_offsets.index("guard loaded else") < kernel_offsets.rindex("prepareSpringBoardHosting")
 hosting = swift(coordinator, "rebuildHostedWindows")
 need(hosting, "suspendAimConsumer", "suspendMenuHostConsumer", "host.stop()",
       "resumeMenuHostConsumer()", "installRemoteHostingAdapter(adapter)",
-      "host.startLocal(in: scene", "host.crossApplicationHosted", ".milliseconds(1200)",
-      "let observed = self.host.crossApplicationHosted", "guard observed else")
+      "host.startLocal(in: scene", "host.confirmHostedReadbackAsync", ".milliseconds(1200)",
+      "self.host.confirmHostedReadbackAsync", "guard observed else")
 assert hosting.index("suspendMenuHostConsumer") < hosting.index("host.stop()") < hosting.index("host.startLocal(in: scene") < hosting.index("resumeMenuHostConsumer()")
-assert hosting.index("let observed = self.host.crossApplicationHosted") < hosting.index("self.showHostedMenuAndOpenGame")
+assert hosting.index("self.host.confirmHostedReadbackAsync") < hosting.index("self.showHostedMenuAndOpenGame")
 need(swift(coordinator, "showHostedMenuAndOpenGame"), "stage=menu-visible confirmed=%d panel=%d hosted=%d")
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
 need(remote_adapter, "kCoreSetRemoteDrawLevel = 10000009.0", "kCoreSetRemoteMenuLevel = 10000010.0",
      "surface == CoreSetHUDSurfaceMenu", "createSide:side level:remoteLevel")
 assert "createSide:side level:window.windowLevel" not in remote_adapter
 open_game = swift(coordinator, "showHostedMenuAndOpenGame")
-need(open_game, "host.crossApplicationHosted", "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication")
-assert open_game.index("host.crossApplicationHosted") < open_game.index("CoreSetGameTarget.openApplication")
+need(open_game, "host.hostedRegistrationReceipt", "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication", "self.host.confirmHostedReadbackAsync")
+assert open_game.index("host.hostedRegistrationReceipt") < open_game.index("CoreSetGameTarget.openApplication") < open_game.index("self.host.confirmHostedReadbackAsync")
 assert "CoreSetGameTarget.openApplication" not in swift(launcher, "launchApplication")
 need(swift(launcher, "launchApplication"), "coreSetRuntime.launchGame")
 print("PASS: D1 project/owner/host contracts and game launch gated by observed dual-window hosting; source only")

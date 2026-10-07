@@ -110,7 +110,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     BOOL _loggedKernelNameFallback;
     uint64_t _observationSequence;
     BOOL _lastIdentityObserved;
-    CFAbsoluteTime _lastObservedAt;
+    BOOL _lastBothObserved;
     dispatch_queue_t _readbackQueue;
 }
 - (instancetype)initWithRemoteCall:(RemoteCall *)remoteCall {
@@ -122,14 +122,12 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 }
 - (uint64_t)hostGeneration { return _hostGeneration; }
 - (NSString *)hostingDiagnosticSnapshot {
-    @synchronized (_process) {
-        return [NSString stringWithFormat:
-            @"observationSequence=%llu identityObserved=%d menuPublished=%d drawPublished=%d menuReadback=%@ drawReadback=%@",
-            (unsigned long long)_observationSequence, _lastIdentityObserved,
-            _menu.observed, _draw.observed,
-            _menu.lastReadbackStep ?: @"not-checked",
-            _draw.lastReadbackStep ?: @"not-checked"];
-    }
+    // Called from scene lifecycle on the main thread. Never wait for the
+    // remote worker's process lock merely to print a diagnostic.
+    return [NSString stringWithFormat:
+        @"cachedObserved=%d menuPublished=%d drawPublished=%d hostGeneration=%llu",
+        _lastBothObserved, _menu.observed, _draw.observed,
+        (unsigned long long)_hostGeneration];
 }
 - (BOOL)sessionIdentityReady { return self.sessionIdentityFailureReason == nil; }
 - (BOOL)cleanupPending {
@@ -144,9 +142,16 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
         _lastIdentityObserved = [self identityValid];
         const BOOL observed = _lastIdentityObserved && _menu.observed && _draw.observed &&
             [self sideObserved:_menu] && [self sideObserved:_draw];
-        _lastObservedAt = observed ? CFAbsoluteTimeGetCurrent() : 0;
+        _lastBothObserved = observed;
         return observed;
     }
+}
+- (BOOL)localSurfacesStillPublished {
+    return NSThread.isMainThread && !_busy && _lastBothObserved &&
+        _process && _process.pid == _pid && _process.trojanMem != 0 &&
+        !_process.trojanMemIsStackFallback &&
+        _menu.observed && _draw.observed &&
+        [self localSideObserved:_menu] && [self localSideObserved:_draw];
 }
 - (void)prepareForHostGeneration:(uint64_t)generation {
     if (!NSThread.isMainThread || _busy || !generation) return;
@@ -154,9 +159,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
         _hostGeneration = generation; _pendingHostGeneration = 0;
         return;
     }
-    const CFAbsoluteTime age = CFAbsoluteTimeGetCurrent() - _lastObservedAt;
-    if (_menu.observed && _draw.observed && age >= 0 && age <= 3.5 &&
-        [self localSideObserved:_menu] && [self localSideObserved:_draw]) {
+    if (self.localSurfacesStillPublished) {
         _hostGeneration = generation; _pendingHostGeneration = 0;
     } else {
         // The host requests an async readback after its own generation changes.
@@ -283,7 +286,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
                 self->_hostGeneration = generation;
                 self->_pendingHostGeneration = 0;
             }
-            self->_lastObservedAt = observed && current ? CFAbsoluteTimeGetCurrent() : 0;
+            self->_lastBothObserved = observed && current;
             completion(observed && current, generation);
         });
     });
@@ -430,6 +433,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
         if (error) *error = CSHostError(5, @"Main-thread serialized cleanup required");
         return NO;
     }
+    _lastBothObserved = NO;
     CoreSetRemoteHostSide * __strong *slot = surface == CoreSetHUDSurfaceMenu ? &_menu : &_draw;
     CoreSetRemoteHostSide *side = *slot;
     if (!side) return YES;
@@ -444,5 +448,32 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     if (cleaned) *slot = nil;
     else if (error) *error = CSHostError(7, @"Remote side cleanup/readback pending; handles retained");
     return cleaned;
+}
+- (void)unregisterBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
+                         completion:(void (^)(BOOL, BOOL))completion {
+    if (!completion) return;
+    if (!NSThread.isMainThread || _busy ||
+        (_menu && _menu.source != menuWindow) ||
+        (_draw && _draw.source != drawWindow)) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, NO); });
+        return;
+    }
+    CoreSetRemoteHostSide *menu = _menu;
+    CoreSetRemoteHostSide *draw = _draw;
+    _busy = YES; _lastBothObserved = NO;
+    dispatch_async(_readbackQueue, ^{
+        BOOL drawRemoved = NO, menuRemoved = NO;
+        @synchronized (self->_process) {
+            drawRemoved = !draw || [self removeSide:draw];
+            menuRemoved = !menu || [self removeSide:menu];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (drawRemoved && self->_draw == draw) self->_draw = nil;
+            if (menuRemoved && self->_menu == menu) self->_menu = nil;
+            self->_busy = NO;
+            completion(menuRemoved && self->_menu == nil,
+                       drawRemoved && self->_draw == nil);
+        });
+    });
 }
 @end

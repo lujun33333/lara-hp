@@ -56,36 +56,80 @@ assert "if phase == .began { hostedPointerID = identifier }" in scroll
 assert "if homeStatusNeedsRebuild && hostedPointerID == nil" in scroll
 
 end_gate = body(host, "- (void)handleHostedPointer:")
-assert "![self hasFreshHostedReadback]" in end_gate
+assert "![self hasHostedRegistrationReceipt]" in end_gate
 assert "!self.crossApplicationHosted" not in end_gate
-fresh = body(host, "- (BOOL)hasFreshHostedReadback")
+fresh = body(host, "- (BOOL)hasHostedRegistrationReceipt")
 assert "_hostedReadbackGeneration == self.generation" in fresh
-assert "age >= 0 && age <= 3.5" in fresh
-assert "[weakSelf requestHostedReadback]" in host
-assert "if (!active) [self requestHostedReadback]" in host
+assert "[_adapter localSurfacesStillPublished]" in fresh
+assert "age >= 0" not in fresh
+assert "_hostedReadbackTimer" not in host
 invalidate = body(host, "- (void)invalidateFrames")
-assert "[self requestHostedReadback]" in invalidate
-assert "[self requestHostedReadback]" in end_gate
-assert "rejected=stale-readback" in end_gate
+assert "[self requestHostedReadback]" not in invalidate
+assert "[self failClosedHostedInput]" in end_gate
+assert "[self requestHostedReadback]" not in end_gate
 readback = body(adapter, "- (void)observeBothSurfacesAsync:")
 assert "[self localSideObserved:menu]" in readback
 assert "dispatch_async(_readbackQueue" in readback
 assert "[self remoteSideObserved:menu]" in readback
 assert "dispatch_async(dispatch_get_main_queue()" in readback
 status = body(owner, "private func publishStatus()")
-assert "host.recentCrossApplicationHosted" in status
+assert "host.hostedRegistrationReceipt" in status
 assert "host.crossApplicationHosted" not in status
 select_backend = body(host, "- (void)selectBackend")
-assert "self.recentCrossApplicationHosted" in select_backend
+assert "self.hostedRegistrationReceipt" in select_backend
 assert "self.crossApplicationHosted" not in select_backend
 prepare = body(adapter, "- (void)prepareForHostGeneration:")
 assert "self.bothSurfacesObserved" not in prepare
+assert "self.localSurfacesStillPublished" in prepare
+assert "age <= 3.5" not in prepare
 assert "_pendingHostGeneration = generation" in prepare
 assert "confirmHostedReadbackAsync" in owner
 assert "case UIInterfaceOrientationLandscapeLeft: return (CGFloat)-M_PI_2" in host
 assert "case UIInterfaceOrientationLandscapeRight: return (CGFloat)M_PI_2" in host
 assert "? CGRectMake(0, 0, bounds.size.height, bounds.size.width) : bounds" in host
 assert "[_menuController.view convertPoint:point fromView:_menuWindow]" in host
+orientation = body(host, "- (void)applyHostedOrientation:")
+assert "[self invalidateFrames]" not in orientation
+assert "[_layers clear]; [_metal clear]" in orientation
+assert "[CATransaction flush]" in orientation
+geometry = body(owner, "func invalidateGeometry()")
+assert "nextSequence =" not in geometry
+assert "!CGSizeEqualToSize(frame.canvasSize, host.logicalCanvasSize)" in host
+assert "CoreSetMirroredMenuWindow" in host
+assert "- (BOOL)_ignoresHitTest { return YES; }" in host
+assert "_menuWindow.userInteractionEnabled = _adapter == nil && _foreground" in host
+ax_callback = body(host[host.index("@implementation CoreSetHUDHost {") :],
+                   "- (void)receiveHostedHIDEvent:")
+for reason in ("factory-nil", "hand-missing", "paths-missing", "exception"):
+    assert f'CoreSetLogAXDrop("{reason}"' in ax_callback
+assert 'stage=ax-drop reason=%s count=%llu' in host
+assert not re.search(r"NSLog\([^;]*point\.[xy]", ax_callback, re.S)
+assert "callbacks == 64" in ax_callback
+assert "[host failClosedHostedInput]" in ax_callback
+assert "IOHIDEventGetTimeStamp" in host and "mach_timebase_info" in host
+assert "NSProcessInfo.processInfo.systemUptime" not in host
+assert ax_callback.index("if (paths.count != 1)") < ax_callback.index("_inputSource.store(1)")
+assert ax_callback.index("if (phase < 0) return") < ax_callback.index("_inputSource.store(1)")
+assert "_axParsed.load() != 0" not in body(host, "- (void)receiveNativeContact:")
+assert "CFArrayGetCount(children) != 1" in ax_callback
+assert "[host completeForegroundCalibration:NO]" in ax_callback
+calibration = body(host, "- (BOOL)beginForegroundTouchCalibration:")
+assert calibration.index("_calibrating.store(true)") < calibration.index("[self startInputMonitor]")
+assert "[self completeForegroundCalibration:NO]; return YES;" in calibration
+assert "CoreSetMirroredDrawWindow" in host and "CoreSetMirroredMenuWindow" in host
+assert "scene.screen != _calibrationScreen" in body(host, "- (BOOL)startInScene:")
+forced_readback = body(host, "- (void)confirmHostedReadbackAsync:")
+assert "[self requestHostedReadback]" in forced_readback
+assert "if ([self hasFreshHostedReadback]) { completion(YES)" not in forced_readback
+assert "host.renderGeneration" in owner
+assert "self.renderGeneration = CoreSetHUDNextGeneration(self.renderGeneration)" in orientation
+assert "_lastSequence = 0; _lastConsumedSequence = 0" in orientation
+assert "host.whenHostedReadbackIdle" in body(owner, "func activate()")
+assert "host.stopHostedAsync" in body(owner, "func activate()")
+assert "host.stopHostedAsync" in body(owner, "private func rollbackGameLaunch(")
+assert "host.stop()" not in body(owner, "private func rollbackGameLaunch(")
+assert "unregisterBothSurfacesAsync" in adapter
+assert "dispatch_async(_readbackQueue" in body(adapter, "- (void)unregisterBothSurfacesAsync:")
 
 radar = body(menu, "private func refreshRadarRangeRows()")
 assert "featureState.radar.desired.placement.canvas" in radar
@@ -97,6 +141,7 @@ assert "self.featureState.radar.actual != self.featureState.radar.desired" in sy
 assert "self.applyGame(\\.radar)" in sync_radar
 host_changed = body(owner, "private func hostChanged()")
 assert "if let canvas = playerCanvas { menu.syncRadarCanvas(canvas.size) }" in host_changed
+assert "frameComposer.invalidateGeometry()" in host_changed
 assert "let canvas = coordinator?.playerCanvas" in radar_consumer
 assert "center.x + r <= size.width, center.y + r <= size.height" in radar_consumer
 # The same portrait surface (390 x 844) becomes an 844 x 390 logical radar
