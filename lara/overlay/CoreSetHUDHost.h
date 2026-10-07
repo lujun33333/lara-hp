@@ -68,6 +68,10 @@ typedef struct CoreSetHUDStopResult {
 @property(nonatomic, readonly) BOOL hostedRegistrationReceipt;
 // Registration only, not a physical-touch or UIKit action receipt.
 @property(nonatomic, readonly) BOOL hostedInputMonitorArmed;
+// Observed a single physical AX TouchDown while this app was in front. This
+// validates only the parser/provider in the foreground, not game touch.
+@property(nonatomic, readonly) BOOL foregroundInputProbeConfirmed;
+- (BOOL)armForegroundInputProbe;
 // Uses the next serialized background readback when the current receipt is
 // stale. Completion is on the main thread and tied to this host generation.
 - (void)confirmHostedReadbackAsync:(void (^)(BOOL observed))completion;
@@ -79,6 +83,9 @@ typedef struct CoreSetHUDStopResult {
 @property(nonatomic, readonly) BOOL cleanupPending;
 @property(nonatomic, readonly) BOOL hostedCleanupInFlight;
 @property(nonatomic, readonly) BOOL panelVisible;
+// UIKit source geometry receipt only; physical cross-app touch still requires
+// a device observation.
+@property(nonatomic, readonly) BOOL floatingControlReady;
 @property(nonatomic, copy, readonly) NSArray<UIColor *> *observedFloatingColors;
 // Accepted by the CA/Metal consumer, not proof of a displayed device pixel.
 @property(nonatomic, readonly) uint64_t lastConsumedSequence;

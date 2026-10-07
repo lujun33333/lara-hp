@@ -6,9 +6,10 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 paths = ["lara/views/app/CoreSetRuntimeCoordinator.swift", "lara/views/app/CoreSetMenuViewController.swift",
          "lara/views/app/ContentView.swift", "lara/overlay/CoreSetHUDHost.h", "lara/overlay/CoreSetHUDHost.mm",
-         "lara/lara.swift", "lara/lara-Bridging-Header.h", "lara.xcodeproj/project.pbxproj"]
+         "lara/lara.swift", "lara/funcs/keepalive.swift", "lara/views/app/settings/SettingsView.swift",
+         "lara/lara-Bridging-Header.h", "lara.xcodeproj/project.pbxproj"]
 data = {name: (ROOT / name).read_text(encoding="utf-8-sig") for name in paths}
-coordinator, menu, launcher, header, host, app, bridge, project = [data[name] for name in paths]
+coordinator, menu, launcher, header, host, app, audio, settings, bridge, project = [data[name] for name in paths]
 
 
 def need(text, *tokens):
@@ -121,6 +122,32 @@ for name in ["sceneWillResignActive", "sceneDidEnterBackground"]:
     need(swift(app, name), "coreSetRuntime?.deactivate()")
 need(swift(app, "sceneDidDisconnect"), "coreSetRuntime?.stop()", "coreSetRuntime = nil")
 need(swift(app, "applicationWillTerminate"), "CoreSetRuntimeCoordinator.stopAllForTermination()")
+need(swift(app, "application"), "CoreSetBackgroundAudio.shared.start()")
+need(swift(app, "scene"), "CoreSetBackgroundAudio.shared.start()")
+need(swift(app, "applicationWillTerminate"), "CoreSetBackgroundAudio.shared.stop()")
+need(swift(coordinator, "stopAudioAfterSceneTeardownIfReady"),
+     "Self.retained.values.allSatisfy", "!$0.stopReceiptsPending",
+     "!$0.host.hostedCleanupInFlight", "CoreSetBackgroundAudio.shared.stop()")
+need(swift(coordinator, "stop"), "self.stopAudioAfterSceneTeardownIfReady()")
+assert "toggleka()" not in app + settings and "keepAlive" not in app + settings
+need(audio, "final class CoreSetBackgroundAudio", "static let shared", "private var player: AVAudioPlayer?",
+     "private var watchdog: DispatchSourceTimer?", "private var backgroundTask: UIBackgroundTaskIdentifier",
+     "private var recoveryEpoch: UInt64")
+need(swift(audio, "start"), "timer.schedule", "repeating: .seconds(1)", "if !play() { recover")
+need(swift(audio, "backgroundHeartbeatIfDue"), "applicationState == .background",
+     "ProcessInfo.processInfo.systemUptime", "uptime - lastHeartbeatUptime >= 15",
+     "playing=\\(isPlaying ? 1 : 0)", "backgroundTask == .invalid")
+need(swift(audio, "recover"), "beginBackgroundTask()", "recoveryEpoch &+= 1",
+     "[0.0, 0.2, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]", "self.endBackgroundTask()")
+need(swift(audio, "play"), "setCategory(.playback", ".mixWithOthers", "setActive(true)",
+     "try makeWave().write(to: url, options: .atomic)", "candidate.numberOfLoops = -1",
+     "candidate.volume = 0.08", "candidate.isPlaying || candidate.play()")
+need(swift(audio, "stop"), "recoveryEpoch &+= 1", "watchdog?.cancel()", "player?.stop()",
+     "endBackgroundTask()", "setActive(false")
+need(audio, "AVAudioSession.interruptionNotification", "AVAudioSession.mediaServicesWereResetNotification",
+     "AVAudioSession.routeChangeNotification", "UIApplication.didEnterBackgroundNotification",
+     "UIApplication.didBecomeActiveNotification", "UIApplication.willEnterForegroundNotification")
+assert audio.count("AVAudioPlayer(contentsOf:") == 1 and "kaplayer" not in audio
 need(launcher, "weak var coreSetRuntime: CoreSetRuntimeCoordinator?")
 need(swift(launcher, "toggleMenu"), "guard let coreSetRuntime", "coreSetRuntime.toggleMenu()")
 assert "CoreSetMenuViewController()" not in launcher and "present(menu" not in launcher
@@ -152,6 +179,8 @@ need(aim_consumer, "var supportedFields: Set<CoreSetField> { [] }",
      "自瞄目标写能力未验证，未执行目标写入")
 need(feature_state, "case basicAimScene")
 need(launch, "axDeviceSupportStatus()", "init_offsets()", "offsets_init()", "manager.run", "prepareKernelOffsets")
+need(launch, "foregroundInputProbeConfirmed", "host.hostedInputMonitorArmed")
+assert launch.index("foregroundInputProbeConfirmed") < launch.index("init_offsets()")
 assert "ForegroundTouchCalibration" not in launch
 assert launch.index("axDeviceSupportStatus()") < launch.index("init_offsets()") < launch.index("offsets_init()") < launch.index("manager.run") < launch.index("prepareKernelOffsets")
 kernel_offsets = swift(coordinator, "prepareKernelOffsets")
@@ -178,14 +207,17 @@ verify = swift(coordinator, "verifyHostedWindows")
 need(verify, "host.confirmHostedReadbackAsync", ".milliseconds(1200)",
      "self.host.confirmHostedReadbackAsync", "guard observed else")
 assert verify.index("host.confirmHostedReadbackAsync") < verify.index("self.showHostedMenuAndOpenGame")
-need(swift(coordinator, "showHostedMenuAndOpenGame"), "stage=menu-visible confirmed=%d panel=%d hosted=%d")
+need(swift(coordinator, "showHostedMenuAndOpenGame"),
+     "stage=floating-ready confirmed=%d panel=%d floating=%d hosted=%d")
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
 need(remote_adapter, "kCoreSetRemoteDrawLevel = 10000009.0", "kCoreSetRemoteMenuLevel = 10000010.0",
      "registerBothSurfacesAsync:", "createSide:menu level:kCoreSetRemoteMenuLevel",
      "createSide:draw level:kCoreSetRemoteDrawLevel")
 assert "createSide:side level:window.windowLevel" not in remote_adapter
 open_game = swift(coordinator, "showHostedMenuAndOpenGame")
-need(open_game, "host.hostedRegistrationReceipt", "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication", "self.host.confirmHostedReadbackAsync")
+need(open_game, "host.hostedRegistrationReceipt", "requestMenuVisibility(false)",
+     "host.floatingControlReady", "guard confirmed, !panelVisible, floatingReady, hosted",
+     "CoreSetGameTarget.openApplication", "self.host.confirmHostedReadbackAsync")
 assert open_game.index("host.hostedRegistrationReceipt") < open_game.index("CoreSetGameTarget.openApplication") < open_game.index("self.host.confirmHostedReadbackAsync")
 assert "CoreSetGameTarget.openApplication" not in swift(launcher, "launchApplication")
 need(swift(launcher, "launchApplication"), "coreSetRuntime.launchGame")

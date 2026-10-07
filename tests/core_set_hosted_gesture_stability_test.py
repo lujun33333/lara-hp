@@ -115,6 +115,26 @@ assert "CoreSetHostedInputCalibration" not in host
 assert "IOHIDEventGetTimeStamp" not in host
 assert "BKSHIDEventRegisterEventCallback" in body(
     host[host.index("@implementation CoreSetHUDHost {"):], "- (BOOL)startInputMonitor")
+monitor = body(host[host.index("@implementation CoreSetHUDHost {"):],
+               "- (BOOL)startInputMonitor")
+assert "if (create && reg && schedule)" in monitor
+assert "&& canUnschedule" not in monitor
+assert "gCoreSetDormantHIDClient" in monitor
+assert 'provider=%s type=%u' in ax_callback
+assert 'cleanupCapable=%d' in ax_callback
+assert "_foregroundAXInputObserved.store(true)" in ax_callback
+assert "if (_foregroundProbeEnabled.load())" in ax_callback
+assert "_foregroundProbeEnabled.store(true)" in body(host, "- (BOOL)armForegroundInputProbe")
+active = body(host, "- (void)setApplicationActive:")
+assert "[self disarmHostedInput]" not in active
+assert "[self invalidateFrames]" in active
+assert "_foregroundProbeEnabled.store(active && _inputArmed.load())" in active
+assert "[self setPanelVisible:NO]" in active, "remote panel must collapse on background transition"
+toggle = body(host, "- (void)togglePanel")
+assert "reason=remote-UIKit-panel-toggle" in toggle
+assert "[self togglePanelFromHostedPointer]" in end_gate
+assert "[self disarmHostedInput]" in body(host, "- (CoreSetHUDStopResult)stop") or \
+       "[self disarmHostedInput]" in body(host, "- (void)stopHostedAsync:")
 assert ax_callback.index("if (paths.count != 1)") < ax_callback.index("_pendingTouchActions.enqueue")
 assert ax_callback.index("if (phase < 0) return") < ax_callback.index("_pendingTouchActions.enqueue")
 assert "CoreSetDrawWindow" in host and "CoreSetMenuWindow" in host
@@ -146,6 +166,14 @@ assert "@synchronized" not in body(adapter, "- (NSString *)hostingDiagnosticSnap
 stop_host = body(host, "- (CoreSetHUDStopResult)stop")
 assert "[self stopHostedAsync:" in stop_host and "unregisterWindow:" not in stop_host
 assert "host.stopHostedAsync" in body(owner, "func stop()")
+probe_launch = body(owner, "func launchGame(")
+assert probe_launch.index("foregroundInputProbeConfirmed") < probe_launch.index("init_offsets()")
+assert "AX 前台触摸未通过核对" in probe_launch
+exit_hud = body(owner, "private func exitHostedHUD()")
+for gate in ("suspendGameConsumers", "suspendMenuHostConsumer", "host.cleanupPending",
+             "installRemoteHostingAdapter(nil)", "remoteCleanupFailed = true"):
+    assert gate in exit_hud
+assert "case .exitHUD" in menu and "onExitHUD()" in menu
 release = body(owner, "private func releaseStoppedOwnerIfReady()")
 assert "stopChannelsConfirmed" in release and "stopWindowsConfirmed" in release
 assert "Self.retained.removeValue" in release

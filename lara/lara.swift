@@ -17,6 +17,7 @@ final class LaraAppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        CoreSetBackgroundAudio.shared.start()
         bootstrapLaraApplication()
         return true
     }
@@ -43,6 +44,7 @@ final class LaraAppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationWillTerminate(_ application: UIApplication) {
         CoreSetRuntimeCoordinator.stopAllForTermination()
+        CoreSetBackgroundAudio.shared.stop()
     }
 }
 
@@ -57,6 +59,7 @@ final class LaraSceneDelegate: UIResponder, UIWindowSceneDelegate {
         options connectionOptions: UIScene.ConnectionOptions
     ) {
         guard let windowScene = scene as? UIWindowScene else { return }
+        CoreSetBackgroundAudio.shared.start()
         let window = UIWindow(windowScene: windowScene)
         self.window = window
         window.backgroundColor = .black
@@ -108,9 +111,6 @@ private func bootstrapLaraApplication() {
     )!
     method_exchangeImplementations(origMethod, fixMethod)
 
-    if UserDefaults.standard.bool(forKey: "keepAlive") {
-        toggleka()
-    }
     globallogger.capture()
 }
 

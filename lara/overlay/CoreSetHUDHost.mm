@@ -11,6 +11,7 @@
 typedef struct __IOHIDEvent *CoreSetIOHIDEventRef;
 typedef struct __IOHIDService *CoreSetIOHIDServiceRef;
 typedef struct __IOHIDEventSystemClient *CoreSetIOHIDEventSystemClientRef;
+typedef uint32_t (*CoreSetHIDEventGetType)(CoreSetIOHIDEventRef);
 
 @interface CoreSetAXEventPath : NSObject
 @property(nonatomic, readonly) unsigned char pathIdentity;
@@ -136,6 +137,10 @@ static void CoreSetLogAXDrop(const char *reason, std::atomic_uint_fast64_t *coun
 // The monitor does not retain a host. A queued callback after stop sees nil.
 static __weak CoreSetHUDHost *gCoreSetHostedInputOwner;
 static BOOL gCoreSetBKCallbackInstalled = NO; // BKSHID has no unregister API.
+// Some OS builds expose IOHID scheduling but no unschedule selector. Reuse one
+// dormant process-scoped client after stop, as WZ does, rather than registering
+// another callback that could later route duplicate events to a new owner.
+static CoreSetIOHIDEventSystemClientRef gCoreSetDormantHIDClient = NULL;
 static void CoreSetHostedHIDCallback(void *target, void *refcon,
                                      CoreSetIOHIDServiceRef service,
                                      CoreSetIOHIDEventRef event) {
@@ -182,11 +187,15 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     void *_accessibilityHandle;
     void *_backBoardHandle;
     BOOL _bkInputRegistered;
+    CoreSetHIDEventGetType _hidEventGetType;
+    BOOL _hidCanUnschedule;
     dispatch_queue_t _pendingTouchSerialQueue;
     coreset_pending_touch::PendingTouchQueue _pendingTouchActions;
     std::atomic_uint_fast64_t _pendingTouchGeneration;
     BOOL _pendingTouchDrainInFlight;
     std::atomic_bool _inputArmed;
+    std::atomic_bool _foregroundProbeEnabled;
+    std::atomic_bool _foregroundAXInputObserved;
     std::atomic_uint_fast64_t _hidCallbacks;
     std::atomic_uint_fast64_t _axParsed;
     std::atomic_uint_fast64_t _axClassMissing;
@@ -223,6 +232,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         _hostedOrientation = UIInterfaceOrientationPortrait;
         _touchPointerID = -1;
         _inputArmed.store(false);
+        _foregroundProbeEnabled.store(false);
+        _foregroundAXInputObserved.store(false);
         _hidCallbacks.store(0); _axParsed.store(0);
         _axClassMissing.store(0); _axFactoryNil.store(0);
         _axHandMissing.store(0); _axPathsMissing.store(0); _axException.store(0);
@@ -250,6 +261,13 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (BOOL)hostedRegistrationReceipt { return [self hasHostedRegistrationReceipt]; }
 - (CGSize)logicalCanvasSize { return _drawCanvas ? _drawCanvas.bounds.size : CGSizeZero; }
 - (BOOL)hostedInputMonitorArmed { return _inputArmed.load() && (_touchClient != NULL || _bkInputRegistered); }
+- (BOOL)foregroundInputProbeConfirmed { return _foregroundAXInputObserved.load(); }
+- (BOOL)armForegroundInputProbe {
+    if (!NSThread.isMainThread || !_running || _adapter || !_foreground) return NO;
+    if (!self.hostedInputMonitorArmed && ![self startInputMonitor]) return NO;
+    _foregroundProbeEnabled.store(true);
+    return YES;
+}
 - (NSString *)hostingDiagnosticSnapshot {
     const NSInteger sceneState = _menuWindow.windowScene
         ? _menuWindow.windowScene.activationState : -1;
@@ -270,6 +288,15 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (BOOL)cleanupPending { return !_running && (_menuCleanupNeeded || _drawCleanupNeeded || _schedulerCleanupNeeded); }
 - (BOOL)hostedCleanupInFlight { return _hostedAsyncStopPending; }
 - (BOOL)panelVisible { return _panelVisible; }
+- (BOOL)floatingControlReady {
+    if (!NSThread.isMainThread || !self.localSurfacesReady ||
+        !_floating || !_menuWindow || _menuWindow.hidden ||
+        _floating.hidden || _floating.alpha <= 0.01 ||
+        !_floating.userInteractionEnabled ||
+        ![_floating isDescendantOfView:_menuWindow]) return NO;
+    const CGRect button = [_floating convertRect:_floating.bounds toView:_menuWindow];
+    return CGRectIntersectsRect(button, _menuWindow.bounds);
+}
 - (uint64_t)lastConsumedSequence { return _lastConsumedSequence; }
 - (NSArray<UIColor *> *)observedFloatingColors {
     NSMutableArray<UIColor *> *colors = [NSMutableArray array];
@@ -644,7 +671,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     [self resetHostedPointer];
     BOOL dispatched = NO;
     if ([identifier isEqualToString:@"host.floating"]) {
-        if (!floatingDragged) [self togglePanel];
+        if (!floatingDragged) [self togglePanelFromHostedPointer];
         dispatched = YES;
         NSLog(@"Core-SET: hosted input stage=actual capability=floatingDrag confirmed=%d",
               floatingDragged ? 1 : 0);
@@ -706,8 +733,12 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (void)receiveHostedHIDEvent:(CoreSetIOHIDEventRef)event {
     if (!_inputArmed.load() || !event) return;
     const uint64_t callbacks = _hidCallbacks.fetch_add(1) + 1;
-    if (callbacks == 1 || callbacks % 64 == 0)
-        NSLog(@"Core-SET: hosted input stage=callback count=%llu", (unsigned long long)callbacks);
+    if (callbacks <= 8 || callbacks % 64 == 0)
+        NSLog(@"Core-SET: hosted input stage=callback count=%llu provider=%s type=%u cleanupCapable=%d",
+              (unsigned long long)callbacks, _bkInputRegistered ? "BKSHID" : "IOHID",
+              (!_bkInputRegistered && _hidEventGetType)
+                  ? _hidEventGetType(event) : UINT32_MAX,
+              _touchClient && _hidCanUnschedule);
     // AX decodes the HID pointer while the callback owns it. Only value types
     // enter the serial queue; the IOHIDEventRef is never retained asynchronously.
     @autoreleasepool { @try {
@@ -741,6 +772,14 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         if (phase < 0) return;
         const CGPoint point = representation.location;
         if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
+        if (_foregroundProbeEnabled.load()) {
+            if (phase == CoreSetHostedPointerPhaseBegan && pointerID >= 0) {
+                _foregroundAXInputObserved.store(true);
+                NSLog(@"Core-SET: hosted input stage=foreground-probe validAX=1 provider=%s",
+                      _bkInputRegistered ? "BKSHID" : "IOHID");
+            }
+            return;
+        }
         if (phase == CoreSetHostedPointerPhaseCancelled) {
             [self invalidatePendingTouchActions];
             dispatch_async(dispatch_get_main_queue(), ^{ [self resetHostedPointer]; });
@@ -801,8 +840,9 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     }
     if (self.hostedInputMonitorArmed) return YES;
     const BOOL armed = [self startInputMonitor];
-    NSLog(@"Core-SET: hosted input monitor armed=%d mode=%@",
-          armed, _bkInputRegistered ? @"BKSHID" : @"IOHID");
+    NSLog(@"Core-SET: hosted input monitor armed=%d mode=%@ cleanupCapable=%d",
+          armed, _bkInputRegistered ? @"BKSHID" : @"IOHID",
+          _touchClient && _hidCanUnschedule);
     return armed;
 }
 - (BOOL)startInputMonitor {
@@ -819,6 +859,24 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     }
     if (!_ioKitHandle) _ioKitHandle = dlopen(
         "/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
+    _hidEventGetType = _ioKitHandle ? (CoreSetHIDEventGetType)dlsym(
+        _ioKitHandle, "IOHIDEventGetType") : NULL;
+    _hidCanUnschedule = _ioKitHandle && dlsym(
+        _ioKitHandle, "IOHIDEventSystemClientUnscheduleWithRunLoop");
+    if (gCoreSetDormantHIDClient) {
+        _touchClient = gCoreSetDormantHIDClient;
+        gCoreSetHostedInputOwner = self;
+        _inputArmed.store(true);
+        return YES;
+    }
+    if (gCoreSetBKCallbackInstalled) {
+        // BKSHID cannot be unregistered. Reuse its one process callback rather
+        // than adding a later IOHID callback for the next scene/host.
+        _bkInputRegistered = YES;
+        gCoreSetHostedInputOwner = self;
+        _inputArmed.store(true);
+        return YES;
+    }
     typedef CoreSetIOHIDEventSystemClientRef (*Create)(CFAllocatorRef);
     typedef void (*Register)(CoreSetIOHIDEventSystemClientRef,
         void (*)(void *, void *, CoreSetIOHIDServiceRef, CoreSetIOHIDEventRef), void *, void *);
@@ -828,9 +886,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         "IOHIDEventSystemClientRegisterEventCallback") : NULL;
     Schedule schedule = _ioKitHandle ? (Schedule)dlsym(_ioKitHandle,
         "IOHIDEventSystemClientScheduleWithRunLoop") : NULL;
-    const BOOL canUnschedule = _ioKitHandle &&
-        dlsym(_ioKitHandle, "IOHIDEventSystemClientUnscheduleWithRunLoop");
-    if (create && reg && schedule && canUnschedule) {
+    if (create && reg && schedule) {
         _touchClient = create(kCFAllocatorDefault);
         if (_touchClient) {
             gCoreSetHostedInputOwner = self;
@@ -928,6 +984,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 }
 - (void)disarmHostedInput {
     _inputArmed.store(false);
+    _foregroundProbeEnabled.store(false);
+    _foregroundAXInputObserved.store(false);
     [self invalidatePendingTouchActions];
     _bkInputRegistered = NO;
     NSArray *cancelledWaiters = [_hostedReadbackWaiters copy];
@@ -945,9 +1003,12 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     if (unschedule) {
         unschedule(_touchClient, CFRunLoopGetMain(), kCFRunLoopCommonModes);
         CFRelease(_touchClient);
+        if (gCoreSetDormantHIDClient == _touchClient) gCoreSetDormantHIDClient = NULL;
+    } else {
+        gCoreSetDormantHIDClient = _touchClient;
     }
-    // If the OS loses its unschedule symbol, leave a dormant client scheduled;
-    // the weak global owner and _inputArmed prevent dispatch into a dead host.
+    // Without unschedule the process-scoped client stays scheduled but has no
+    // owner until a later host explicitly arms it again.
     _touchClient = NULL;
 }
 - (BOOL)startLocalInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController {
@@ -963,7 +1024,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     if (!NSThread.isMainThread || !self.localSurfacesReady || !colors.count) return NO;
     [self setFloatingColors:colors];
     [self setPanelVisible:visible];
-    return self.localSurfacesReady && self.panelVisible == visible;
+    return self.localSurfacesReady && self.panelVisible == visible &&
+        self.floatingControlReady;
 }
 - (BOOL)startInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController error:(NSError **)error {
     return [self startPreparedInScene:scene menuController:menuController
@@ -1141,6 +1203,19 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     if (directHosted && !floatingInitialized && !_panelVisible) [self layoutSurfaces];
 }
 - (void)togglePanel {
+    const BOOL remote = _adapter &&
+        !([_adapter respondsToSelector:@selector(usesDirectSourceInteraction)] &&
+          [_adapter usesDirectSourceInteraction]);
+    if (!_foreground && remote) {
+        // On a remote mirror, UIKit delivery is not a verified physical touch
+        // receipt. Only a parsed HID Begin/End locked to the bubble may expand
+        // the full-screen panel while the game owns the foreground.
+        NSLog(@"Core-SET: hosted input stage=drop reason=remote-UIKit-panel-toggle");
+        return;
+    }
+    [self togglePanelFromHostedPointer];
+}
+- (void)togglePanelFromHostedPointer {
     if (self.panelVisibilityRequested) self.panelVisibilityRequested(!_panelVisible);
     else [self setPanelVisible:!_panelVisible];
 }
@@ -1161,6 +1236,9 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 }
 - (void)dragFloating:(UIPanGestureRecognizer *)gesture {
     if (!_running) return;
+    if (!_foreground && _adapter &&
+        !([_adapter respondsToSelector:@selector(usesDirectSourceInteraction)] &&
+          [_adapter usesDirectSourceInteraction])) return;
     if (gesture.state == UIGestureRecognizerStateBegan) _dragOrigin = _floatingCenter;
     if (gesture.state == UIGestureRecognizerStateChanged || gesture.state == UIGestureRecognizerStateEnded) {
         CGPoint delta = [gesture translationInView:_menuWindow.rootViewController.view];
@@ -1188,8 +1266,19 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (void)setApplicationActive:(BOOL)active {
     if (!NSThread.isMainThread || !_running || _foreground == active) return;
     const uint64_t previousGeneration = self.generation;
-    if (active) [self disarmHostedInput];
+    // WZ retains the passive HID subscription across foreground/background.
+    // invalidateFrames below cancels queued pointers; foreground routing is
+    // gated by _foreground in drainPendingTouchActionsOnQueue/handleHostedPointer.
     _foreground = active;
+    _foregroundProbeEnabled.store(active && _inputArmed.load());
+    if (!active && _adapter &&
+        !([_adapter respondsToSelector:@selector(usesDirectSourceInteraction)] &&
+          [_adapter usesDirectSourceInteraction]) && _panelVisible) {
+        // Safety adaptation for an unverified remote input path. Do not leave
+        // a full panel covering the phone across an app switch.
+        [self setPanelVisible:NO];
+        NSLog(@"Core-SET: hosted input stage=remote-panel-collapsed reason=background-transition");
+    }
     _menuWindow.backgroundPassThrough = NO;
     _menuWindow.userInteractionEnabled = YES;
     [self invalidateFrames]; [self selectBackend]; [self layoutSurfaces]; [self publishState];

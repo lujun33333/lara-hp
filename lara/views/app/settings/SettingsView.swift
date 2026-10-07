@@ -31,7 +31,6 @@ struct SettingsView: View {
     @EnvironmentObject var mgr: laramgr
     
     @AppStorage("selectedMethod") private var selectedMethod: method = .hybrid
-    @AppStorage("keepAlive") private var keepAlive: Bool = false
     @AppStorage("stashKRW") private var stashKRW: Bool = false
     
     @State private var dlingkcache: Bool = false
@@ -173,15 +172,7 @@ struct SettingsView: View {
                     }
                 }
                 
-                Section(header: HeaderLabel(text: "应用", icon: "gearshape"), footer: Text("如果启用保持活跃，应用最小化后仍会继续运行。")) {
-                    Toggle("保持活跃", isOn: $keepAlive)
-                        .onChange(of: keepAlive) { _ in
-                            if keepAlive {
-                                if !kaenabled { toggleka() }
-                            } else {
-                                if kaenabled { toggleka() }
-                            }
-                        }
+                Section(header: HeaderLabel(text: "应用", icon: "gearshape")) {
                     Toggle("禁用日志分隔线", isOn: $loggerNoBS)
                     Picker("日志显示", selection: $selectedlogdisplaymode) {
                         ForEach(logsdisplaymode.allCases, id: \.self) { mode in

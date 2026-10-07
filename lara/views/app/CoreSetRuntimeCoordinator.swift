@@ -195,7 +195,9 @@ final class CoreSetRuntimeCoordinator {
     private var activateAfterAimStop = false
     private var gameLaunchEpoch: UInt64 = 0
     private var gameLaunchPending = false
+    private var foregroundProbeDecisionPending = false
     private var returnToLocalPending = false
+    private var exitHUDRestorationPending = false
     private var remoteCleanupFailed = false
     private var gameLaunchStatus: String?
     private var kernelOffsetsRunning = false
@@ -287,6 +289,7 @@ final class CoreSetRuntimeCoordinator {
             _ = self.stop()
         }
         menu.onClose = { [weak self] in self?.publishStatus() }
+        menu.onExitHUD = { [weak self] in self?.exitHostedHUD() }
         Self.retained[identity] = self
         startPerformanceSampling()
     }
@@ -311,6 +314,7 @@ final class CoreSetRuntimeCoordinator {
 
     func activate() {
         guard !stopping, let scene else { return }
+        if returnToLocalPending { return }
         if aimSuspendedForHost {
             guard menu.resumeAimConsumer() else {
                 activateAfterAimStop = true
@@ -342,6 +346,10 @@ final class CoreSetRuntimeCoordinator {
             menu.requestMenuVisibility(false) { [weak self] _ in self?.publishStatus() }
         }
         host.setApplicationActive(true)
+        if remoteHostingAdapter == nil && localHostingAdapter == nil &&
+           !host.armForegroundInputProbe() {
+            NSLog("Core-SET: hosted input stage=foreground-probe armed=0")
+        }
         hostChanged()
     }
 
@@ -353,12 +361,35 @@ final class CoreSetRuntimeCoordinator {
             completion("本应用窗口未处于前台，无法准备游戏内悬浮窗"); return
         }
         guard !gameLaunchPending else { completion("游戏内悬浮窗正在准备中"); return }
+        guard !exitHUDRestorationPending else {
+            completion("HUD 退出后的功能恢复未确认，已停止再次启动"); return
+        }
         guard !remoteCleanupFailed else {
             completion("远端清理未确认，请先点“重试清理”"); return
         }
         let support = axDeviceSupportStatus()
         guard support.isSupported else {
             completion("当前设备不支持跨应用悬浮窗：\(support.reason ?? support.identifier)"); return
+        }
+        guard host.foregroundInputProbeConfirmed else {
+            guard host.hostedInputMonitorArmed else {
+                completion("前台 AX 触摸监听未就绪，已停止跨应用窗口启动"); return
+            }
+            guard !foregroundProbeDecisionPending else {
+                completion("正在核对前台触摸，请稍后"); return
+            }
+            foregroundProbeDecisionPending = true
+            // UIKit TouchUpInside and the passive HID callback may arrive on
+            // adjacent main-run-loop turns for the same physical launch tap.
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
+                guard let self else { completion("窗口会话已结束"); return }
+                self.foregroundProbeDecisionPending = false
+                guard self.host.foregroundInputProbeConfirmed else {
+                    completion("AX 前台触摸未通过核对，已阻止跨应用窗口启动"); return
+                }
+                self.launchGame(completion: completion)
+            }
+            return
         }
         gameLaunchPending = true
         gameLaunchEpoch &+= 1
@@ -636,6 +667,7 @@ final class CoreSetRuntimeCoordinator {
                             error: "双窗口延迟读回失败", completion: completion)
                         return
                     }
+                    self.menu.setHostedExitAvailable(true)
                     self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
                 }
             }
@@ -647,14 +679,19 @@ final class CoreSetRuntimeCoordinator {
             rollbackGameLaunch(epoch: epoch, error: "跨应用双窗口未通过读回", completion: completion)
             return
         }
-        menu.requestMenuVisibility(true) { [weak self] confirmed in
+        // Safety adaptation: WZ expands the panel before opening the game,
+        // but this device lost ordinary taps under that full system source.
+        // Wait for a parsed background floating-control touch to expand it.
+        menu.requestMenuVisibility(false) { [weak self] confirmed in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
             let panelVisible = self.host.panelVisible
+            let floatingReady = self.host.floatingControlReady
             let hosted = self.host.hostedRegistrationReceipt
-            NSLog("Core-SET: game launch epoch=%llu stage=menu-visible confirmed=%d panel=%d hosted=%d",
-                  epoch, confirmed ? 1 : 0, panelVisible ? 1 : 0, hosted ? 1 : 0)
-            guard confirmed, panelVisible, hosted else {
-                self.rollbackGameLaunch(epoch: epoch, error: "游戏内菜单显示未确认", completion: completion)
+            NSLog("Core-SET: game launch epoch=%llu stage=floating-ready confirmed=%d panel=%d floating=%d hosted=%d",
+                  epoch, confirmed ? 1 : 0, panelVisible ? 1 : 0,
+                  floatingReady ? 1 : 0, hosted ? 1 : 0)
+            guard confirmed, !panelVisible, floatingReady, hosted else {
+                self.rollbackGameLaunch(epoch: epoch, error: "游戏内浮球显示未确认", completion: completion)
                 return
             }
             guard !self.aimSuspendedForHost || self.menu.resumeAimConsumer() else {
@@ -711,6 +748,8 @@ final class CoreSetRuntimeCoordinator {
                     return
                 }
                 self.remoteHostingAdapter = nil
+                self.localHostingAdapter = nil
+                self.menu.setHostedExitAvailable(false)
                 if self.host.installRemoteHostingAdapter(nil), let scene = self.scene,
                    scene.activationState == .foregroundActive,
                    self.host.startLocal(in: scene, menuController: self.menu) {
@@ -755,10 +794,57 @@ final class CoreSetRuntimeCoordinator {
                 }
                 self.host.setApplicationActive(true)
                 self.hostChanged()
+                if self.exitHUDRestorationPending {
+                    let resumed = self.menu.resumeGameConsumers() &&
+                        self.menu.resumeMenuHostConsumer()
+                    self.exitHUDRestorationPending = !resumed
+                    self.menu.setHostedExitAvailable(false)
+                }
                 self.menu.requestMenuVisibility(false) { [weak self] _ in self?.publishStatus() }
                 self.activate()
                 completion(nil)
             }
+        }
+    }
+
+    // The visible "退出 HUD" control must own actual stop receipts. Hiding the
+    // panel alone leaves the source windows and remote mirror installed.
+    private func exitHostedHUD() {
+        precondition(Thread.isMainThread)
+        guard !stopping, !gameLaunchPending, !returnToLocalPending,
+              remoteHostingAdapter != nil || localHostingAdapter != nil else { return }
+        returnToLocalPending = true
+        exitHUDRestorationPending = true
+        menu.setHostedExitAvailable(false)
+        let group = DispatchGroup()
+        var gameStopped = false
+        var hostStopped = false
+        group.enter()
+        menu.suspendGameConsumers { confirmed in gameStopped = confirmed; group.leave() }
+        group.enter()
+        menu.suspendMenuHostConsumer { confirmed in hostStopped = confirmed; group.leave() }
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            self.returnToLocalPending = false
+            guard !self.stopping else { return }
+            guard gameStopped, hostStopped, !self.host.cleanupPending,
+                  self.host.installRemoteHostingAdapter(nil) else {
+                self.remoteCleanupFailed = true
+                self.publishStatus()
+                NSLog("Core-SET: hosted input stage=exit-hud cleanupConfirmed=0")
+                return
+            }
+            self.remoteHostingAdapter = nil
+            self.localHostingAdapter = nil
+            let channelsResumed = self.menu.resumeGameConsumers() &&
+                self.menu.resumeMenuHostConsumer()
+            self.exitHUDRestorationPending = !channelsResumed
+            self.aimSuspendedForHost = false
+            self.activateAfterAimStop = false
+            if self.scene?.activationState == .foregroundActive { self.activate() }
+            self.publishStatus()
+            NSLog("Core-SET: hosted input stage=exit-hud cleanupConfirmed=1 channelsResumed=%d",
+                  channelsResumed ? 1 : 0)
         }
     }
 
@@ -888,6 +974,16 @@ final class CoreSetRuntimeCoordinator {
         Self.retained.removeValue(forKey: identity)
     }
 
+    private func stopAudioAfterSceneTeardownIfReady() {
+        // A failed remote cleanup retains its owner for explicit retry. It
+        // must not keep audio running once every scene has finished trying to
+        // stop; an in-flight cleanup still gets time to return its receipt.
+        guard Self.retained.values.allSatisfy({
+            $0.stopping && !$0.stopReceiptsPending && !$0.host.hostedCleanupInFlight
+        }) else { return }
+        CoreSetBackgroundAudio.shared.stop()
+    }
+
     // Local disarm/hide is immediate. Remote mirror cleanup is best-effort on
     // the adapter's serial worker; termination does not wait for its callback.
     @discardableResult
@@ -918,6 +1014,7 @@ final class CoreSetRuntimeCoordinator {
                 self.lastStopResult = final
                 self.stopWindowsConfirmed = final.complete.boolValue
                 self.releaseStoppedOwnerIfReady()
+                self.stopAudioAfterSceneTeardownIfReady()
             }
         }
         let group = DispatchGroup()
@@ -940,6 +1037,7 @@ final class CoreSetRuntimeCoordinator {
             self.menu.refreshConsumerAvailability()
             self.publishStatus()
             self.releaseStoppedOwnerIfReady()
+            self.stopAudioAfterSceneTeardownIfReady()
         }
         return result
     }

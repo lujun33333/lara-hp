@@ -65,6 +65,12 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         } else { basicAimStatusLabel?.text = status }
     }
     var onClose: (() -> Void)?
+    var onExitHUD: (() -> Void)?
+    private var hostedExitAvailable = false
+    func setHostedExitAvailable(_ available: Bool) {
+        hostedExitAvailable = available
+        if isViewLoaded { exitHUDButton.isHidden = !available }
+    }
     private(set) var featureState = CoreSetFeatureState()
     private var gameConsumers: [AnyKeyPath: AnyObject] = [:]
     private var hostConsumer: CoreSetMenuConsumer<CoreSetMenuHostSettings>?
@@ -141,8 +147,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private let panel = UIView()
     private let content = UIScrollView()
     private let closeButton = UIButton(type: .system)
+    private let exitHUDButton = UIButton(type: .system)
     private enum HostedAction: String {
-        case close, page, theme, boundRange, adjustmentRange, localAimCircleSize
+        case close, exitHUD, page, theme, boundRange, adjustmentRange, localAimCircleSize
         case localAimPreviewDistance, frameRate, warningRange, radarPlacement
         case backIndicator, playerWeaponMode, playerCountMode, playerInformationMode
         case playerField, localAimCircle, localAimPreviewField, materialEnabled
@@ -253,6 +260,12 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         closeButton.accessibilityLabel = "关闭菜单"
         closeButton.addTarget(self, action: #selector(closeMenu), for: .touchUpInside)
         view.addSubview(closeButton)
+        exitHUDButton.setTitle("退出 HUD", for: .normal)
+        exitHUDButton.accessibilityLabel = "退出 HUD 并注销悬浮窗口"
+        exitHUDButton.titleLabel?.font = font(15)
+        exitHUDButton.layer.cornerRadius = 6
+        exitHUDButton.addTarget(self, action: #selector(exitHUDTapped), for: .touchUpInside)
+        exitHUDButton.isHidden = !hostedExitAvailable
         rebuildMenu()
         configureLocalConsumers()
         CoreSetWeaponImageCatalog.prepare { [weak self] _ in
@@ -326,6 +339,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         panel.backgroundColor = gray(26, 250)
         panel.layer.borderColor = gray(50, 215).cgColor
         closeButton.setTitleColor(gray(255, 80), for: .normal)
+        exitHUDButton.frame = CGRect(x: 13, y: 485, width: 135, height: 44)
+        exitHUDButton.backgroundColor = accent.withAlphaComponent(0.22)
+        exitHUDButton.setTitleColor(gray(255, 80), for: .normal)
 
         let sidebar = UIView(frame: CGRect(x: 0, y: 0, width: 160, height: 535))
         sidebar.backgroundColor = gray(32, 240)
@@ -363,6 +379,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             sidebar.addSubview(button)
             registerHosted(button, .page)
         }
+        sidebar.addSubview(exitHUDButton)
+        registerHosted(exitHUDButton, .exitHUD)
         content.frame = CGRect(x: 170, y: 38, width: 658, height: 492)
         content.contentSize = CGSize(width: 658, height: 492)
         content.contentOffset = .zero
@@ -553,6 +571,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private func dispatchHostedButton(_ action: HostedAction, _ button: UIButton) -> Bool {
         switch action {
         case .close: guard !isClosing else { return false }; closeMenu()
+        case .exitHUD:
+            guard let onExitHUD else { return false }
+            onExitHUD()
         case .page: selectPage(button)
         case .theme: selectTheme(button)
         case .backIndicator: selectBackIndicator(button)
@@ -693,6 +714,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             dismiss(animated: true, completion: onClose)
         }
     }
+
+    @objc private func exitHUDTapped() { onExitHUD?() }
 
     private func canApply<Value: Equatable>(_ channel: CoreSetFeatureChannel<Value>) -> Bool {
         var current = channel

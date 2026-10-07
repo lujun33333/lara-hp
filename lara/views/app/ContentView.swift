@@ -1276,7 +1276,7 @@ final class CoreSetLauncherViewController: UIViewController, AVAudioPlayerDelega
 
     private func activateHomeMusicSession() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .default, options: AVAudioSession.CategoryOptions(rawValue: 1))
+        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         try session.setActive(true)
     }
 
