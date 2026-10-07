@@ -94,19 +94,30 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 @end
 @implementation CoreSetRemoteHostSide @end
 
+@interface CoreSetRemoteHostingAdapter ()
+- (BOOL)localSideObserved:(CoreSetRemoteHostSide *)side;
+- (BOOL)remoteSideObserved:(CoreSetRemoteHostSide *)side;
+@end
+
 @implementation CoreSetRemoteHostingAdapter {
     RemoteCall *_process;
     CoreSetRemoteHostSide *_menu;
     CoreSetRemoteHostSide *_draw;
     uint64_t _hostGeneration;
+    uint64_t _pendingHostGeneration;
     pid_t _pid;
     BOOL _busy;
     BOOL _loggedKernelNameFallback;
     uint64_t _observationSequence;
     BOOL _lastIdentityObserved;
+    CFAbsoluteTime _lastObservedAt;
+    dispatch_queue_t _readbackQueue;
 }
 - (instancetype)initWithRemoteCall:(RemoteCall *)remoteCall {
-    if ((self = [super init])) { _process = remoteCall; _pid = remoteCall.pid; }
+    if ((self = [super init])) {
+        _process = remoteCall; _pid = remoteCall.pid;
+        _readbackQueue = dispatch_queue_create("core-set.remote-readback", DISPATCH_QUEUE_SERIAL);
+    }
     return self;
 }
 - (uint64_t)hostGeneration { return _hostGeneration; }
@@ -131,14 +142,27 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     @synchronized (_process) {
         _observationSequence++;
         _lastIdentityObserved = [self identityValid];
-        return _lastIdentityObserved && _menu.observed && _draw.observed &&
+        const BOOL observed = _lastIdentityObserved && _menu.observed && _draw.observed &&
             [self sideObserved:_menu] && [self sideObserved:_draw];
+        _lastObservedAt = observed ? CFAbsoluteTimeGetCurrent() : 0;
+        return observed;
     }
 }
 - (void)prepareForHostGeneration:(uint64_t)generation {
     if (!NSThread.isMainThread || _busy || !generation) return;
-    if ((_menu || _draw) && !self.bothSurfacesObserved) return;
-    _hostGeneration = generation;
+    if (!_menu && !_draw) {
+        _hostGeneration = generation; _pendingHostGeneration = 0;
+        return;
+    }
+    const CFAbsoluteTime age = CFAbsoluteTimeGetCurrent() - _lastObservedAt;
+    if (_menu.observed && _draw.observed && age >= 0 && age <= 3.5 &&
+        [self localSideObserved:_menu] && [self localSideObserved:_draw]) {
+        _hostGeneration = generation; _pendingHostGeneration = 0;
+    } else {
+        // The host requests an async readback after its own generation changes.
+        // Until it completes, the adapter's old generation fails closed.
+        _pendingHostGeneration = generation;
+    }
 }
 - (NSString * _Nullable)sessionIdentityFailureReason {
     if (!_process) return @"RemoteCall 会话缺失";
@@ -183,17 +207,19 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     return failures.count ? [failures componentsJoinedByString:@"；"] : nil;
 }
 - (BOOL)identityValid { return self.sessionIdentityFailureReason == nil; }
-- (BOOL)sideObserved:(CoreSetRemoteHostSide *)side {
+- (BOOL)localSideObserved:(CoreSetRemoteHostSide *)side {
     if (!side || !side.source || !side.window || !side.layer || !side.windowLayer ||
         !side.context || !side.scene) {
         side.lastReadbackStep = @"local-handle-missing";
         return NO;
     }
-    if (![self identityValid]) { side.lastReadbackStep = @"identity"; return NO; }
     SEL contextSelector = NSSelectorFromString(@"_contextId");
     uint32_t current = [side.source respondsToSelector:contextSelector]
         ? ((uint32_t (*)(id, SEL))objc_msgSend)(side.source, contextSelector) : 0;
     if (current != side.context) { side.lastReadbackStep = @"local-context"; return NO; }
+    return YES;
+}
+- (BOOL)remoteSideObserved:(CoreSetRemoteHostSide *)side {
     uint64_t remoteScene = 0, remoteLayer = 0, remoteContext = 0;
     uint64_t parent = 0, hidden = 1;
     if (!CSMessage(_process, side.window, CSSel(_process, "windowScene"), 0, 0, &remoteScene)) {
@@ -218,6 +244,49 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     if ((hidden & 0xff) != 0) { side.lastReadbackStep = @"remote-hidden"; return NO; }
     side.lastReadbackStep = @"ok";
     return YES;
+}
+- (BOOL)sideObserved:(CoreSetRemoteHostSide *)side {
+    if (![self localSideObserved:side]) return NO;
+    if (![self identityValid]) { side.lastReadbackStep = @"identity"; return NO; }
+    return [self remoteSideObserved:side];
+}
+- (void)observeBothSurfacesAsync:(void (^)(BOOL, uint64_t))completion {
+    if (!completion) return;
+    if (!NSThread.isMainThread) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, 0); });
+        return;
+    }
+    const uint64_t generation = _pendingHostGeneration ? _pendingHostGeneration : _hostGeneration;
+    CoreSetRemoteHostSide *menu = _menu;
+    CoreSetRemoteHostSide *draw = _draw;
+    const BOOL localReady = !_busy && generation && menu.observed && draw.observed &&
+        [self localSideObserved:menu] && [self localSideObserved:draw];
+    if (!localReady) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, generation); });
+        return;
+    }
+    dispatch_async(_readbackQueue, ^{
+        BOOL observed = NO;
+        @synchronized (self->_process) {
+            self->_observationSequence++;
+            self->_lastIdentityObserved = [self identityValid];
+            observed = self->_lastIdentityObserved &&
+                [self remoteSideObserved:menu] && [self remoteSideObserved:draw];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            const BOOL current = !self->_busy &&
+                (self->_hostGeneration == generation || self->_pendingHostGeneration == generation) &&
+                self->_menu == menu && self->_draw == draw &&
+                menu.observed && draw.observed &&
+                [self localSideObserved:menu] && [self localSideObserved:draw];
+            if (observed && current && self->_pendingHostGeneration == generation) {
+                self->_hostGeneration = generation;
+                self->_pendingHostGeneration = 0;
+            }
+            self->_lastObservedAt = observed && current ? CFAbsoluteTimeGetCurrent() : 0;
+            completion(observed && current, generation);
+        });
+    });
 }
 - (BOOL)removeSide:(CoreSetRemoteHostSide *)side {
     if (!side) return YES;

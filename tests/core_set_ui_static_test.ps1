@@ -44,6 +44,7 @@ if ($source -match '本地菜单|游戏数据功能尚未接入') {
 $selectors = [regex]::Matches($source, '#selector\((\w+)')
 foreach ($selector in $selectors) {
     if ($selector.Groups[1].Value -notin @('selectPage','selectTheme','closeMenu','editLocalColor','selectPresetColor',
+        'hostedColorSliderChanged','hostedColorApplyTapped','hostedColorCancelTapped',
         'selectBackStyle','selectPreviewScene','selectMaterialCategory','toggleMaterialGroup','setAllMaterialGroups','selectFloatingColor',
         'togglePlayerField','changeBoundRange','changeAdjustmentRange','changeFrameRate','selectBackIndicator','selectPlayerWeaponMode','selectPlayerCountMode','selectPlayerInformationMode','toggleRadarField','changeRadarPlacement',
         'toggleMaterialEnabled','toggleHideWhileArmed','toggleCrateLevel','toggleVehicleStatus','toggleMetroArmor','toggleHideOpenedCrates',

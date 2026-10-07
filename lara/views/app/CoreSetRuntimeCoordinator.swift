@@ -189,8 +189,8 @@ final class CoreSetRuntimeCoordinator {
     // Read-only snapshot, not a second mutable configuration store.
     var featureState: CoreSetFeatureState { menu.featureState }
     var playerCanvas: (generation: UInt64, size: CGSize)? {
-        guard host.localSurfacesReady, let scene else { return nil }
-        let size = scene.coordinateSpace.bounds.size
+        guard host.localSurfacesReady else { return nil }
+        let size = host.logicalCanvasSize
         return size.width > 0 && size.height > 0 ? (host.generation, size) : nil
     }
     var playerStyleReady: Bool { playerConsumer?.availability == .ready }
@@ -575,18 +575,25 @@ final class CoreSetRuntimeCoordinator {
                 self.finishGameLaunch(epoch: epoch, error: "场景已失活，未发起游戏启动", completion: completion)
                 return
             }
+            guard self.host.armHostedInput() else {
+                self.restoreLocalAfterHostingFailure()
+                self.finishGameLaunch(epoch: epoch, error: "游戏内触控监听未就绪，已停止启动", completion: completion)
+                return
+            }
             NSLog("Core-SET: game launch epoch=%llu stage=open-url targetBundle=%@",
                   epoch, CoreSetGameTarget.bundleIdentifier)
             CoreSetGameTarget.openApplication { [weak self] result in
                 guard let self, self.gameLaunchCurrent(epoch) else { return }
                 switch result {
                 case .opened:
-                    let observed = self.host.crossApplicationHosted
-                    self.recordHostingDiagnostic("open-url-callback-opened", epoch: epoch,
-                                                 remoteDecision: observed ? 1 : 0)
-                    self.finishGameLaunch(epoch: epoch,
-                        error: observed ? nil : "游戏已打开，但跨应用窗口回读失效",
-                        completion: completion)
+                    self.host.confirmHostedReadbackAsync { [weak self] observed in
+                        guard let self, self.gameLaunchCurrent(epoch) else { return }
+                        self.recordHostingDiagnostic("open-url-callback-opened", epoch: epoch,
+                                                     remoteDecision: observed ? 1 : 0)
+                        self.finishGameLaunch(epoch: epoch,
+                            error: observed ? nil : "游戏已打开，但跨应用窗口回读失效",
+                            completion: completion)
+                    }
                 case .unavailable:
                     self.recordHostingDiagnostic("open-url-callback-unavailable", epoch: epoch)
                     self.restoreLocalAfterHostingFailure()
@@ -641,7 +648,8 @@ final class CoreSetRuntimeCoordinator {
     }
 
     private func hostChanged() {
-        if !stopping, host.localSurfacesReady, let scene,
+        if let canvas = playerCanvas { menu.syncRadarCanvas(canvas.size) }
+        if !stopping, host.localSurfacesReady,
            submittedGeneration != host.generation {
             if submittedGeneration != nil, !aimSuspendedForHost {
                 aimSuspendedForHost = true
@@ -666,10 +674,10 @@ final class CoreSetRuntimeCoordinator {
             // No game collector and no fabricated entities: exercise a real empty
             // CA frame. The host rejects stale generation/sequence on delivery.
             submittedGeneration = host.generation
-            let bounds = scene.coordinateSpace.bounds
-            if bounds.width > 0, bounds.height > 0 {
+            let canvasSize = host.logicalCanvasSize
+            if canvasSize.width > 0, canvasSize.height > 0 {
                 host.submitFrame(CoreSetRenderFrame(generation: host.generation, sequence: 1,
-                    canvasSize: bounds.size, commands: []))
+                    canvasSize: canvasSize, commands: []))
             }
         }
         menu.refreshConsumerAvailability()
@@ -703,7 +711,10 @@ final class CoreSetRuntimeCoordinator {
         let local = host.localSurfacesReady ? "本应用悬浮可用" : "本应用悬浮未就绪"
         let renderer = host.activeBackend == CoreSetHUDBackendMetal ? "Metal" : "CA"
         let frame = host.lastConsumedSequence > 0 ? "\(renderer) 本地帧已消费" : "\(renderer) 本地帧未确认"
-        let hosting = host.crossApplicationHosted ? "跨应用双面已回读" : "跨应用 unavailable"
+        // UI status uses the recent receipt while the background input monitor
+        // performs serialized readback. Launch gates still call the live readback.
+        let remoteHosted = host.recentCrossApplicationHosted
+        let hosting = remoteHosted ? "跨应用双面已回读" : "跨应用 unavailable"
         let cleanup = host.cleanupPending ? " · 清理待确认" : ""
         let launch = gameLaunchStatus.map { " · \($0)" } ?? ""
         launcher?.updateRuntimePresentation(menuVisible: host.panelVisible,
@@ -711,7 +722,7 @@ final class CoreSetRuntimeCoordinator {
         menu.updateRuntimeObservations(homeTelemetry.capture(
             hostReady: host.localSurfacesReady, panelVisible: host.panelVisible,
             cleanupPending: host.cleanupPending,
-            remoteHosted: host.crossApplicationHosted,
+            remoteHosted: remoteHosted,
             targetReadReady: playerConsumer?.availability == .ready))
     }
 

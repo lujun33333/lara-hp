@@ -8,6 +8,26 @@ typedef NS_ENUM(NSInteger, CoreSetHUDSurface) {
     CoreSetHUDSurfaceDraw,
 };
 
+typedef NS_ENUM(NSInteger, CoreSetHostedPointerPhase) {
+    CoreSetHostedPointerPhaseBegan = 0,
+    CoreSetHostedPointerPhaseMoved = 1,
+    CoreSetHostedPointerPhaseEnded = 2,
+    CoreSetHostedPointerPhaseCancelled = 3,
+};
+
+// Returns only controls registered with an explicit semantic consumer.
+// A rebuild changes revision and invalidates an in-flight pointer.
+@protocol CoreSetHostedMenuTapConsumer <NSObject>
+- (nullable NSString *)hostedControlIDAtPoint:(CGPoint)point
+    NS_SWIFT_NAME(hostedControlID(at:));
+- (BOOL)hostedControlAllowsDrag:(NSString *)identifier
+    NS_SWIFT_NAME(hostedControlAllowsDrag(_:));
+- (BOOL)handleHostedControlID:(NSString *)identifier phase:(CoreSetHostedPointerPhase)phase
+                      atPoint:(CGPoint)point
+    NS_SWIFT_NAME(handleHostedControl(_:phase:at:));
+@property(nonatomic, readonly) uint64_t hostedMenuRevision;
+@end
+
 // Integration may implement this with the application's existing RemoteCall.
 // Registration must return an observed result; a queued request is not success.
 // A failed registration must either leave no resource or allow unregister to
@@ -21,6 +41,9 @@ typedef NS_ENUM(NSInteger, CoreSetHUDSurface) {
 - (void)prepareForHostGeneration:(uint64_t)generation;
 - (BOOL)bothSurfacesObserved;
 - (uint64_t)hostGeneration;
+// Captures local UIKit context on the main thread, then verifies remote
+// mirrors on a serialized worker and completes on the main thread.
+- (void)observeBothSurfacesAsync:(void (^)(BOOL observed, uint64_t generation))completion;
 @end
 
 typedef struct CoreSetHUDStopResult {
@@ -33,7 +56,15 @@ typedef struct CoreSetHUDStopResult {
 @interface CoreSetHUDHost : NSObject
 @property(atomic, readonly) uint64_t generation;
 @property(nonatomic, readonly) BOOL localSurfacesReady;
+@property(nonatomic, readonly) CGSize logicalCanvasSize;
 @property(nonatomic, readonly) BOOL crossApplicationHosted;
+// Read-only short-lived receipt for UI status and hosted touch. No RemoteCall.
+@property(nonatomic, readonly) BOOL recentCrossApplicationHosted;
+// Registration only, not a physical-touch or UIKit action receipt.
+@property(nonatomic, readonly) BOOL hostedInputMonitorArmed;
+// Uses the next serialized background readback when the current receipt is
+// stale. Completion is on the main thread and tied to this host generation.
+- (void)confirmHostedReadbackAsync:(void (^)(BOOL observed))completion;
 // Cached local state only. Does not call the remote readback gate.
 - (NSString *)hostingDiagnosticSnapshot;
 @property(nonatomic, readonly) BOOL cleanupPending;
@@ -75,6 +106,9 @@ typedef struct CoreSetHUDStopResult {
     NS_SWIFT_NAME(installLocalMetalConsumer(_:));
 - (void)setPanelVisible:(BOOL)visible;
 - (void)setApplicationActive:(BOOL)active;
+// A passive HID observer: it does not intercept or consume the game's touches.
+// Must be armed on the main thread after both SpringBoard surfaces are observed.
+- (BOOL)armHostedInput;
 - (void)setFloatingColors:(NSArray<UIColor *> *)colors;
 // May be called from any thread. Frames are immutable; old generations and
 // non-increasing sequence numbers are discarded on the main thread.
