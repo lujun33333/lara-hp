@@ -386,6 +386,7 @@ final class CoreSetRuntimeCoordinator {
                 else { completion("前台触控校准未通过，已停止游戏启动") }
             }) else {
                 completion("无法启动前台触控校准，未建立系统窗口")
+                return
             }
             return
         }
