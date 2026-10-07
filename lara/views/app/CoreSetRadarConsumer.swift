@@ -27,13 +27,17 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
 
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
+        session.diagnosticLabel = "radar"
         probe = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
 
     var availability: CoreSetAvailability {
-        session.ready && session.capabilities == 1 && coordinator?.playerCanvas != nil
-            ? .ready : .unavailable(reason: "目标只读会话或本地绘制宿主未就绪")
+        guard session.ready && session.capabilities == 1 else {
+            return .unavailable(reason: session.lastConnectDiagnostic)
+        }
+        return coordinator?.playerCanvas != nil ? .ready :
+            .unavailable(reason: "本地绘制宿主未就绪")
     }
     var configurableFields: Set<CoreSetField> {
         return [.radarEnabled, .radarShowDistance, .radarDetectionDistance,

@@ -6,6 +6,7 @@
 #import <pthread.h>
 #import <stdlib.h>
 #import <string.h>
+#import <CoreFoundation/CoreFoundation.h>
 
 extern "C" kern_return_t mach_vm_read_overwrite(vm_map_read_t, mach_vm_address_t,
     mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
@@ -36,13 +37,21 @@ static const uint8_t CSUUID[16] = {
     uint64_t _base;
     uint64_t _generation;
     NSString *_path;
+    NSString *_diagnosticLabel;
+    NSString *_lastConnectDiagnostic;
+    NSString *_lastLoggedDiagnostic;
+    CFAbsoluteTime _lastDiagnosticLogTime;
 }
 @end
 
 @implementation CoreSetReadSession
 
 - (instancetype)init {
-    if ((self = [super init])) { _task = MACH_PORT_NULL; _pid = -1; _generation = 1; }
+    if ((self = [super init])) {
+        _task = MACH_PORT_NULL; _pid = -1; _generation = 1;
+        _diagnosticLabel = @"unassigned";
+        _lastConnectDiagnostic = @"尚未尝试连接目标只读会话";
+    }
     return self;
 }
 
@@ -60,6 +69,30 @@ static const uint8_t CSUUID[16] = {
 - (uint64_t)imageBase { @synchronized (self) { return _base; } }
 - (int32_t)processID { @synchronized (self) { return _pid; } }
 - (uint64_t)capabilities { return self.ready ? UINT64_C(1) : 0; }
+- (NSString *)diagnosticLabel { @synchronized (self) { return [_diagnosticLabel copy]; } }
+- (void)setDiagnosticLabel:(NSString *)value {
+    @synchronized (self) {
+        NSString *trimmed = [value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        _diagnosticLabel = trimmed.length ? [trimmed copy] : @"unassigned";
+    }
+}
+- (NSString *)lastConnectDiagnostic {
+    @synchronized (self) { return [_lastConnectDiagnostic copy] ?: @"目标只读会话状态未知"; }
+}
+
+- (void)publishConnectDiagnostic:(NSString *)diagnostic ready:(BOOL)ready {
+    NSString *value = diagnostic.length ? diagnostic : @"目标只读会话状态未知";
+    const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    const BOOL changed = ![_lastConnectDiagnostic isEqualToString:value];
+    _lastConnectDiagnostic = [value copy];
+    if (changed || !_lastLoggedDiagnostic || now - _lastDiagnosticLogTime >= 30.0) {
+        _lastLoggedDiagnostic = [value copy];
+        _lastDiagnosticLogTime = now;
+        NSLog(@"Core-SET: target-read lane=%@ stage=connect ready=%d generation=%llu reason=%@",
+              _diagnosticLabel ?: @"unassigned", ready ? 1 : 0,
+              (unsigned long long)_generation, value);
+    }
+}
 
 + (NSString *)pathForPID:(int)pid {
     typedef int (*proc_pidpath_fn)(int, void *, uint32_t);
@@ -146,38 +179,82 @@ static const uint8_t CSUUID[16] = {
 
 - (BOOL)connect {
     @synchronized (self) {
-        if ([self identityStillValid:YES]) return YES;
+        if ([self identityStillValid:YES]) {
+            [self publishConnectDiagnostic:[NSString stringWithFormat:@"ready pid=%d base=0x%llx profile=1 uuid=1",
+                _pid, (unsigned long long)_base] ready:YES];
+            return YES;
+        }
         CoreSetReadCleanupResult *cleanup = [self disconnect];
-        if (!cleanup.taskPortReleased || _generation == UINT64_MAX) return NO;
+        if (!cleanup.taskPortReleased || _generation == UINT64_MAX) {
+            [self publishConnectDiagnostic:@"cleanup-or-generation-failed" ready:NO]; return NO;
+        }
         int pids[4096] = {0};
         int count = proc_listallpids(pids, sizeof(pids));
-        if (count <= 0) return NO;
+        if (count <= 0) {
+            [self publishConnectDiagnostic:[NSString stringWithFormat:@"proc-list-failed count=%d", count]
+                                     ready:NO];
+            return NO;
+        }
         count = MIN(count, (int)(sizeof(pids) / sizeof(pids[0])));
+        BOOL sawProcess = NO, sawPath = NO, sawProfile = NO, sawTask = NO, sawPID = NO;
+        BOOL readSymbolAvailable = NO;
+        kern_return_t lastTaskResult = KERN_FAILURE;
+        NSString *lastProfile = nil;
         for (int index = 0; index < count; ++index) {
             int pid = pids[index];
             if (pid <= 0) continue;
             char name[64] = {0};
             if (proc_name(pid, name, sizeof(name)) <= 0 || strcmp(name, CSProcessName) != 0) continue;
+            sawProcess = YES;
             NSString *path = [CoreSetReadSession pathForPID:pid];
+            if (!path) continue;
+            sawPath = YES;
+            NSString *appPath = [path stringByDeletingLastPathComponent];
+            NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:
+                [appPath stringByAppendingPathComponent:@"Info.plist"]];
+            lastProfile = [NSString stringWithFormat:@"bundle=%@ version=%@ build=%@",
+                info[@"CFBundleIdentifier"] ?: @"nil",
+                info[@"CFBundleShortVersionString"] ?: @"nil",
+                info[@"CFBundleVersion"] ?: @"nil"];
             if (![CoreSetReadSession profileMatchesPath:path]) continue;
+            sawProfile = YES;
             task_t task = MACH_PORT_NULL;
             typedef kern_return_t (*task_read_for_pid_fn)(mach_port_t, int, mach_port_t *);
             task_read_for_pid_fn readForPID = (task_read_for_pid_fn)dlsym(RTLD_DEFAULT, "task_read_for_pid");
+            readSymbolAvailable = readForPID != NULL;
             kern_return_t kr = readForPID ? readForPID(mach_task_self(), pid, &task) : KERN_FAILURE;
+            lastTaskResult = kr;
             if (kr != KERN_SUCCESS || task == MACH_PORT_NULL) {
                 if (task != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), task);
                 continue;
             }
+            sawTask = YES;
             int verifiedPID = -1;
             if (pid_for_task(task, &verifiedPID) != KERN_SUCCESS || verifiedPID != pid) {
                 mach_port_deallocate(mach_task_self(), task); continue;
             }
+            sawPID = YES;
             uint64_t base = [CoreSetReadSession findImageInTask:task];
             if (!base) { mach_port_deallocate(mach_task_self(), task); continue; }
             _task = task; _pid = pid; _base = base; _path = [path copy];
-            if ([self identityStillValid:YES]) { ++_generation; return YES; }
+            if ([self identityStillValid:YES]) {
+                ++_generation;
+                [self publishConnectDiagnostic:[NSString stringWithFormat:@"ready pid=%d base=0x%llx profile=1 uuid=1",
+                    _pid, (unsigned long long)_base] ready:YES];
+                return YES;
+            }
             [self disconnect];
         }
+        NSString *reason = nil;
+        if (!sawProcess) reason = @"process-not-found name=ShadowTrackerExtra";
+        else if (!sawPath) reason = @"process-path-unavailable";
+        else if (!sawProfile) reason = [NSString stringWithFormat:@"profile-mismatch expected=1.38.12/15915 actual={%@}",
+            lastProfile ?: @"unreadable"];
+        else if (!readSymbolAvailable) reason = @"task-read-symbol-missing";
+        else if (!sawTask) reason = [NSString stringWithFormat:@"task-read-denied kr=0x%x", lastTaskResult];
+        else if (!sawPID) reason = @"task-port-pid-verification-failed";
+        else reason = @"main-image-or-uuid-not-found expected=34b785b2-0dab-3992-985d-359e6bf45585";
+        [self publishConnectDiagnostic:reason ready:NO];
         return NO;
     }
 }

@@ -15,6 +15,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) uint64_t imageBase;
 @property(nonatomic, readonly) int32_t processID;
 @property(nonatomic, readonly) uint64_t capabilities; // Bit 0 = read; no other bits are defined.
+// Short lane name used only by transition/throttled diagnostics.
+@property(nonatomic, copy) NSString *diagnosticLabel;
+// Latest exact connect boundary. This is suitable for unavailable UI text and
+// never implies that a request or render receipt has succeeded.
+@property(nonatomic, copy, readonly) NSString *lastConnectDiagnostic;
 
 // Only ShadowTrackerExtra 1.38.12/build 15915/LC_UUID 34b785b2... is accepted.
 // An unavailable task_read_for_pid port leaves this session unavailable; there is no

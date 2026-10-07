@@ -661,8 +661,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         let title = sender.accessibilityLabel ?? sender.currentTitle ?? "该控件"
         let reason = sender.accessibilityHint ?? "功能尚未接入，未执行操作"
         showConfigurationFeedback("\(title)：尚未生效；\(reason)")
-        NSLog("Core-SET: hosted input stage=unavailable control=%@ configured=0 confirmed=0",
-              hostedDispatchControlID ?? "UIKit")
+        NSLog("Core-SET: hosted input stage=unavailable control=%@ configured=0 confirmed=0 reason=%@",
+              hostedDispatchControlID ?? "UIKit", reason)
     }
 
     // Keep unsupported actions fail-closed, while both UIKit and hosted input
@@ -919,9 +919,16 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 case .applied, .failed: break
                 }
                 let channel = self.featureState[keyPath: path]
-                NSLog("Core-SET: hosted input stage=actual control=%@ capability=%@ confirmed=%d",
+                let result: String
+                switch outcome {
+                case .applied: result = "applied"
+                case .notApplied(let reason): result = "notApplied:\(reason)"
+                case .unavailable(let reason): result = "unavailable:\(reason)"
+                case .failed(let reason): result = "failed:\(reason)"
+                }
+                NSLog("Core-SET: hosted input stage=actual control=%@ capability=%@ confirmed=%d result=%@",
                       hostedSource, channel.capability.rawValue,
-                      channel.isDesiredConfirmed ? 1 : 0)
+                      channel.isDesiredConfirmed ? 1 : 0, result)
                 if channel.isDesiredConfirmed { self.showConfigurationFeedback("配置已获消费者回执") }
                 else if case .unavailable(let reason) = channel.availability {
                     self.showConfigurationFeedback("配置已记录；尚未生效：\(reason)")

@@ -12,6 +12,7 @@ typedef struct __IOHIDEvent *CoreSetIOHIDEventRef;
 typedef struct __IOHIDService *CoreSetIOHIDServiceRef;
 typedef struct __IOHIDEventSystemClient *CoreSetIOHIDEventSystemClientRef;
 typedef uint32_t (*CoreSetHIDEventGetType)(CoreSetIOHIDEventRef);
+typedef CFArrayRef (*CoreSetHIDEventGetChildren)(CoreSetIOHIDEventRef);
 
 @interface CoreSetAXEventPath : NSObject
 @property(nonatomic, readonly) unsigned char pathIdentity;
@@ -188,6 +189,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     void *_backBoardHandle;
     BOOL _bkInputRegistered;
     CoreSetHIDEventGetType _hidEventGetType;
+    CoreSetHIDEventGetChildren _hidEventGetChildren;
     BOOL _hidCanUnschedule;
     dispatch_queue_t _pendingTouchSerialQueue;
     coreset_pending_touch::PendingTouchQueue _pendingTouchActions;
@@ -204,6 +206,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     std::atomic_uint_fast64_t _axHandMissing;
     std::atomic_uint_fast64_t _axPathsMissing;
     std::atomic_uint_fast64_t _axException;
+    std::atomic_uint_fast64_t _axChildRecovered;
+    std::atomic_uint_fast64_t _axChildUnavailable;
     int64_t _touchPointerID;
     NSString *_touchControlID;
     uint64_t _touchMenuRevision;
@@ -237,6 +241,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         _hidTypeVendor.store(0); _hidTypeDigitizer.store(0); _hidTypeOther.store(0);
         _axClassMissing.store(0); _axFactoryNil.store(0);
         _axHandMissing.store(0); _axPathsMissing.store(0); _axException.store(0);
+        _axChildRecovered.store(0); _axChildUnavailable.store(0);
         _pendingTouchGeneration.store(1);
         _pendingTouchActions.reset(1);
         _pendingTouchSerialQueue = dispatch_queue_create("com.coldcheat.simtouch", DISPATCH_QUEUE_SERIAL);
@@ -757,7 +762,40 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         CoreSetAXEvent *representation = ((id (*)(id, SEL, CoreSetIOHIDEventRef, NSString *))objc_msgSend)(
             eventClass, @selector(representationWithHIDEvent:hidStreamIdentifier:),
             event, @"UIApplicationEvents");
-        if (!representation) { CoreSetLogAXDrop("factory-nil", &_axFactoryNil); return; }
+        CFIndex childCount = 0;
+        uint64_t digitizerChildren = 0;
+        if (!representation && _hidEventGetChildren) {
+            CFArrayRef children = _hidEventGetChildren(event);
+            if (children && CFGetTypeID(children) == CFArrayGetTypeID()) {
+                childCount = MIN(CFArrayGetCount(children), (CFIndex)64);
+                for (CFIndex index = 0; index < childCount; ++index) {
+                    CoreSetIOHIDEventRef child = (CoreSetIOHIDEventRef)CFArrayGetValueAtIndex(children, index);
+                    if (!child) continue;
+                    const uint32_t childType = _hidEventGetType ? _hidEventGetType(child) : UINT32_MAX;
+                    if (childType == 11) ++digitizerChildren;
+                    CoreSetAXEvent *candidate = ((id (*)(id, SEL, CoreSetIOHIDEventRef, NSString *))objc_msgSend)(
+                        eventClass, @selector(representationWithHIDEvent:hidStreamIdentifier:),
+                        child, @"UIApplicationEvents");
+                    if (candidate) { representation = candidate; break; }
+                }
+            }
+        }
+        if (!representation) {
+            const uint64_t count = _axFactoryNil.fetch_add(1) + 1;
+            _axChildUnavailable.fetch_add(1);
+            if (count == 1 || count % 64 == 0)
+                NSLog(@"Core-SET: hosted input stage=ax-drop reason=factory-nil count=%llu eventType=%u children=%ld digitizerChildren=%llu",
+                      (unsigned long long)count, eventType, (long)childCount,
+                      (unsigned long long)digitizerChildren);
+            return;
+        }
+        if (childCount > 0) {
+            const uint64_t recovered = _axChildRecovered.fetch_add(1) + 1;
+            if (recovered == 1 || recovered % 64 == 0)
+                NSLog(@"Core-SET: hosted input stage=ax-child-recover count=%llu eventType=%u children=%ld digitizerChildren=%llu",
+                      (unsigned long long)recovered, eventType, (long)childCount,
+                      (unsigned long long)digitizerChildren);
+        }
         CoreSetAXEventHand *hand = representation.handInfo;
         if (!hand || ![hand respondsToSelector:@selector(paths)]) {
             CoreSetLogAXDrop("hand-missing", &_axHandMissing); return;
@@ -861,6 +899,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         "/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
     _hidEventGetType = _ioKitHandle ? (CoreSetHIDEventGetType)dlsym(
         _ioKitHandle, "IOHIDEventGetType") : NULL;
+    _hidEventGetChildren = _ioKitHandle ? (CoreSetHIDEventGetChildren)dlsym(
+        _ioKitHandle, "IOHIDEventGetChildren") : NULL;
     _hidCanUnschedule = _ioKitHandle && dlsym(
         _ioKitHandle, "IOHIDEventSystemClientUnscheduleWithRunLoop");
     if (gCoreSetDormantHIDClient) {
@@ -875,6 +915,24 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         _bkInputRegistered = YES;
         gCoreSetHostedInputOwner = self;
         _inputArmed.store(true);
+        return YES;
+    }
+    // Prefer the same process-scoped BackBoard source used by the working WZ
+    // host. On iOS 26 the generic IOHID client can deliver type-1 vendor
+    // wrappers that AXEventRepresentation rejects before a touch is decoded.
+    if (!_backBoardHandle) _backBoardHandle = dlopen(
+        "/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices",
+        RTLD_NOW | RTLD_GLOBAL);
+    typedef void *(*RegisterBK)(void (*)(void *, void *, CoreSetIOHIDServiceRef, CoreSetIOHIDEventRef));
+    RegisterBK registerBK = _backBoardHandle ? (RegisterBK)dlsym(
+        _backBoardHandle, "BKSHIDEventRegisterEventCallback") : NULL;
+    if (registerBK) {
+        (void)registerBK(CoreSetHostedHIDCallback);
+        gCoreSetBKCallbackInstalled = YES;
+        _bkInputRegistered = YES;
+        gCoreSetHostedInputOwner = self;
+        _inputArmed.store(true);
+        NSLog(@"Core-SET: hosted input monitor source-select preferred=BKSHID fallback=IOHID");
         return YES;
     }
     typedef CoreSetIOHIDEventSystemClientRef (*Create)(CFAllocatorRef);
@@ -896,26 +954,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
             return YES;
         }
     }
-    // WZ compatibility tier: BKSHID registration is process-scoped and has
-    // no unregister. The weak owner and armed bit make later callbacks inert.
-    if (!_backBoardHandle) _backBoardHandle = dlopen(
-        "/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices",
-        RTLD_NOW | RTLD_GLOBAL);
-    typedef void *(*RegisterBK)(void (*)(void *, void *, CoreSetIOHIDServiceRef, CoreSetIOHIDEventRef));
-    RegisterBK registerBK = _backBoardHandle ? (RegisterBK)dlsym(
-        _backBoardHandle, "BKSHIDEventRegisterEventCallback") : NULL;
-    if (!gCoreSetBKCallbackInstalled && !registerBK) {
-        NSLog(@"Core-SET: hosted input monitor armed=0 reason=IOHID-and-BK-unavailable");
-        return NO;
-    }
-    if (!gCoreSetBKCallbackInstalled) {
-        (void)registerBK(CoreSetHostedHIDCallback);
-        gCoreSetBKCallbackInstalled = YES;
-    }
-    _bkInputRegistered = YES;
-    gCoreSetHostedInputOwner = self;
-    _inputArmed.store(true);
-    return YES;
+    NSLog(@"Core-SET: hosted input monitor armed=0 reason=IOHID-and-BK-unavailable");
+    return NO;
 }
 - (void)requestHostedReadback {
     if (!NSThread.isMainThread || !_running ||

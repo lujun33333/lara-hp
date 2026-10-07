@@ -27,6 +27,7 @@ final class CoreSetAimPreviewConsumer {
 
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
+        session.diagnosticLabel = "aim-preview"
         probe = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }

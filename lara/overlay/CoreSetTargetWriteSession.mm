@@ -52,6 +52,7 @@
 - (instancetype)initWithRequestAuthority:(id<CoreSetTargetWriteAuthority> _Nullable)authority {
     if ((self = [super init])) {
         _readSession = [[CoreSetReadSession alloc] init];
+        _readSession.diagnosticLabel = @"target-write";
         _backend = [[CoreSetMappedPageWriteBackend alloc] initWithReadSession:_readSession];
         _authority = authority;
         _generation = 1;

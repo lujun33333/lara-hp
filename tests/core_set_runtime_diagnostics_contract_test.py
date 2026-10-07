@@ -1,0 +1,104 @@
+"""Runtime transport/input diagnostics contracts; source only, no device claim."""
+
+from pathlib import Path
+import re
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(relative: str) -> str:
+    return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def body(source: str, signature: str) -> str:
+    start = source.index(signature)
+    opening = source.index("{", start)
+    depth = 1
+    for position in range(opening + 1, len(source)):
+        if source[position] == "{":
+            depth += 1
+        elif source[position] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1:position]
+    raise AssertionError("unterminated body: " + signature)
+
+
+header = read("lara/overlay/CoreSetReadSession.h")
+session = read("lara/overlay/CoreSetReadSession.mm")
+assert "diagnosticLabel" in header and "lastConnectDiagnostic" in header
+assert "Only ShadowTrackerExtra 1.38.12/build 15915" in header
+connect = body(session, "- (BOOL)connect")
+for stage in (
+    "process-not-found", "process-path-unavailable", "profile-mismatch",
+    "task-read-symbol-missing", "task-read-denied",
+    "task-port-pid-verification-failed", "main-image-or-uuid-not-found",
+    "ready pid=",
+):
+    assert stage in connect, stage
+for gate in (
+    'strcmp(name, CSProcessName) != 0', "profileMatchesPath:path",
+    'dlsym(RTLD_DEFAULT, "task_read_for_pid")', "pid_for_task(task",
+    "findImageInTask:task", "identityStillValid:YES",
+):
+    assert gate in connect, gate
+publish = body(session, "- (void)publishConnectDiagnostic:")
+assert "changed || !_lastLoggedDiagnostic || now - _lastDiagnosticLogTime >= 30.0" in publish
+assert "target-read lane=%@ stage=connect ready=%d" in publish
+
+labels = {
+    "lara/views/app/CoreSetPlayerConsumer.swift": "player",
+    "lara/views/app/CoreSetMaterialConsumer.swift": "materials",
+    "lara/views/app/CoreSetRadarConsumer.swift": "radar",
+    "lara/views/app/CoreSetAimPreviewConsumer.swift": "aim-preview",
+}
+for relative, label in labels.items():
+    source = read(relative)
+    assert f'session.diagnosticLabel = "{label}"' in source
+    if "var availability:" in source:
+        assert "session.lastConnectDiagnostic" in body(source, "var availability:")
+assert '_readSession.diagnosticLabel = @"target-write"' in read(
+    "lara/overlay/CoreSetTargetWriteSession.mm"
+)
+
+menu = read("lara/views/app/CoreSetMenuViewController.swift")
+explain = body(menu, "@objc private func explainUnavailable")
+assert "reason=%@" in explain and "configured=0 confirmed=0" in explain
+apply_menu = body(menu, "private func applyGame<")
+assert "confirmed=%d result=%@" in apply_menu
+for result in ("applied", "notApplied:", "unavailable:", "failed:"):
+    assert result in apply_menu
+
+host = read("lara/overlay/CoreSetHUDHost.mm")
+implementation = host[host.index("@implementation CoreSetHUDHost {"):]
+receive = body(implementation, "- (void)receiveHostedHIDEvent:")
+for contract in (
+    "IOHIDEventGetChildren", "CFArrayGetCount", "digitizerChildren",
+    "ax-child-recover", "eventType=%u children=%ld",
+):
+    assert contract in host if contract == "IOHIDEventGetChildren" else contract in receive
+monitor = body(implementation, "- (BOOL)startInputMonitor")
+assert monitor.index("if (registerBK)") < monitor.index("if (create && reg && schedule)")
+assert "preferred=BKSHID fallback=IOHID" in monitor
+assert "_inputArmed.store(true)" in monitor
+
+build = read("scripts/build_ipa_pe.sh")
+for contract in (
+    '"gameConsumer": "CoreSetReadSession read-only HUD lanes"',
+    '"targetVersion": "1.38.12/build15915/UUID34b785b2-0dab-3992-985d-359e6bf45585"',
+    '"transportPolicy": "strict-target-read-only"',
+    '"writeFeaturesEnabled": false',
+):
+    assert contract in build, contract
+assert '"writeFeaturesEnabled": true' not in build
+
+# Negative controls: silently removing a target boundary or preferring the
+# observed-broken IOHID path must make this test logic reject the source.
+for missing in ("task-read-denied", "main-image-or-uuid-not-found", "ax-child-recover"):
+    combined = session + host
+    assert missing in combined
+    assert missing not in combined.replace(missing, "REMOVED", 1)
+
+print("PASS: target read stages, consumer labels, truthful manifest, BK-first and child-event diagnostics")
+print("LIMIT: source contract only; requires a fresh device log for runtime closure")

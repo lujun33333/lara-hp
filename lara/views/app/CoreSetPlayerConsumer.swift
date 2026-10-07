@@ -24,13 +24,14 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
 
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
+        session.diagnosticLabel = "player"
         probe = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
 
     var availability: CoreSetAvailability {
         guard session.ready && session.capabilities == 1 else {
-            return .unavailable(reason: "目标 build/UUID 的只读会话未就绪")
+            return .unavailable(reason: session.lastConnectDiagnostic)
         }
         return coordinator?.playerCanvas != nil ? .ready :
             .unavailable(reason: "本地绘制画布未就绪")

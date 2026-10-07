@@ -104,8 +104,10 @@ assert "_menuWindow.userInteractionEnabled = YES" in host
 assert "CGRectInset(" in body(host, "- (void)layoutSurfaces")
 ax_callback = body(host[host.index("@implementation CoreSetHUDHost {") :],
                    "- (void)receiveHostedHIDEvent:")
-for reason in ("factory-nil", "hand-missing", "paths-missing", "exception"):
+for reason in ("hand-missing", "paths-missing", "exception"):
     assert f'CoreSetLogAXDrop("{reason}"' in ax_callback
+assert "reason=factory-nil count=%llu eventType=%u children=%ld digitizerChildren=%llu" in ax_callback
+assert "IOHIDEventGetChildren" in host and "ax-child-recover" in ax_callback
 assert 'stage=ax-drop reason=%s count=%llu' in host
 assert not re.search(r"NSLog\([^;]*point\.[xy]", ax_callback, re.S)
 assert "[self invalidatePendingTouchActions]" in ax_callback
