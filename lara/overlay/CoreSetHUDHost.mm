@@ -2,8 +2,19 @@
 #import <QuartzCore/QuartzCore.h>
 #include <cmath>
 
+// Match the source-window tier used by the working WZ dual-window host and
+// by the SpringBoard mirrors in CoreSetRemoteHostingAdapter.
+static const double kCoreSetHUDWindowLevel = 10000009.0;
+
 @interface CoreSetDrawWindow : UIWindow @end
 @implementation CoreSetDrawWindow
++ (BOOL)_isSystemWindow { return YES; }
+- (BOOL)_isSecure { return NO; }
+- (BOOL)_canBecomeKeyWindow { return YES; }
+- (BOOL)_isApplicationKeyWindow { return NO; }
+- (BOOL)_isWindowServerHostingManaged { return NO; }
+- (BOOL)_ignoresHitTest { return YES; }
+- (BOOL)_shouldCreateContextAsSecure { return NO; }
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event { (void)point; (void)event; return nil; }
 @end
 
@@ -13,6 +24,13 @@
 @property(nonatomic, copy) NSArray<UIView *> * (^contentHitRegions)(void);
 @end
 @implementation CoreSetMenuWindow
++ (BOOL)_isSystemWindow { return YES; }
+- (BOOL)_isSecure { return NO; }
+- (BOOL)_canBecomeKeyWindow { return YES; }
+- (BOOL)_isApplicationKeyWindow { return NO; }
+- (BOOL)_isWindowServerHostingManaged { return NO; }
+- (BOOL)_ignoresHitTest { return NO; }
+- (BOOL)_shouldCreateContextAsSecure { return NO; }
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     if (!self.rootViewController) return nil;
     // UIKit color sheets/pickers are local modal UI, not game touch transport.
@@ -210,8 +228,8 @@
     _foreground = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
     _drawWindow = [[CoreSetDrawWindow alloc] initWithWindowScene:scene];
     _menuWindow = [[CoreSetMenuWindow alloc] initWithWindowScene:scene];
-    _drawWindow.windowLevel = UIWindowLevelAlert + 1;
-    _menuWindow.windowLevel = UIWindowLevelAlert + 2;
+    _drawWindow.windowLevel = kCoreSetHUDWindowLevel;
+    _menuWindow.windowLevel = kCoreSetHUDWindowLevel + 1.0;
     _drawWindow.backgroundColor = _menuWindow.backgroundColor = UIColor.clearColor;
     UIViewController *drawRoot = [UIViewController new];
     drawRoot.view.backgroundColor = UIColor.clearColor;
