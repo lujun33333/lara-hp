@@ -657,6 +657,12 @@ if grep -Fxq -- /usr/lib/swift <<<"$MAIN_RPATHS_BEFORE"; then
         || die "无法删除 Xcode 自动注入的 /usr/lib/swift LC_RPATH"
 fi
 MAIN_DYLIB_LOADS="$(xcrun otool -L "$BIN" | tail -n +2 | awk '{print $1}')"
+for required_private_framework in \
+    /System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard \
+    /System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices; do
+    grep -Fxq -- "$required_private_framework" <<<"$MAIN_DYLIB_LOADS" \
+        || die "最终主 Mach-O 缺少 Core 1.7 固定依赖：$required_private_framework"
+done
 SYSTEM_SWIFT_LOADS="$(grep -E '^/usr/lib/swift/libswift[^/]*\.dylib$' \
     <<<"$MAIN_DYLIB_LOADS" || true)"
 NON_SYSTEM_SWIFT_LOADS="$(grep -E '(^|/)libswift[^/]*\.dylib$' \

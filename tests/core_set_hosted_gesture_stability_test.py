@@ -11,6 +11,8 @@ host = read("lara/overlay/CoreSetHUDHost.mm")
 owner = read("lara/views/app/CoreSetRuntimeCoordinator.swift")
 app = read("lara/lara.swift")
 plist = read("lara/Info.plist")
+project = read("lara.xcodeproj/project.pbxproj")
+packaging = read("scripts/build_ipa_pe.sh")
 metal = read("lara/overlay/CoreSetMetalRenderAdapter.mm")
 imgui = read("lara/third_party/imgui/imgui.h")
 
@@ -55,6 +57,13 @@ for token in (
     assert token in adapter, token
 for forbidden in ("CALayerHost", "RemoteCall", "remote_getClass", "doRemoteCall"):
     assert forbidden not in adapter, forbidden
+for token in (
+    '"-Wl,-needed_framework,FrontBoard"',
+    '"-Wl,-needed_framework,FrontBoardServices"',
+    "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard",
+    "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices",
+):
+    assert token in project + packaging, token
 
 for token in (
     'UIImage imageNamed:@"CoreSetLoading"',

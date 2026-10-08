@@ -597,6 +597,9 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-Wl,-headerpad_max_install_names",
+					"-F$(SDKROOT)/System/Library/PrivateFrameworks",
+					"-Wl,-needed_framework,FrontBoard",
+					"-Wl,-needed_framework,FrontBoardServices",
 					"-Wl,-force_load,$(SRCROOT)/build/static-ios/libxpf.a",
 					"-Wl,-force_load,$(SRCROOT)/build/static-ios/libgrabkernel2.a",
 					-lcompression,
@@ -648,6 +651,9 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-Wl,-headerpad_max_install_names",
+					"-F$(SDKROOT)/System/Library/PrivateFrameworks",
+					"-Wl,-needed_framework,FrontBoard",
+					"-Wl,-needed_framework,FrontBoardServices",
 					"-Wl,-force_load,$(SRCROOT)/build/static-ios/libxpf.a",
 					"-Wl,-force_load,$(SRCROOT)/build/static-ios/libgrabkernel2.a",
 					-lcompression,
