@@ -112,6 +112,10 @@ def current_source_evidence(sources: dict[str, str], swift_sources: dict[str, st
     evidence = {
         "home_state": [site("state", "var runMode: CoreSetRunMode?"), site("state", "var coverMode: CoreSetCoverMode?")],
         "home_refusal": [site("menu", "home.runMode：未提供同义"), site("menu", "home.coverMode：未提供")],
+        "home_action_binding": [site("menu", "var onHomeAction:"), site("menu", "startHomeKernelAction"),
+                                site("menu", "startHomeInformationAction"), site("coordinator", "menu.onHomeAction ="),
+                                site("coordinator", "recordHomeAction(.kernelAction"),
+                                site("coordinator", "recordHomeAction(.informationAction")],
         "kernel_call": [site("coordinator", "manager.run"), site("manager", "let result = ds_run()"),
                         site("manager", "let success = result == 0 && ds_is_ready()"),
                         site("dark_sword_api", "typedef void (*ds_progress_callback_t)(double progress);")],
@@ -139,9 +143,9 @@ def current_source_evidence(sources: dict[str, str], swift_sources: dict[str, st
                     "C+12c int32 0/1 real non-menu resource/scheduler consumer and switch/restore observation"),
         "v17-001": ("configuration + refused menu", ["home_state", "home_refusal"],
                     "C+2f bool + C+130 int32; global/in-game/off occlusion owner, off preserves prior mode, actual reset/stop result"),
-        "v17-002": ("laramgr.run -> ds_run Bool + global fraction callback", ["kernel_call"],
+        "v17-002": ("bound local action: menu -> coordinator request lifecycle -> laramgr.run -> ds_run", ["home_action_binding", "kernel_call"],
                     "4f00 gates and native token; 63a4 workflow; 6938 matching-token watchdog 240s timeout/20s stagnant counter; completed/failure cleanup parity"),
-        "v17-003": ("current-device kernelcache/offset parsing", ["kernel_cache_call"],
+        "v17-003": ("bound local action: menu -> coordinator request lifecycle -> current-device kernelcache/offset parsing", ["home_action_binding", "kernel_cache_call"],
                     "538c host gate; nonempty named input -> 609a8 tuple -> 6cc8 0x288 information -> 60358 validation -> 648ac publish; info status1/2/3 and rollback"),
         "v17-005": ("native-ready + Partial final Bool; not original environment", ["kernel_call", "range_fetch", "observation_boundary"],
                     "5f14 same support classification + QXA107 phase/inFlight/ready composite environment, UTF8<=63 bytes"),
@@ -169,7 +173,8 @@ def current_source_evidence(sources: dict[str, str], swift_sources: dict[str, st
             "points": [{"id": point, "reference_evidence_key": "native-v17/" + point,
                         "current_candidate": candidate, "caller_evidence_keys": keys,
                         "missing_same_meaning_interface": requirement, "receipt_constraints": common,
-                        "producer_bound": False, "original_runtime_receipt_verified": False}
+                        "producer_bound": point in {"v17-002", "v17-003"},
+                        "original_runtime_receipt_verified": False}
                        for point, (candidate, keys, requirement) in points.items()]}
 
 

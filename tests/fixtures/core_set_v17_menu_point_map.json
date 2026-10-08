@@ -216,6 +216,18 @@
         "stop": "NOT PROVIDED; downstream requirement per point"
       }
     },
+    "home_action_local": {
+      "source": "lara/views/app/CoreSetRuntimeCoordinator.swift",
+      "producer": "button -> typed local action owner -> requested/running/completed-or-failed receipt",
+      "receipt": "matching local producer epoch/request/sequence plus live DarkSword or kernelcache-offset result",
+      "scope": "local action is wired; original Core v1.7 token/watchdog and named-information lifecycle remain unverified",
+      "runtime_device_verified": false,
+      "lifecycle": {
+        "start": "startHomeKernelAction/startHomeInformationAction -> onHomeAction",
+        "update": "coordinator publishes typed action phase and refreshes live home observation",
+        "stop": "terminal action receipt clears local request; original cancellation/rollback parity remains unresolved"
+      }
+    },
     "missing_aim": {
       "source": "lara/views/app/CoreSetAimConsumer.swift",
       "producer": "apply",
@@ -229,16 +241,16 @@
       },
       "reference_evidence": "sol-e20-recoil-state-table-evidence.md; native function slices action_worker/aim_geometry/derive_scene; static only"
     },
-    "missing_recoil": {
+    "recoil": {
       "source": "lara/views/app/CoreSetRecoilConsumer.swift",
-      "producer": "apply",
-      "receipt": "typed configurableFields retained; supportedFields empty; apply returns notApplied; no audited formula/action consumer",
-      "scope": "fail-closed original recoil",
+      "producer": "apply -> shared CoreSetAimConsumer serial action worker -> final battle snapshot -> c416c/c571c/c2d34 merge -> checked slot write",
+      "receipt": "single-attempt checked write plus immediate target readback; matching request/host/config/snapshot identity",
+      "scope": "Core v1.7 source-equivalent recoil action; device effect remains unverified",
       "runtime_device_verified": false,
       "lifecycle": {
-        "start": "NOT PROVIDED; CoreSetRecoilConsumer returns notApplied",
-        "update": "NOT PROVIDED; formula/lifecycle unresolved",
-        "stop": "NOT PROVIDED; no original action execution/restore receipt"
+        "start": "typed apply -> one shared serial action timer and state owner",
+        "update": "same final snapshot merges Aim/Recoil and dynamically selects +0x620/+0x828 before checked write/readback",
+        "stop": "revoke lane, drain probes and disconnect shared target session when no action lane remains"
       },
       "reference_evidence": "sol-e20-recoil-state-table-evidence.md; native function slices recoil_state/write_merge/read_rotation_state; static only"
     }
@@ -321,11 +333,11 @@
       "主页",
       "内核管理",
       "内核利用",
-      "explainUnavailable",
-      "unavailableInfo",
-      "not_defined:kernelAction",
-      "missing_home",
-      "",
+      "startHomeKernelAction",
+      "homeKernelAction",
+      "home.action.kernel",
+      "home_action_local",
+      "kernelAction",
       "",
       null,
       "",
@@ -335,8 +347,8 @@
       "0x1000cc8c8 / 0x1000cc8d0",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       null,
-      "local optional desired state; unselected stays nil; native conversion must not be inferred; read-only original action tracing boundary exists, no action consumer or effect receipt is attached",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "local typed request and lifecycle receipt are connected; original 4f00 token/watchdog semantics and device effect remain unverified",
+      "local-action-owner / source-closed / original-lifecycle-device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#initialization-buttons"
     ],
@@ -345,11 +357,11 @@
       "主页",
       "内核管理",
       "获取信息",
-      "explainUnavailable",
-      "unavailableInfo",
-      "not_defined:informationAction",
-      "missing_home",
-      "",
+      "startHomeInformationAction",
+      "homeInformationAction",
+      "home.action.information",
+      "home_action_local",
+      "informationAction",
       "",
       null,
       "",
@@ -359,8 +371,8 @@
       "0x1000cc920 / 0x1000cc928",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       null,
-      "local optional desired state; unselected stays nil; native conversion must not be inferred; read-only original action tracing boundary exists, no action consumer or effect receipt is attached",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "local typed request and lifecycle receipt are connected; original named input/tuple/publish semantics and device effect remain unverified",
+      "local-action-owner / source-closed / original-lifecycle-device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#initialization-buttons"
     ],
@@ -3486,7 +3498,7 @@
       "toggleRecoilField",
       "recoilField",
       "recoil.desired.enabled",
-      "missing_recoil",
+      "recoil",
       "",
       "",
       null,
@@ -3495,10 +3507,10 @@
       false,
       "native-v17/v17-131",
       "0x1000cfe78",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x18c bool/1bytes value",
       "local optional desired state; unselected stays nil; native conversion must not be inferred",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/recoil_state"
     ],
@@ -3510,7 +3522,7 @@
       "toggleRecoilField",
       "recoilField",
       "recoil.desired.stopWhenNotFiring.enabled",
-      "missing_recoil",
+      "recoil",
       "",
       "",
       null,
@@ -3519,10 +3531,10 @@
       false,
       "native-v17/v17-132",
       "0x1000cfe9c",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x18d bool/1bytes value",
       "local optional desired state; unselected stays nil; UI stopWhenNotFiring is modeled as inverted nativeFlag; target behavior remains unverified",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/recoil_state"
     ],
@@ -3534,7 +3546,7 @@
       "toggleRecoilField",
       "recoilField",
       "recoil.desired.verticalEnabled",
-      "missing_recoil",
+      "recoil",
       "",
       "",
       null,
@@ -3543,10 +3555,10 @@
       false,
       "native-v17/v17-133",
       "0x1000cfee0",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x1bc bool/1bytes value",
       "local optional desired state; unselected stays nil; native conversion must not be inferred",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/recoil_state"
     ],
@@ -3558,7 +3570,7 @@
       "configureRecoilStrength",
       "recoilStrength",
       "recoil.desired.verticalStrength",
-      "missing_recoil",
+      "recoil",
       "",
       "",
       [
@@ -3570,10 +3582,10 @@
       false,
       "native-v17/v17-134",
       "0x1000cff3c",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x188 int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/recoil_state"
     ],
@@ -3585,7 +3597,7 @@
       "toggleRecoilField",
       "recoilField",
       "recoil.desired.horizontalEnabled",
-      "missing_recoil",
+      "recoil",
       "",
       "",
       null,
@@ -3594,10 +3606,10 @@
       false,
       "native-v17/v17-135",
       "0x1000cff6c",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x1b0 bool/1bytes value",
       "local optional desired state; unselected stays nil; native conversion must not be inferred",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/recoil_state"
     ],
@@ -3609,7 +3621,7 @@
       "configureRecoilStrength",
       "recoilStrength",
       "recoil.desired.horizontalStrength",
-      "missing_recoil",
+      "recoil",
       "",
       "",
       [
@@ -3621,10 +3633,10 @@
       false,
       "native-v17/v17-136",
       "0x1000cffbc",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x1ac int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/recoil_state"
     ]
@@ -3647,14 +3659,14 @@
     "v17-002": {
       "interface": "CoreSetFeatureConsumer<State=待定义动作请求/结果, capability=kernelAction>",
       "state_field": "not_defined:kernelAction",
-      "current_caller_evidence": "home_current_caller_probe: kernel_call; laramgr.run -> ds_run returns Bool with global fraction, not matching original token lifecycle",
+      "current_caller_evidence": "home_current_caller_probe: home_action_binding + kernel_call; menu/coordinator local request lifecycle is bound to laramgr.run -> ds_run, but does not match the original token/watchdog lifecycle",
       "evidence_required": "4f00门禁→63a4任务→6938 watchdog：acquire原token匹配block+38，240秒总超时/20秒页计数停滞；提供同义动作请求、原任务owner、完成/失败/取消/清理回执。当前DarkSword Bool/fraction或Coordinator180秒offset超时不等同，不能把状态观察当按键已执行。",
       "receipt_required": "真实观察结果必须匹配本次请求身份；有副作用的切换与停止须独立恢复回执。"
     },
     "v17-003": {
       "interface": "CoreSetFeatureConsumer<State=待定义动作请求/结果, capability=informationAction>",
       "state_field": "not_defined:informationAction",
-      "current_caller_evidence": "home_current_caller_probe: kernel_cache_call; fetchkcache -> fetched&&dlkcache parses this device's kernel, not original named-information action",
+      "current_caller_evidence": "home_current_caller_probe: home_action_binding + kernel_cache_call; menu/coordinator local request lifecycle is bound to fetchkcache -> fetched&&dlkcache, but is not the original named-information action",
       "evidence_required": "538c Host门禁/信息status1→非空命名输入→609a8六字段tuple→6cc8读取0x288信息→60358校验→648ac发布status2；失败清tuple/cache并6274(3)。提供同义命名输入/owner及请求匹配的失败、取消、清理回执，不能把hasOffsets/被动targetReadReady当动作回执。",
       "receipt_required": "真实观察结果必须匹配本次请求身份；有副作用的切换与停止须独立恢复回执。"
     },
@@ -3899,7 +3911,7 @@
     "local_presentation_points": 31,
     "conditional_readonly_consumer_points": 61,
     "observation_points": 10,
-    "original_action_consumer_missing_points": 35,
+    "original_action_consumer_missing_points": 29,
     "alternative_aim_preview_points": 7,
     "missing_original_observation_producers": 5,
     "source_same_meaning_local_contract_points": 26,
@@ -3917,12 +3929,6 @@
       "id": "extension.aimStopButton",
       "kind": "dedicated lifecycle button for original total toggle; no action consumer",
       "source": "stopBasicAim",
-      "counts_toward_v17_closure": false
-    },
-    {
-      "id": "extension.aimLOS",
-      "kind": "unavailable row absent from the137point inventory",
-      "source": "disabledRows LOS掩体判断 -> explainUnavailable",
       "counts_toward_v17_closure": false
     },
     {

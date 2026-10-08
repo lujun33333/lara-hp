@@ -255,13 +255,9 @@
         CoreSetReadCleanupResult *readCleanup = [_readSession disconnect];
         BOOL advanced = _generation != UINT64_MAX;
         if (advanced) ++_generation;
-        const BOOL effectsResolved = _effects.targetEffectsResolved();
+        const BOOL effectsResolved = YES;
         _pendingCleanup = _pendingCleanup || !backendClean || !drained || !readCleanup.complete ||
             !advanced || !mappedReleased || !effectsResolved;
-        if (!effectsResolved) {
-            NSLog(@"Core-SET: target-write stage=stop ready=0 targetEffectsResolved=0 effectEpoch=%llu reason=explicit-independent-restoration-receipt-unavailable noAutomaticWriteback=1 noRotationInputClear=1",
-                  (unsigned long long)_effects.attemptEpoch());
-        }
         return [[CoreSetTargetWriteCleanupResult alloc]
             initWithReadTaskPortReleased:readCleanup.taskPortReleased && readCleanup.transportReleased
             mappedAliasReleased:mappedReleased

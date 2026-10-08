@@ -1,0 +1,51 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+aim = read("lara/views/app/CoreSetAimConsumer.swift")
+native = read("lara/overlay/CoreSetIsolatedWriteProbe.mm")
+snapshot_h = read("lara/overlay/CoreSetPlayerSnapshot.h")
+snapshot_mm = read("lara/overlay/CoreSetPlayerSnapshot.mm")
+menu = read("lara/views/app/CoreSetMenuViewController.swift")
+coordinator = read("lara/views/app/CoreSetRuntimeCoordinator.swift")
+manifest = read("scripts/build_ipa_pe.sh")
+
+for token in (
+    "CoreSetIsolatedWriteProbe", "includeBattleInputs: true",
+    "triggerState.update(", "dynamics.permitsTakeover(",
+    "CoreSetBasicAimDelta.select(", "dynamics.plan(",
+    "guard result.committed, cleanup.complete,",
+    "submitMergedAction(snapshot:", "applyRecoil(", "tickRecoilOnly(",
+):
+    assert token in aim, token
+
+for token in (
+    "CoreSetWorldPoint", "actorWorldPosition", "cameraWorldPosition",
+    "localWorldPosition", "canvasSize", "rotationInputPitch", "rotationInputYaw",
+):
+    assert token in snapshot_h, token
+
+for token in (
+    "controller + 0x620", "controller + 0x828",
+    "mark.actorWorldPosition =", "snapshot.cameraWorldPosition =",
+    "snapshot.rotationInputPitch =", "snapshot.rotationInputYaw =",
+):
+    assert token in snapshot_mm, token
+
+assert "initWithRequestAuthority:_authority" in native
+assert "writeControllerActionForPID:" in native
+assert "CoreSetTargetWriteSlotControlRotation" in native
+assert "CoreSetTargetWriteSlotRotationInput" in native
+assert "restoreSnapshot:" not in native
+assert "expectedOld:[NSData dataWithBytes:oldValues + index length:length]" in native
+assert "aimConsumer = CoreSetAimConsumer(coordinator: self)" in coordinator
+assert "editGame(\\.aim)" in menu
+assert "apply(\\.radar); apply(\\.aimDisplay); apply(\\.aim)" in menu
+assert '"transportPolicy": "checked-control-and-input-rotation-write"' in manifest
+assert '"writeFeaturesEnabled": true' in manifest
+print("PASS: basic aim producer, authority, checked write and manifest wiring")

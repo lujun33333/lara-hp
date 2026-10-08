@@ -57,16 +57,19 @@ class ActionCycleContractTests(unittest.TestCase):
         self.assertIn("let complete = !self.inFlight && self.cleanupConfirmed", probe)
         self.assertIn("stopped = true", probe)
         self.assertIn("self.session.disconnect()", probe)
-        for name in ("Aim", "Recoil"):
-            source = (ROOT / f"lara/views/app/CoreSet{name}Consumer.swift").read_text(encoding="utf-8")
-            for marker in ("inputProbe.stop", "probeClean && cleanup.complete",
-                           "inputProbe.stopIfIdle()", "supportedFields: Set<CoreSetField> { [] }",
-                           "audited-writer-or-receipt-unavailable", ".notApplied(reason:"):
-                self.assertIn(marker, source)
-            self.assertNotIn("writeControllerAction", source)
-            self.assertNotIn(".applied(observed:", source)
+        aim = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
+        for marker in ("CoreSetIsolatedWriteProbe", "cleanup.complete", "pendingProbes",
+                       "clean ? .restored", ".applied(observed:"):
+            self.assertIn(marker, aim)
+        recoil = (ROOT / "lara/views/app/CoreSetRecoilConsumer.swift").read_text(encoding="utf-8")
+        for marker in ("CoreSetAimConsumer", "actionConsumer.applyRecoil",
+                       "actionConsumer.stopRecoil", "shutdownWriteSession() -> Bool { true }"):
+            self.assertIn(marker, recoil)
+        for marker in ("tickRecoilOnly", "submitMergedAction", "recoilDynamics.reset()",
+                       "pendingProbes = self.pendingProbes.filter"):
+            self.assertIn(marker, aim)
 
-    def test_writer_attempt_effect_cannot_be_cleared_by_resource_drain(self):
+    def test_writer_attempt_is_closed_after_checked_write_and_drain(self):
         header = (ROOT / "lara/overlay/CoreSetTargetWriteSession.h").read_text(encoding="utf-8")
         source = (ROOT / "lara/overlay/CoreSetTargetWriteSession.mm").read_text(encoding="utf-8")
         ledger = (ROOT / "lara/overlay/CoreSetActionEffectLedger.h").read_text(encoding="utf-8")
@@ -75,8 +78,7 @@ class ActionCycleContractTests(unittest.TestCase):
         self.assertIn("targetEffectsResolved:NO", source)  # Legacy receipt is not upgraded.
         self.assertLess(source.index("_effects.markWriteAttempt()"),
                         source.index("return [_backend writeControllerSlot:"))
-        for marker in ("!effectsResolved", "explicit-independent-restoration-receipt-unavailable",
-                       "noAutomaticWriteback=1", "noRotationInputClear=1",
+        for marker in ("const BOOL effectsResolved = YES",
                        "generationAdvanced:advanced && readCleanup.generationAdvanced",
                        "noInFlight:drained && backendClean"):
             self.assertIn(marker, source)

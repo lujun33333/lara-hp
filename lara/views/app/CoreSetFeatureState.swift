@@ -85,13 +85,24 @@ enum CoreSetField: Hashable {
             return [.radarEnabled, .radarShowDistance, .radarDetectionDistance, .radarRadius,
                     .radarX, .radarY, .warningEnabled, .warningIgnoreBots, .warningRange,
                     .warningTextSize]
+        case .aimControl:
+            return [.basicAimEnabled, .basicAimPoint, .basicAimTrigger,
+                    .basicAimCircleSize, .basicAimExcludeKnocked, .basicAimIncludeBots,
+                    .basicAimLockSameTarget, .basicAimMaximumDistance, .basicAimStrength,
+                    .basicAimSmoothing, .basicAimConfirmationFrames, .basicAimScene,
+                    .basicAimLockStrength, .basicAimHorizontalSpeed, .basicAimVerticalSpeed,
+                    .basicAimPredictionMilliseconds, .basicAimLockThreshold,
+                    .basicAimTakeoverPause]
+        case .recoilControl:
+            return [.recoilEnabled, .recoilStopWhenNotFiring, .recoilVerticalEnabled,
+                    .recoilVerticalStrength, .recoilHorizontalEnabled, .recoilHorizontalStrength]
         default: return []
         }
     }
 
-    // Configuration membership is not live-effect completeness. Aim/Recoil
-    // retain typed desired values while required(for:) remains empty until an
-    // original-effect consumer can truthfully declare live support.
+    // Aim exposes 18 action fields through the shared writer. Its four visual
+    // fields remain in the independent localAimDisplay lane; Recoil exposes all
+    // six fields through the same serialized worker.
     static func configurable(for capability: CoreSetCapability) -> Set<CoreSetField> {
         switch capability {
         case .aimControl:

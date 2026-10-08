@@ -3,6 +3,13 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@interface CoreSetWorldPoint : NSObject
+@property(nonatomic, readonly) float x;
+@property(nonatomic, readonly) float y;
+@property(nonatomic, readonly) float z;
++ (instancetype)pointWithX:(float)x y:(float)y z:(float)z;
+@end
+
 @interface CoreSetBoneSegment : NSObject
 @property(nonatomic, readonly) CGPoint start;
 @property(nonatomic, readonly) CGPoint end;
@@ -22,9 +29,16 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 
 @interface CoreSetPlayerMark : NSObject
 @property(nonatomic, readonly) uint64_t actorAddress;
-// Raw reflected HealthStatus byte, only when battleInputsPresent is true;
-// enum values are not mapped to knocked/downed until independently proven.
+@property(nonatomic, readonly, nullable) CoreSetWorldPoint *actorWorldPosition;
 @property(nonatomic, readonly) uint8_t healthStatusCode;
+@property(nonatomic, readonly) uint32_t referenceStateWord;
+@property(nonatomic, readonly) uint8_t referenceFlag14;
+@property(nonatomic, readonly) BOOL downedKnown;
+@property(nonatomic, readonly) BOOL downed;
+// Core-local candidate record +0x1e0/+0x1ec producers: bone 0 and the
+// selected profile's first bone respectively. These are not actor offsets.
+@property(nonatomic, readonly, nullable) CoreSetWorldPoint *referenceAnchor1e0WorldPosition;
+@property(nonatomic, readonly, nullable) CoreSetWorldPoint *referenceAnchor1ecWorldPosition;
 @property(nonatomic, copy, readonly, nullable) NSString *weaponName;
 @property(nonatomic, readonly) uint32_t weaponID;
 @property(nonatomic, copy, readonly, nullable) NSString *playerName;
@@ -63,6 +77,21 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) CGPoint predictionEndpoint;
 @end
 
+// Core v1.7 c3c3c's validated local action record. The two tokens are
+// target-object identities used only by c416c's local continuity state; none
+// of these values is a writable target slot.
+@interface CoreSetRecoilPostSample : NSObject
+@property(nonatomic, readonly) uint64_t key;
+@property(nonatomic, readonly) uint64_t ownerToken;
+@property(nonatomic, readonly) uint8_t active;
+@property(nonatomic, readonly) float value0;
+@property(nonatomic, readonly) float value1;
+@property(nonatomic, readonly) float value2;
+@property(nonatomic, readonly) float value3;
+@property(nonatomic, readonly) float value4;
+@property(nonatomic, readonly) float value5;
+@end
+
 @interface CoreSetPlayerSnapshot : NSObject
 @property(nonatomic, readonly) uint64_t sessionGeneration;
 @property(nonatomic, readonly) int32_t processID;
@@ -74,16 +103,32 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) NSUInteger observedBotCount;
 @property(nonatomic, readonly) double cameraYawDegrees;
 @property(nonatomic, readonly) double cameraPitchDegrees;
+@property(nonatomic, readonly) double cameraRollDegrees;
 @property(nonatomic, readonly) double cameraFieldOfViewDegrees;
 // Populated only by the explicit battle-input capture overload. These are
 // observed inputs, not an aim plan or permission to write to the target.
 @property(nonatomic, readonly) BOOL battleInputsPresent;
+@property(nonatomic, readonly, nullable) CoreSetWorldPoint *cameraWorldPosition;
+@property(nonatomic, readonly, nullable) CoreSetWorldPoint *localWorldPosition;
+@property(nonatomic, readonly) CGSize canvasSize;
 @property(nonatomic, readonly) uint64_t controllerAddress;
 @property(nonatomic, readonly) uint64_t localActorAddress;
 @property(nonatomic, readonly) BOOL localADS;
 @property(nonatomic, readonly) BOOL localFiring;
 @property(nonatomic, readonly) float controlPitchDegrees;
 @property(nonatomic, readonly) float controlYawDegrees;
+@property(nonatomic, readonly) float rotationInputPitch;
+@property(nonatomic, readonly) float rotationInputYaw;
+// Present only when the exact c3b24/c3c3c input reads succeed in the final
+// battle-input stability pass. The binding is this read publication's nonzero
+// 32-bit generation, matching c416c/c571c's context role.
+@property(nonatomic, readonly) BOOL recoilInputsPresent;
+@property(nonatomic, readonly) uint32_t recoilBinding;
+@property(nonatomic, readonly, nullable) CoreSetRecoilPostSample *recoilPostSample;
+@property(nonatomic, readonly) float recoilFirstWeight;
+@property(nonatomic, readonly) float recoilFirstBindingScale;
+@property(nonatomic, readonly) float recoilSecondWeight;
+@property(nonatomic, readonly) float recoilSecondBindingScale;
 // Start time is diagnostic duration evidence. Consumers use the completion
 // time for delivery freshness because the collector revalidates identity,
 // roots, membership and observed fields immediately before publishing.

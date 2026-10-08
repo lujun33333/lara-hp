@@ -991,7 +991,7 @@ BUILD_LOG_SHA256=$(shasum -a 256 "$ROOT/build/xcodebuild-CoreSet.log" | awk '{pr
 cat > "$OUTPUT_MANIFEST" <<JSON
 {
   "productMode": "core-set-pe-ui",
-  "gameConsumer": "CoreSetReadSession read-only HUD lanes",
+  "gameConsumer": "CoreSetReadSession HUD lanes + Core v1.7 bone/prediction Aim+Recoil shared checked write",
   "targetProcess": "ShadowTrackerExtra",
   "targetBundle": "com.tencent.tmgp.pubgmhd",
   "targetVersion": "1.38.12/build15915/UUID34b785b2-0dab-3992-985d-359e6bf45585",
@@ -1007,8 +1007,8 @@ cat > "$OUTPUT_MANIFEST" <<JSON
   "ipaSha256": "$IPA_SHA256",
   "buildLogSha256": "$BUILD_LOG_SHA256",
   "localTestAuthorizationBypass": $AUTH_BYPASS_JSON,
-  "transportPolicy": "strict-target-read-only",
-  "writeFeaturesEnabled": false
+  "transportPolicy": "checked-control-and-input-rotation-write",
+  "writeFeaturesEnabled": true
 }
 JSON
 

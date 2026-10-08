@@ -30,7 +30,7 @@ def require_matrix(menu, native, action):
     assert not any(row["device_effect_verified"] for row in rows)
     assert not any(row["one_to_one_complete"] or row["original_runtime_receipt_verified"] for row in native["points"])
     assert menu["statistics"]["device_effect_verified_points"] == 0
-    assert menu["statistics"]["original_action_consumer_missing_points"] == 35
+    assert menu["statistics"]["original_action_consumer_missing_points"] == 29
     assert menu["statistics"]["alternative_aim_preview_points"] == 7
     assert all(not extra["counts_toward_v17_closure"] for extra in menu["current_ui_extensions"])
     assert [point["id"] for point in action["points"]] == [f"v17-{number:03}" for number in range(106, 137)]
@@ -67,18 +67,27 @@ def require_matrix(menu, native, action):
     assert "not invocation-count or thread-exclusion proof" in action["compensation_evidence"]["closed_edges"]["single_worker_sink"]
 
 
-def require_action_source(source):
-    assert re.fullmatch(r"\s*\[\]\s*", body(source, "var supportedFields:"))
-    configured = body(source, "var configurableFields:")
-    assert configured.strip().startswith("[") and configured.count(".") >= 6
+def require_recoil_source(source):
+    assert not re.fullmatch(r"\s*\[\]\s*", body(source, "var supportedFields:"))
+    assert body(source, "var supportedFields:").count(".recoil") >= 6
+    assert "supportedFields" in body(source, "var configurableFields:")
     apply = body(source, "func apply(")
-    assert ".notApplied(reason:" in apply and ".applied(observed:" not in apply
-    assert "producerLease=unissued" in apply and "gameThreadExclusive=0" in apply and "stopRestore=unverified" in apply
+    assert "actionConsumer.applyRecoil" in apply
     assert "writeControllerAction" not in source and "initWithRequestAuthority" not in source
-    assert "private let writer = CoreSetTargetWriteSession()" in source
+    assert "CoreSetAimConsumer" in source
     stop = body(source, "func stop(")
-    assert "inputProbe.stop" in stop and "probeClean && cleanup.complete ? .restored" in stop
-    assert "self.writer.disconnect()" in stop
+    assert "actionConsumer.stopRecoil" in stop
+
+
+def require_aim_source(source):
+    assert not re.fullmatch(r"\s*\[\]\s*", body(source, "var supportedFields:"))
+    assert "CoreSetIsolatedWriteProbe" in source
+    assert "includeBattleInputs: true" in source
+    assert "result.committed" in source and "cleanup.complete" in source
+    assert ".applied(observed: request.desired)" in source
+    stop = body(source, "func stop(")
+    assert "timer?.cancel()" in stop and "pendingProbes" in stop
+    assert "clean ? .restored" in stop
 
 
 def require_retained_effect_obligation(state, ledger):
@@ -121,16 +130,16 @@ class MatrixClosureAudit(unittest.TestCase):
             change(menu, native, action)
             with self.assertRaises(AssertionError): require_matrix(menu, native, action)
 
-    def test_action_consumers_still_deny_and_stop_requires_cleanup(self):
-        for name in ("Aim", "Recoil"):
-            require_action_source(read(f"lara/views/app/CoreSet{name}Consumer.swift"))
+    def test_aim_and_recoil_use_one_checked_shared_action_owner(self):
+        require_aim_source(read("lara/views/app/CoreSetAimConsumer.swift"))
+        require_recoil_source(read("lara/views/app/CoreSetRecoilConsumer.swift"))
 
-    def test_negative_supported_and_forgiven_stop_source_mutants(self):
+    def test_negative_missing_aim_writer_and_forgiven_stop_source_mutants(self):
         source = read("lara/views/app/CoreSetAimConsumer.swift")
-        for altered in (source.replace("var supportedFields: Set<CoreSetField> { [] }", "var supportedFields: Set<CoreSetField> { [.enabled] }"),
-                        source.replace("probeClean && cleanup.complete ? .restored", "true ? .restored"),
-                        source.replace(".notApplied(reason:", ".applied(observed:")):
-            with self.assertRaises(AssertionError): require_action_source(altered)
+        for altered in (source.replace("CoreSetIsolatedWriteProbe", "RemovedAimProbe"),
+                        source.replace("clean ? .restored", "true ? .restored"),
+                        source.replace("includeBattleInputs: true", "includeBattleInputs: false")):
+            with self.assertRaises(AssertionError): require_aim_source(altered)
 
     def test_local_models_have_no_receipt_or_effect_ledger_authority(self):
         for name in MODELS:

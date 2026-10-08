@@ -94,10 +94,12 @@ class NativePointChainTests(unittest.TestCase):
         self.assertIn("read_socket_primitive", read["reader_path"])
         self.assertEqual(action["writer"], ["write_merge", "checked_write"])
         self.assertIn("NOT proven", action["stop"])
-        for name in ("CoreSetAimConsumer.swift", "CoreSetRecoilConsumer.swift"):
-            source = (ROOT / "lara/views/app" / name).read_text(encoding="utf-8")
-            self.assertIn("audited-writer-or-receipt-unavailable", source)
-            self.assertIn("supportedFields: Set<CoreSetField> { [] }", source)
+        aim = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
+        self.assertIn("CoreSetIsolatedWriteProbe", aim)
+        self.assertNotIn("supportedFields: Set<CoreSetField> { [] }", aim)
+        recoil = (ROOT / "lara/views/app/CoreSetRecoilConsumer.swift").read_text(encoding="utf-8")
+        self.assertIn("actionConsumer.applyRecoil", recoil)
+        self.assertNotIn("supportedFields: Set<CoreSetField> { [] }", recoil)
 
     def test_slices_and_words_are_bounded_evidence(self):
         for window in NATIVE["proof_windows"]:

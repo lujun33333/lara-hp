@@ -116,7 +116,7 @@ final class CoreSetKernelInformationOwner {
 
     func publishCachedValidation() {
         lock.lock(); defer { lock.unlock() }
-        guard status == 0 else { return }
+        guard status != 1 else { return }
         bump(&generation); requestID = UUID(); sequence = 1
         status = 2; message = "使用已验证的本机内核偏移"
     }
@@ -208,16 +208,17 @@ final class CoreSetHomeRuntimeProducer: CoreSetHomeReferenceObservationProvider 
         guard !stopped else { return nil }
         var fields: [CoreSetHomeObservationField: CoreSetHomeReferenceFieldObservation] = [:]
         let firmware = CoreSetKernelCacheTransferOwner.shared.snapshot()
+        let information = CoreSetKernelInformationOwner.shared.snapshot()
 
         var environmentSnapshot = CoreSetHomeSnapshot()
         let support = supportClass
         if support != .supported {
             environmentSnapshot.environment = support.text
-        } else if firmware.inFlight {
+        } else if firmware.inFlight || information.status == 1 {
             environmentSnapshot.environment = "正在本机适配"
-        } else if firmware.ready {
+        } else if manager.hasOffsets && information.status == 2 {
             environmentSnapshot.environment = "环境已就绪"
-        } else if firmware.phase == 6 {
+        } else if firmware.phase == 6 || information.status == 3 {
             environmentSnapshot.environment = "环境适配失败"
         } else {
             environmentSnapshot.environment = "等待授权后适配"
@@ -226,7 +227,6 @@ final class CoreSetHomeRuntimeProducer: CoreSetHomeReferenceObservationProvider 
             requestID: firmware.requestID, generation: firmware.generation,
             nativeSequence: firmware.sequence, snapshot: environmentSnapshot)
 
-        let information = CoreSetKernelInformationOwner.shared.snapshot()
         var informationSnapshot = CoreSetHomeSnapshot()
         let base: String
         switch information.status {

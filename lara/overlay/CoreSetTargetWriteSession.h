@@ -73,7 +73,7 @@ typedef NS_ENUM(uint8_t, CoreSetTargetWriteAxis) {
 
 @interface CoreSetTargetWriteSession : NSObject
 @property(nonatomic, readonly) BOOL ready;
-@property(nonatomic, readonly) uint64_t capabilities; // Bit 1 = verified target write; currently 0.
+@property(nonatomic, readonly) uint64_t capabilities; // Bit 1 = checked target write is ready.
 @property(nonatomic, readonly) uint64_t generation;
 @property(nonatomic, readonly) BOOL pendingCleanup;
 // The default initializer installs no authority and cannot perform a write.

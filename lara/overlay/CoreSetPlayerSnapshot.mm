@@ -113,6 +113,68 @@ static bool CSUserPointerValid(uint64_t value) {
         (value & (alignof(uint64_t) - 1)) == 0;
 }
 
+struct CSRecoilPostRaw {
+    std::array<uint8_t, 0x94> bytes{};
+};
+
+struct CSRecoilInputState {
+    bool present = false;
+    uint64_t key = 0;
+    uint64_t ownerToken = 0;
+    uint8_t active = 0;
+    std::array<float, 6> values{};
+    std::array<float, 4> scales{};
+};
+
+static float CSFloatAt(const CSRecoilPostRaw &record, size_t offset) {
+    float value = 0;
+    std::memcpy(&value, record.bytes.data() + offset, sizeof(value));
+    return value;
+}
+
+// Core v1.7 c2384..c242c and c3c3c..c40c0, with x26=controller and
+// x23=local actor. A missing weapon/action chain is a valid unavailable recoil
+// sample and must not invalidate the rest of the battle snapshot.
+static bool CSCaptureRecoilInputs(CoreSetReadSession *session, uint64_t generation,
+                                  uint64_t controller, uint64_t local, uint8_t firing,
+                                  CSRecoilInputState *output) {
+    if (!output) return false;
+    *output = {};
+    std::array<float, 4> scales{};
+    if (!CSReadValue(session, generation, controller + 0x838, &scales[0]) ||
+        !CSReadValue(session, generation, local + 0xbdc, &scales[1]) ||
+        !CSReadValue(session, generation, controller + 0x834, &scales[2]) ||
+        !CSReadValue(session, generation, local + 0xbe0, &scales[3])) return true;
+    for (float value : scales)
+        if (!std::isfinite(value) || std::fabs(value) > 16.0f) return true;
+
+    uint64_t first = 0, owner = 0, key = 0, companion = 0;
+    if (!CSReadValue(session, generation, local + 0x37a0, &first) ||
+        !CSUserPointerValid(first) ||
+        !CSReadValue(session, generation, first + 0x600, &owner) ||
+        !CSUserPointerValid(owner) ||
+        !CSReadValue(session, generation, owner + 0x2038, &key) ||
+        !CSUserPointerValid(key) ||
+        !CSReadValue(session, generation, owner + 0x2048, &companion) ||
+        !CSUserPointerValid(companion)) return true;
+
+    CSRecoilPostRaw raw;
+    if (!CSRead(session, generation, key + 0x208, raw.bytes.data(), raw.bytes.size())) return true;
+    const std::array<size_t, 6> offsets{0x00, 0x04, 0x08, 0x0c, 0x10, 0x4c};
+    std::array<float, 6> values{};
+    for (size_t index = 0; index < values.size(); ++index) {
+        values[index] = CSFloatAt(raw, offsets[index]);
+        if (!std::isfinite(values[index])) return true;
+    }
+    output->present = true;
+    output->key = owner;
+    output->ownerToken = key;
+    output->active = firing;
+    output->values = values;
+    output->scales = scales;
+    return true;
+}
+
 // Core v1.7 0x1000d5440..0x1000d569c does not begin with UClass. It first
 // identifies its player-shaped row with DefaultSpeedValue and then applies the
 // team/status/health/component filters below. Keep these predicates separate
@@ -449,6 +511,11 @@ static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation, ui
                        state->component.data(), state->component.size(), &cache)) return false;
     std::vector<uint8_t> transforms((size_t)array.count * 0x30);
     if (!CSRead(session, generation, array.data, transforms.data(), transforms.size())) return false;
+    // Core d8f24..d908c independently transforms bone 0 into candidate +0x1e0.
+    // The full array is already present, so publishing this sample adds no read.
+    CSBoneSample rootSample = {0, {}};
+    std::memcpy(rootSample.bytes.data(), transforms.data(), rootSample.bytes.size());
+    state->samples.push_back(rootSample);
     for (unsigned edge = 0; edge < 28; ++edge) {
         uint8_t index = state->edges[edge];
         if (std::any_of(state->samples.begin(), state->samples.end(),
@@ -513,9 +580,42 @@ static bool CSProjectBoneHead(const CSBoneState &state, CSCamera camera, CGSize 
         point->y >= 0 && point->y <= size.height;
 }
 
+static CoreSetWorldPoint *CSBoneWorldPoint(const CSBoneState &state, uint8_t index) {
+    const auto sample = std::find_if(state.samples.begin(), state.samples.end(),
+        [index](const CSBoneSample &entry) { return entry.index == index; });
+    if (sample == state.samples.end()) return nil;
+    CoreSet::Transform component = {}, bone = {};
+    std::memcpy(&component, state.component.data(), state.component.size());
+    std::memcpy(&bone, sample->bytes.data(), sample->bytes.size());
+    CSVector world = {};
+    if (!CoreSet::transformPoint(component, bone.translation, &world) ||
+        !std::isfinite(world.x) || !std::isfinite(world.y) || !std::isfinite(world.z)) return nil;
+    return [CoreSetWorldPoint pointWithX:world.x y:world.y z:world.z];
+}
+
+@interface CoreSetWorldPoint ()
+@property(nonatomic) float x;
+@property(nonatomic) float y;
+@property(nonatomic) float z;
+@end
+@implementation CoreSetWorldPoint
++ (instancetype)pointWithX:(float)x y:(float)y z:(float)z {
+    CoreSetWorldPoint *point = [CoreSetWorldPoint new];
+    point.x = x; point.y = y; point.z = z;
+    return point;
+}
+@end
+
 @interface CoreSetPlayerMark ()
 @property(nonatomic) uint64_t actorAddress;
+@property(nonatomic) CoreSetWorldPoint *actorWorldPosition;
 @property(nonatomic) uint8_t healthStatusCode;
+@property(nonatomic) uint32_t referenceStateWord;
+@property(nonatomic) uint8_t referenceFlag14;
+@property(nonatomic) BOOL downedKnown;
+@property(nonatomic) BOOL downed;
+@property(nonatomic) CoreSetWorldPoint *referenceAnchor1e0WorldPosition;
+@property(nonatomic) CoreSetWorldPoint *referenceAnchor1ecWorldPosition;
 @property(nonatomic, copy, nullable) NSString *weaponName;
 @property(nonatomic) uint32_t weaponID;
 @property(nonatomic, copy, nullable) NSString *playerName;
@@ -538,6 +638,16 @@ static bool CSProjectBoneHead(const CSBoneState &state, CSCamera camera, CGSize 
 @end
 @implementation CoreSetPlayerMark @end
 
+static void CSPublishAimAnchors(CoreSetPlayerMark *mark, const CSBoneState &state) {
+    if (!state.edges) {
+        mark.referenceAnchor1e0WorldPosition = nil;
+        mark.referenceAnchor1ecWorldPosition = nil;
+        return;
+    }
+    mark.referenceAnchor1e0WorldPosition = CSBoneWorldPoint(state, 0);
+    mark.referenceAnchor1ecWorldPosition = CSBoneWorldPoint(state, state.edges[0]);
+}
+
 @interface CoreSetGrenadeMark ()
 @property(nonatomic) CGPoint point;
 @property(nonatomic) double distanceUnitsDividedBy100;
@@ -552,6 +662,18 @@ static bool CSProjectBoneHead(const CSBoneState &state, CSCamera camera, CGSize 
 @property(nonatomic) uint32_t motionExplosionRaw;
 @end
 @implementation CoreSetGrenadeMark @end
+@interface CoreSetRecoilPostSample ()
+@property(nonatomic) uint64_t key;
+@property(nonatomic) uint64_t ownerToken;
+@property(nonatomic) uint8_t active;
+@property(nonatomic) float value0;
+@property(nonatomic) float value1;
+@property(nonatomic) float value2;
+@property(nonatomic) float value3;
+@property(nonatomic) float value4;
+@property(nonatomic) float value5;
+@end
+@implementation CoreSetRecoilPostSample @end
 
 @interface CoreSetPlayerSnapshot ()
 @property(nonatomic) CSCamera motionCamera;
@@ -565,14 +687,27 @@ static bool CSProjectBoneHead(const CSBoneState &state, CSCamera camera, CGSize 
 @property(nonatomic) NSUInteger observedBotCount;
 @property(nonatomic) double cameraYawDegrees;
 @property(nonatomic) double cameraPitchDegrees;
+@property(nonatomic) double cameraRollDegrees;
 @property(nonatomic) double cameraFieldOfViewDegrees;
 @property(nonatomic) BOOL battleInputsPresent;
+@property(nonatomic) CoreSetWorldPoint *cameraWorldPosition;
+@property(nonatomic) CoreSetWorldPoint *localWorldPosition;
+@property(nonatomic) CGSize canvasSize;
 @property(nonatomic) uint64_t controllerAddress;
 @property(nonatomic) uint64_t localActorAddress;
 @property(nonatomic) BOOL localADS;
 @property(nonatomic) BOOL localFiring;
 @property(nonatomic) float controlPitchDegrees;
 @property(nonatomic) float controlYawDegrees;
+@property(nonatomic) float rotationInputPitch;
+@property(nonatomic) float rotationInputYaw;
+@property(nonatomic) BOOL recoilInputsPresent;
+@property(nonatomic) uint32_t recoilBinding;
+@property(nonatomic) CoreSetRecoilPostSample *recoilPostSample;
+@property(nonatomic) float recoilFirstWeight;
+@property(nonatomic) float recoilFirstBindingScale;
+@property(nonatomic) float recoilSecondWeight;
+@property(nonatomic) float recoilSecondBindingScale;
 @property(nonatomic) double captureStartedMonotonicSeconds;
 @property(nonatomic) double captureCompletedMonotonicSeconds;
 @property(nonatomic, copy) NSString *readSemanticDiagnostic;
@@ -866,15 +1001,19 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         !hasLocalPosition) return nil;
     CSLastCaptureDiagnostic = "battle-input-initial";
     uint8_t localADS = 0, localFiring = 0;
-    float controlRotation[2] = {0};
+    float controlRotation[2] = {0}, rotationInput[2] = {0};
+    CSRecoilInputState recoilInputs;
     if (includeBattleInputs &&
-        (local < 0x100000000ULL || local > 0x8000000000ULL - 0x2751 ||
-         controller < 0x100000000ULL || controller > 0x8000000000ULL - 0x628 ||
+        (local < 0x100000000ULL || local > 0x8000000000ULL - 0x37a8 ||
+         controller < 0x100000000ULL || controller > 0x8000000000ULL - 0x83c ||
          !CSReadValue(session, generation, local + 0x1848, &localADS) ||
          !CSReadValue(session, generation, local + 0x2750, &localFiring) ||
          !CSRead(session, generation, controller + 0x620, controlRotation, sizeof(controlRotation)) ||
+         !CSRead(session, generation, controller + 0x828, rotationInput, sizeof(rotationInput)) ||
          !std::isfinite(controlRotation[0]) || !std::isfinite(controlRotation[1]) ||
-         std::fabs(controlRotation[0]) > 360 || std::fabs(controlRotation[1]) > 360)) return nil;
+         !std::isfinite(rotationInput[0]) || !std::isfinite(rotationInput[1]) ||
+         std::fabs(controlRotation[0]) > 360 || std::fabs(controlRotation[1]) > 360 ||
+         std::fabs(rotationInput[0]) > 360 || std::fabs(rotationInput[1]) > 360)) return nil;
     CSLastCaptureDiagnostic = "actor-scan";
     NSMutableArray<CoreSetPlayerMark *> *marks = [NSMutableArray array];
     NSMutableArray<CoreSetGrenadeMark *> *grenadeMarks = [NSMutableArray array];
@@ -1193,6 +1332,10 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             CoreSetPlayerMark *mark = [CoreSetPlayerMark new];
             mark.actorAddress = actor; mark.bot = ai != 0;
             mark.healthStatusCode = status;
+            mark.referenceStateWord = coreStateFlags;
+            mark.referenceFlag14 = status == 1 ? 1 : (uint8_t)((coreStateFlags >> 19) & 1);
+            mark.downedKnown = YES;
+            mark.downed = (mark.referenceFlag14 & 1) != 0;
             mark.playerName = playerName; mark.teamID = team;
             mark.health = health; mark.maximumHealth = maximum;
             if (wantsWeapon) {
@@ -1237,6 +1380,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                     ++bonePresent;
                     if (bones.status == 7) ++boneDecoded; else ++bonePlain;
                     mark.boneSegments = CSProjectBones(bones, camera, size);
+                    CSPublishAimAnchors(mark, bones);
                     uint8_t headIndex = 0;
                     if (CoreSet::referenceBoneHeadIndex(bones.array.count, &headIndex)) {
                         ++boneHeadKnownProfile;
@@ -1408,6 +1552,10 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         CoreSetPlayerMark *mark = marks[actor.markIndex];
         mark.bot = current.ai != 0;
         mark.healthStatusCode = current.status;
+        mark.referenceStateWord = current.stateFlags;
+        mark.referenceFlag14 = current.status == 1 ? 1 : (uint8_t)((current.stateFlags >> 19) & 1);
+        mark.downedKnown = YES;
+        mark.downed = (mark.referenceFlag14 & 1) != 0;
         mark.teamID = current.team;
         mark.health = current.health;
         mark.maximumHealth = current.maximum;
@@ -1619,11 +1767,14 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         if (!boneRead || !present) {
             mark.boneSegments = @[];
             mark.headBoneIndex = nil;
+            mark.referenceAnchor1e0WorldPosition = nil;
+            mark.referenceAnchor1ecWorldPosition = nil;
             continue;
         }
         finalBoneObservations.push_back({bone.actor, bone.markIndex, std::move(after)});
         const CSBoneState &finalBone = finalBoneObservations.back().state;
         mark.boneSegments = CSProjectBones(finalBone, cameraAfter, size);
+        CSPublishAimAnchors(mark, finalBone);
         uint8_t headIndex = 0;
         CGPoint top = CGPointZero;
         if (CoreSet::referenceBoneHeadIndex(finalBone.array.count, &headIndex) &&
@@ -1638,16 +1789,21 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     CSLastCaptureDiagnostic = "stability-battle-inputs";
     if (includeBattleInputs) {
         uint8_t adsAfter = 0, firingAfter = 0;
-        float rotationAfter[2] = {0};
+        float rotationAfter[2] = {0}, inputAfter[2] = {0};
         if (!CSReadValue(session, generation, local + 0x1848, &adsAfter) ||
             !CSReadValue(session, generation, local + 0x2750, &firingAfter) ||
             !CSRead(session, generation, controller + 0x620, rotationAfter, sizeof(rotationAfter)) ||
+            !CSRead(session, generation, controller + 0x828, inputAfter, sizeof(inputAfter)) ||
             !std::isfinite(rotationAfter[0]) || !std::isfinite(rotationAfter[1]) ||
-            std::fabs(rotationAfter[0]) > 360 || std::fabs(rotationAfter[1]) > 360) return nil;
+            !std::isfinite(inputAfter[0]) || !std::isfinite(inputAfter[1]) ||
+            std::fabs(rotationAfter[0]) > 360 || std::fabs(rotationAfter[1]) > 360 ||
+            std::fabs(inputAfter[0]) > 360 || std::fabs(inputAfter[1]) > 360) return nil;
         localADS = adsAfter;
         localFiring = firingAfter;
         controlRotation[0] = rotationAfter[0];
         controlRotation[1] = rotationAfter[1];
+        rotationInput[0] = inputAfter[0];
+        rotationInput[1] = inputAfter[1];
     }
     // All expensive identity, lifecycle, name, weapon and bone reads are now
     // complete. Refresh the camera/local origin once more and only time the
@@ -1697,6 +1853,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             continue;
         }
         CoreSetPlayerMark *mark = marks[actor.markIndex];
+        mark.actorWorldPosition = [CoreSetWorldPoint pointWithX:position.x y:position.y z:position.z];
         mark.center = centerPoint;
         mark.head = headPoint;
         mark.feet = feetPoint;
@@ -1737,6 +1894,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         if ([invalidActorMarks containsIndex:bone.markIndex]) continue;
         CoreSetPlayerMark *mark = marks[bone.markIndex];
         mark.boneSegments = CSProjectBones(bone.state, cameraAfter, size);
+        CSPublishAimAnchors(mark, bone.state);
         uint8_t headIndex = 0;
         CGPoint top = CGPointZero;
         if (CoreSet::referenceBoneHeadIndex(bone.state.array.count, &headIndex) &&
@@ -1758,6 +1916,29 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             std::to_string(coreAccepted) + " localInActorArray=" +
             std::to_string(localInActorArray ? 1 : 0);
         return nil;
+    }
+    // The actor pass can be comparatively expensive. Re-read all action slots
+    // and the c3c3c record together immediately before the completion stamp so
+    // the recoil record and its active bit belong to the same final sample.
+    if (includeBattleInputs) {
+        uint8_t adsAfter = 0, firingAfter = 0;
+        float rotationAfter[2] = {0}, inputAfter[2] = {0};
+        if (!CSReadValue(session, generation, local + 0x1848, &adsAfter) ||
+            !CSReadValue(session, generation, local + 0x2750, &firingAfter) ||
+            !CSRead(session, generation, controller + 0x620, rotationAfter, sizeof(rotationAfter)) ||
+            !CSRead(session, generation, controller + 0x828, inputAfter, sizeof(inputAfter)) ||
+            !std::isfinite(rotationAfter[0]) || !std::isfinite(rotationAfter[1]) ||
+            !std::isfinite(inputAfter[0]) || !std::isfinite(inputAfter[1]) ||
+            std::fabs(rotationAfter[0]) > 360 || std::fabs(rotationAfter[1]) > 360 ||
+            std::fabs(inputAfter[0]) > 360 || std::fabs(inputAfter[1]) > 360 ||
+            !CSCaptureRecoilInputs(session, generation, controller, local,
+                                   firingAfter, &recoilInputs)) return nil;
+        localADS = adsAfter;
+        localFiring = firingAfter;
+        controlRotation[0] = rotationAfter[0];
+        controlRotation[1] = rotationAfter[1];
+        rotationInput[0] = inputAfter[0];
+        rotationInput[1] = inputAfter[1];
     }
     const double captureCompletedAt = CACurrentMediaTime();
     const double finalReprojectionAge = captureCompletedAt - finalReprojectionStartedAt;
@@ -1784,7 +1965,13 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     snapshot.cameraYawDegrees = cameraAfter.rotation.y;
     snapshot.motionCamera = cameraAfter;
     snapshot.cameraPitchDegrees = cameraAfter.rotation.x;
+    snapshot.cameraRollDegrees = cameraAfter.rotation.z;
     snapshot.cameraFieldOfViewDegrees = cameraAfter.fov;
+    snapshot.cameraWorldPosition = [CoreSetWorldPoint pointWithX:cameraAfter.location.x
+        y:cameraAfter.location.y z:cameraAfter.location.z];
+    snapshot.localWorldPosition = [CoreSetWorldPoint pointWithX:localPositionAfter.x
+        y:localPositionAfter.y z:localPositionAfter.z];
+    snapshot.canvasSize = size;
     snapshot.battleInputsPresent = includeBattleInputs;
     if (includeBattleInputs) {
         snapshot.controllerAddress = controller;
@@ -1793,6 +1980,28 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         snapshot.localFiring = localFiring != 0;
         snapshot.controlPitchDegrees = controlRotation[0];
         snapshot.controlYawDegrees = controlRotation[1];
+        snapshot.rotationInputPitch = rotationInput[0];
+        snapshot.rotationInputYaw = rotationInput[1];
+        const uint32_t recoilBinding = (uint32_t)generation;
+        snapshot.recoilInputsPresent = recoilInputs.present && recoilBinding != 0;
+        snapshot.recoilBinding = snapshot.recoilInputsPresent ? recoilBinding : 0;
+        if (snapshot.recoilInputsPresent) {
+            CoreSetRecoilPostSample *sample = [CoreSetRecoilPostSample new];
+            sample.key = recoilInputs.key;
+            sample.ownerToken = recoilInputs.ownerToken;
+            sample.active = recoilInputs.active;
+            sample.value0 = recoilInputs.values[0];
+            sample.value1 = recoilInputs.values[1];
+            sample.value2 = recoilInputs.values[2];
+            sample.value3 = recoilInputs.values[3];
+            sample.value4 = recoilInputs.values[4];
+            sample.value5 = recoilInputs.values[5];
+            snapshot.recoilPostSample = sample;
+            snapshot.recoilFirstWeight = recoilInputs.scales[0];
+            snapshot.recoilFirstBindingScale = recoilInputs.scales[1];
+            snapshot.recoilSecondWeight = recoilInputs.scales[2];
+            snapshot.recoilSecondBindingScale = recoilInputs.scales[3];
+        }
     }
     snapshot.captureStartedMonotonicSeconds = captureStartedAt;
     snapshot.captureCompletedMonotonicSeconds = captureCompletedAt;

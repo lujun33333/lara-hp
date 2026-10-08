@@ -52,6 +52,8 @@ def body(source: str, signature: str) -> str:
 
 def configured_fields(source: str) -> set[str]:
     configured = body(source, "var configurableFields:")
+    if configured.strip() == "supportedFields":
+        configured = body(source, "var supportedFields:")
     assert not re.search(r"\b(?:availability|ready|session|coordinator|preview)\b", configured), \
         "staged configuration must not disappear while its runtime producer is unavailable"
     fields: set[str] = set()
@@ -93,10 +95,15 @@ class ConsumerConfigurationContract(unittest.TestCase):
         for name, source in self.sources.items():
             with self.subTest(consumer=name):
                 supported = body(source, "var supportedFields:")
-                if name in ("Aim", "Recoil"):
-                    self.assertRegex(supported, r"^\s*\[\]\s*$")
-                    self.assertIn(".notApplied(reason:", body(source, "func apply("))
-                    self.assertNotIn(".applied(observed:", body(source, "func apply("))
+                if name == "Recoil":
+                    self.assertNotRegex(supported, r"^\s*\[\]\s*$")
+                    self.assertIn("actionConsumer.applyRecoil", body(source, "func apply("))
+                    self.assertIn("CoreSetAimConsumer", source)
+                elif name == "Aim":
+                    self.assertNotRegex(supported, r"^\s*\[\]\s*$")
+                    self.assertIn("result.committed", source)
+                    self.assertIn("cleanup.complete", source)
+                    self.assertIn(".applied(observed:", source)
                 else:
                     self.assertIn("availability == .ready", supported)
                     require_live_apply(source)
@@ -131,13 +138,17 @@ class ConsumerConfigurationContract(unittest.TestCase):
         receipt = body(self.sources["Material"], "func consumed(")
         self.assertRegex(receipt, r"if settings\.enabled == true \|\| settings\.metroArmor == true\s*\{\s*refresh = Timer")
 
-    def test_action_configuration_is_stageable_but_never_live_supported(self) -> None:
-        for name in ("Aim", "Recoil"):
-            source = (APP / f"CoreSet{name}Consumer.swift").read_text(encoding="utf-8")
-            self.assertGreater(len(configured_fields(source)), 0)
-            self.assertRegex(body(source, "var supportedFields:"), r"^\s*\[\]\s*$")
-            self.assertNotIn(".applied(observed:", body(source, "func apply("))
-            self.assertNotIn("writeControllerAction", source)
+    def test_action_configuration_matches_shared_active_aim_and_recoil(self) -> None:
+        aim = self.sources["Aim"]
+        self.assertGreater(len(configured_fields(aim)), 0)
+        self.assertNotRegex(body(aim, "var supportedFields:"), r"^\s*\[\]\s*$")
+        self.assertIn("CoreSetIsolatedWriteProbe", aim)
+        recoil = self.sources["Recoil"]
+        self.assertGreater(len(configured_fields(recoil)), 0)
+        self.assertNotRegex(body(recoil, "var supportedFields:"), r"^\s*\[\]\s*$")
+        self.assertIn("actionConsumer.applyRecoil", body(recoil, "func apply("))
+        self.assertIn("pendingRecoilCompletion", aim)
+        self.assertNotIn("writeControllerAction", recoil)
 
     def test_contract_rejects_ready_dependent_configuration_and_unchecked_apply(self) -> None:
         player = self.sources["Player"]

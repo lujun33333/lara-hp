@@ -44,6 +44,7 @@ class HomeRuntimeProducerContract(unittest.TestCase):
         self.assertIn("homeTelemetry.bindReferenceObservationProvider(homeProducer)", self.coordinator)
         self.assertIn("homeTelemetry.stopObservations()", self.coordinator)
         self.assertIn('producer=%@ confirmed=0 original-runtime-receipt=0', self.telemetry)
+        self.assertIn('localAction ? "local-action-bound"', self.telemetry)
         self.assertIn('"local-equivalent-bound" : "original-action-unbound"', self.telemetry)
         self.assertNotIn('producer=unbound confirmed=0', self.telemetry)
 
@@ -102,7 +103,17 @@ class HomeRuntimeProducerContract(unittest.TestCase):
                        "version.majorVersion == 18", "version.majorVersion == 26",
                        "let firmware = CoreSetKernelCacheTransferOwner.shared.snapshot()"):
             self.assertIn(marker, self.producer)
+        self.assertIn("manager.hasOffsets && information.status == 2", self.producer)
+        self.assertIn("firmware.phase == 6 || information.status == 3", self.producer)
         self.assertNotIn("axDeviceSupportStatus()", self.producer)
+
+    def test_home_actions_are_bound_to_live_local_owners(self):
+        for marker in ("menu.onHomeAction =", "performHomeKernelAction",
+                       "performHomeInformationAction", "recordHomeAction"):
+            self.assertIn(marker, self.coordinator)
+        for marker in ("startHomeKernelAction", "startHomeInformationAction",
+                       ".homeKernelAction", ".homeInformationAction"):
+            self.assertIn(marker, self.menu)
 
 
 if __name__ == "__main__":

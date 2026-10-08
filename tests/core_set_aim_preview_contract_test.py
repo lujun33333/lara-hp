@@ -71,12 +71,13 @@ class CoreSetAimPreviewContractTest(unittest.TestCase):
         self.assertNotRegex(no_target, r"return\s+\[\]")
         self.assertIn("state.circleVisible == true", commands)
 
-    def test_preview_is_read_only_and_action_consumer_remains_fail_closed(self) -> None:
+    def test_preview_remains_read_only_and_action_consumer_is_separate(self) -> None:
         self.assertIn("includeBattleInputs: false", self.preview)
         self.assertIn("preview-snapshot-confirmed target=", self.preview)
         self.assertNotRegex(self.preview, r"\b(ds_kwrite|vm_write|mach_vm_write|RemoteCall)\b")
-        self.assertRegex(self.action, r"var supportedFields: Set<CoreSetField> \{ \[\] \}")
-        self.assertIn("未执行目标写入", self.action)
+        self.assertIn("CoreSetIsolatedWriteProbe", self.action)
+        self.assertIn("includeBattleInputs: true", self.action)
+        self.assertIn("result.committed", self.action)
 
     def test_v17_aim_option_text_is_preserved(self) -> None:
         self.assertIn(
@@ -99,7 +100,7 @@ class CoreSetAimPreviewContractTest(unittest.TestCase):
                        "registerHosted(totalSwitch, .aimStop)",
                        "registerHosted(totalSwitch, .aimStart)"):
             self.assertIn(marker, controls)
-        self.assertIn("目标写消费者仍未启用", controls)
+        self.assertIn("启动基础视角自瞄并等待目标写入回读", controls)
         stop = self.menu.split("@objc private func stopBasicAim()", 1)[1].split(
             "private func aimControls(", 1)[0]
         after_receipt = stop.split("receiveStop(token, outcome: outcome)", 1)[1]

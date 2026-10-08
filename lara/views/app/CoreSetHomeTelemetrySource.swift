@@ -90,7 +90,7 @@ final class CoreSetLaraHomeRuntimeObservationProvider: CoreSetExistingHomeRuntim
     func stopObservation() -> Bool { stopped = true; return stopped }
 }
 
-enum CoreSetHomeProbePoint: Int, CaseIterable {
+enum CoreSetHomeProbePoint: Int, CaseIterable, Hashable {
     case runMode = 0, coverMode = 1, kernelAction = 2, informationAction = 3
     case pageProgress = 9, firmwareProgress = 10
     var stableID: String { String(format: "v17-%03d", rawValue) }
@@ -241,11 +241,14 @@ final class CoreSetHomeTelemetrySource {
         if !requirementsLogged {
             requirementsLogged = true
             for point in CoreSetHomeProbePoint.allCases {
-                let locallyBound = referenceProvider != nil &&
-                    (point == .pageProgress || point == .firmwareProgress)
+                let localAction = point == .kernelAction || point == .informationAction
+                let locallyBound = localAction || (referenceProvider != nil &&
+                    (point == .pageProgress || point == .firmwareProgress))
                 NSLog("Core-SET: home-probe stage=producer-required point=%@ producer=%@ confirmed=0 original-runtime-receipt=0 required=%@ scope=%@",
-                      point.stableID, locallyBound ? "local-equivalent-bound" : "original-action-unbound",
-                      point.requiredEvidence, locallyBound ? "live-local-owner" : "reference-contract")
+                      point.stableID, localAction ? "local-action-bound" :
+                        (locallyBound ? "local-equivalent-bound" : "original-action-unbound"),
+                      point.requiredEvidence, localAction ? "live-local-action-owner" :
+                        (locallyBound ? "live-local-owner" : "reference-contract"))
             }
         }
         var reasons: [CoreSetHomeObservationField: String] = [

@@ -156,14 +156,15 @@ class HomeSchedulerContract(unittest.TestCase):
             self.assertTrue(requirement["current_caller_evidence"].startswith("home_current_caller_probe:") or
                             requirement["current_caller_evidence"].startswith("configureHome"))
 
-    def test_current_callers_are_source_bound_not_an_external_library_claim(self):
+    def test_current_home_actions_are_locally_bound_not_an_original_runtime_claim(self):
         sys.path.insert(0, str(ROOT / "tools"))
         from core_set_v17_home_producer_probe import probe_current_repository
         evidence = probe_current_repository(ROOT)
         self.assertEqual({point["id"] for point in evidence["points"]},
                          {f"v17-{point:03}" for point in (0, 1, 2, 3, 5, 6, 8, 9, 10)})
-        self.assertTrue(all(not point["producer_bound"] and not point["original_runtime_receipt_verified"]
-                            for point in evidence["points"]))
+        bound = {point["id"] for point in evidence["points"] if point["producer_bound"]}
+        self.assertEqual(bound, {"v17-002", "v17-003"})
+        self.assertTrue(all(not point["original_runtime_receipt_verified"] for point in evidence["points"]))
         for source in evidence["source_manifest"]:
             current = (ROOT / source["source"]).read_text(encoding="utf-8")
             self.assertEqual(source["sha256_utf8_text"], hashlib.sha256(current.encode("utf-8")).hexdigest())
@@ -224,7 +225,8 @@ class HomeSchedulerContract(unittest.TestCase):
         self.assertEqual([hit["class"] for hit in scan["conformers"]], ["Candidate"])
         self.assertEqual(len(scan["binding_calls"]), 1)
         self.assertEqual(len(scan["home_consumer_bindings"]), 1)
-        self.assertTrue(all(not point["producer_bound"] for point in evidence["points"]))
+        self.assertEqual({point["id"] for point in evidence["points"] if point["producer_bound"]},
+                         {"v17-002", "v17-003"})
 
 
 def replay(path):

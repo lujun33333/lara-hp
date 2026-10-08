@@ -65,9 +65,8 @@ assert "case .notApplied, .unavailable:" in apply
 assert "self.stagedConfigurationPaths.insert(path)" in apply
 assert "self.stagedConfigurationReadiness[path] = self.canApply" in apply
 deferred = body(menu, "private func applyStagedConfigurations()")
-for channel in ("frameRate", "player", "materials", "adjustments", "radar", "aimDisplay"):
+for channel in ("frameRate", "player", "materials", "adjustments", "radar", "aimDisplay", "aim", "recoil"):
     assert f"apply(\\.{channel})" in deferred, channel
-assert "apply(\\.aim)" not in deferred and "apply(\\.recoil)" not in deferred
 assert "guard ready && !wasReady" in deferred
 stop = body(menu, "func suspendGameConsumers(")
 assert "stagedConfigurationPaths.removeAll()" in stop
@@ -104,7 +103,12 @@ for unsafe in (
 for name in ("Player", "Material", "Radar", "Adjustment", "AimDisplay", "FrameRate", "Aim", "Recoil"):
     consumer = (ROOT / "lara/views/app" / f"CoreSet{name}Consumer.swift").read_text(encoding="utf-8")
     entry = body(consumer, "func apply(")
-    assert ".notApplied(reason:" in entry, name
+    if name == "Aim":
+        assert ".unavailable(reason:" in entry and "CoreSetIsolatedWriteProbe" in consumer, name
+    elif name == "Recoil":
+        assert ".unavailable(reason:" in entry and "CoreSetAimConsumer" in consumer, name
+    else:
+        assert ".notApplied(reason:" in entry, name
     if "revision += 1" in entry:
         assert entry.index(".notApplied(reason:") < entry.index("revision += 1"), name
     if name in ("Player", "Material", "Radar", "Adjustment", "AimDisplay"):
@@ -129,15 +133,17 @@ assert "updateDesired" not in explain and "applyGame" not in explain
 
 scene = body(menu, "private func scenePreview(")
 assert "aimConfigurationAvailable(.basicAimScene)" in scene
-assert "尚未生效" in scene
+assert "选择基础视角自瞄场景参数" in scene
 start = body(menu, "@objc private func startBasicAim()")
 assert "aimConfigurationAvailable(.basicAimEnabled)" in start
-assert "featureState.aim.updateDesired" in start
-assert r"editGame(\.aim)" not in start and r"applyGame(\.aim)" not in start
-for filename in ("CoreSetAimConsumer.swift", "CoreSetRecoilConsumer.swift"):
-    consumer = (ROOT / "lara/views/app" / filename).read_text(encoding="utf-8")
-    assert "var supportedFields: Set<CoreSetField> { [] }" in consumer
-    assert ".unavailable(reason:" in body(consumer, "var availability:")
+assert r"editGame(\.aim)" in start
+aim_consumer = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
+assert "CoreSetIsolatedWriteProbe" in aim_consumer
+assert "var supportedFields: Set<CoreSetField> { [] }" not in aim_consumer
+recoil_consumer = (ROOT / "lara/views/app/CoreSetRecoilConsumer.swift").read_text(encoding="utf-8")
+assert "var supportedFields: Set<CoreSetField> { [] }" not in recoil_consumer
+assert ".recoilEnabled" in body(recoil_consumer, "var supportedFields:")
+assert ".unavailable(reason:" in body(recoil_consumer, "var availability:")
 
 # An unrelated observation cannot destroy the pointer between down and up.
 rebuild = body(menu, "private func rebuildMenu(")
@@ -211,9 +217,8 @@ for signature, field in (("@objc private func toggleRecoilField(", "recoilStopWh
                           ("@objc private func configureRecoilStrength(", "recoilVerticalStrength")):
     action = body(menu, signature)
     assert field in action
-    assert "featureState.recoil.updateDesired" in action
+    assert "editGame(\\.recoil)" in action
     assert "recordRecoilConfiguration" in action
-    assert r"applyGame(\.recoil)" not in action
 home_run = body(menu, "@objc private func configureHomeRunMode(")
 home_cover = body(menu, "@objc private func configureHomeCoverMode(")
 assert "featureState.home.updateDesired" in home_run and "targetEffectsCreated=0" in home_run
@@ -247,14 +252,19 @@ for row in rows:
     assert (ROOT / contract["source"]).is_file()
     assert contract["receipt"] and set(contract["lifecycle"]) == {"start", "update", "stop"}
     assert not contract["runtime_device_verified"]
-missing = [row for row in rows if row["consumer_contract"].startswith("missing_")]
-assert len(missing) == 35
+missing_local = [row for row in rows if row["consumer_contract"].startswith("missing_")]
+assert len(missing_local) == 27
 counts = Counter(row["consumer_contract"] for row in rows)
 assert counts["local_appearance"] + counts["local_directory"] + counts["host_palette"] == 31
 assert counts["home_observation"] + counts["performance_observation"] == 10
 assert sum(counts[key] for key in ("player", "materials", "adjustments", "radar", "frame_rate")) == 61
-assert {row["id"] for row in missing} == set(matrix["downstream_requirements"])
-for row in missing:
+original_action_gaps = [row for row in rows if row["id"] in set(matrix["downstream_requirements"]) - {
+    "v17-131", "v17-132", "v17-133", "v17-134", "v17-135", "v17-136"}
+]
+assert len(original_action_gaps) == 29
+assert {row["id"] for row in original_action_gaps} == set(matrix["downstream_requirements"]) - {
+    "v17-131", "v17-132", "v17-133", "v17-134", "v17-135", "v17-136"}
+for row in original_action_gaps:
     requirement = matrix["downstream_requirements"][row["id"]]
     for key in ("interface", "state_field", "evidence_required", "receipt_required"):
         assert requirement[key], (row["id"], key)
@@ -283,5 +293,5 @@ if args.inventory:
     print(f"REFERENCE: {len(pages)} pages / {len(cards)} cards / {len(points)} inventory points; all card names present")
 
 print("PASS: local configuration staging, live apply gates, observable unavailable actions, pointer lifetime; source only")
-print("MATRIX: 137 reference points, 35 missing original action consumers, 7 alternative previews, 5 missing original observation producers (all have local-equivalent producers); device effect closure=0")
+print("MATRIX: 137 reference points, 29 missing original action consumers, 6 recoil points source-closed/device-unverified, 7 alternative previews, 5 missing original observation producers; device effect closure=0")
 print("LIMIT: no Swift/UIKit compilation, physical hit testing, consumer receipt or device output verification")

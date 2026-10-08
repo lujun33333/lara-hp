@@ -93,15 +93,16 @@ assert "ds_start" not in profile_diagnostic
 assert "installAuditedProfile" not in profile_diagnostic
 assert '@"observedOffsetsAudited": @NO' in profile_diagnostic
 assert '#import "overlay/CoreSetKernelWriteProfile.h"' in read("lara/lara-Bridging-Header.h")
-for name in ("Aim", "Recoil"):
-    action = read(f"lara/views/app/CoreSet{name}Consumer.swift")
-    reason = body(action, "private func writeBoundaryReason()")
-    assert "CoreSetKernelWriteProfileRegistry.diagnosticSnapshot()" in reason
-    assert 'snapshot["failureReasons"]' in reason
-    assert 'snapshot["profileMatches"]' in reason
-    assert "systemUptime" in reason and "< 5" in reason
-    assert "writeControllerAction" not in action
-    assert "supportedFields: Set<CoreSetField> { [] }" in action
+aim = read("lara/views/app/CoreSetAimConsumer.swift")
+assert "CoreSetIsolatedWriteProbe" in aim
+assert "includeBattleInputs: true" in aim
+assert "result.committed" in aim and "cleanup.complete" in aim
+recoil = read("lara/views/app/CoreSetRecoilConsumer.swift")
+assert "writeControllerAction" not in recoil
+assert "CoreSetAimConsumer" in recoil and "actionConsumer.applyRecoil" in recoil
+assert "recoilEnabled" in body(recoil, "var supportedFields:")
+assert "supportedFields: Set<CoreSetField> { [] }" not in recoil
+assert "lane:lane" in read("lara/overlay/CoreSetIsolatedWriteProbe.mm")
 
 menu = read("lara/views/app/CoreSetMenuViewController.swift")
 explain = body(menu, "@objc private func explainUnavailable")
@@ -126,13 +127,12 @@ assert "_inputArmed.store(true)" in monitor
 
 build = read("scripts/build_ipa_pe.sh")
 for contract in (
-    '"gameConsumer": "CoreSetReadSession read-only HUD lanes"',
+    '"gameConsumer": "CoreSetReadSession HUD lanes + Core v1.7 bone/prediction Aim+Recoil shared checked write"',
     '"targetVersion": "1.38.12/build15915/UUID34b785b2-0dab-3992-985d-359e6bf45585"',
-    '"transportPolicy": "strict-target-read-only"',
-    '"writeFeaturesEnabled": false',
+    '"transportPolicy": "checked-control-and-input-rotation-write"',
+    '"writeFeaturesEnabled": true',
 ):
     assert contract in build, contract
-assert '"writeFeaturesEnabled": true' not in build
 
 # Negative controls: silently removing a target boundary or preferring the
 # observed-broken IOHID path must make this test logic reject the source.

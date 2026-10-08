@@ -212,9 +212,9 @@ assert not re.search(r"smoba|UnityFramework|wzhud_|wzesp_", coordinator)
 launch = swift(coordinator, "launchGame")
 aim_consumer = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
 feature_state = (ROOT / "lara/views/app/CoreSetFeatureState.swift").read_text(encoding="utf-8")
-need(coordinator, "aimConsumer = CoreSetAimConsumer()")
-need(aim_consumer, "var supportedFields: Set<CoreSetField> { [] }",
-     "自瞄目标写能力未验证，未执行目标写入")
+need(coordinator, "aimConsumer = CoreSetAimConsumer(coordinator: self)")
+need(aim_consumer, "CoreSetIsolatedWriteProbe", "includeBattleInputs: true",
+     "result.committed", "cleanup.complete")
 need(feature_state, "case basicAimScene")
 need(launch, "axDeviceSupportStatus()", "init_offsets()", "offsets_init()", "manager.run", "prepareKernelOffsets")
 for forbidden in ("foregroundInputProbeConfirmed", "foregroundProbeSourcesDetached",
@@ -240,8 +240,11 @@ remote = swift(coordinator, "rebuildHostedWindows")
 need(remote, "host.transition(toRemoteHostingAdapter: adapter)", "installHostedWindows(adapter: adapter, localMode: false")
 assert "stopHostedAsync" not in swift(coordinator, "fallbackToSpringBoardAfterLocalFailure")
 hosting = swift(coordinator, "installHostedWindows")
-need(hosting, "suspendAimConsumer", "host.attach(adapter)", "verifyHostedWindows")
+need(hosting, "suspendActionConsumers", "host.attach(adapter)", "verifyHostedWindows")
 assert "host.stop()" not in hosting and "suspendMenuHostConsumer" not in hosting
+action_stop = swift(menu, "suspendActionConsumers")
+need(action_stop, "stop(\\.aim)", "stop(\\.recoil)", "group.notify(queue: .main)")
+need(swift(menu, "resumeActionConsumers"), "featureState.aim.resume()", "featureState.recoil.resume()")
 assert "CoreSetHostedInputCalibration" not in host
 attach = objc(host[host.index("@implementation CoreSetHUDHost {"):], "attachHostingAdapter")
 need(attach, "_adapter = adapter", "registerBothSurfacesAsync:menu drawWindow:draw")

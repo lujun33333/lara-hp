@@ -207,6 +207,9 @@ final class CoreSetRuntimeCoordinator {
     private var remoteCleanupFailed = false
     private var gameLaunchStatus: String?
     private var kernelOffsetsRunning = false
+    private let homeActionProducerEpoch = UUID()
+    private var homeActionRequests: [CoreSetHomeProbePoint: UUID] = [:]
+    private var homeActionSequences: [CoreSetHomeProbePoint: UInt64] = [:]
     private let frameComposer = CoreSetFrameComposer()
     var localFrameDidConsume: ((CoreSetLocalFrameReceipt) -> Void)?
     private(set) var lastStopResult: CoreSetHUDStopResult?
@@ -216,6 +219,103 @@ final class CoreSetRuntimeCoordinator {
     func recordHomeProducerProbeEvent(_ event: CoreSetHomeProducerProbeEvent) -> Bool {
         precondition(Thread.isMainThread)
         return homeTelemetry.recordProducerProbeEvent(event)
+    }
+    @discardableResult
+    private func recordHomeAction(_ point: CoreSetHomeProbePoint, phase: CoreSetHomeProbePhase,
+                                  status: Int?, errorCode: Int? = nil) -> UUID? {
+        precondition(Thread.isMainThread)
+        let request: UUID
+        let sequence: UInt64
+        if phase == .requested {
+            request = UUID(); sequence = 1
+            homeActionRequests[point] = request; homeActionSequences[point] = sequence
+        } else {
+            guard let active = homeActionRequests[point] else { return nil }
+            request = active
+            let old = homeActionSequences[point] ?? 0
+            sequence = old == UInt64.max ? 1 : old + 1
+            homeActionSequences[point] = sequence
+        }
+        let accepted = homeTelemetry.recordProducerProbeEvent(CoreSetHomeProducerProbeEvent(
+            point: point, producerEpoch: homeActionProducerEpoch, requestID: request,
+            sequence: sequence, observedAt: Date(), phase: phase, requestedOption: nil,
+            observedStatus: status, nativeGeneration: nil,
+            inFlight: phase == .requested || phase == .running,
+            ready: phase == .completed, completedCount: nil, totalCount: nil,
+            errorCode: errorCode))
+        if !accepted { return nil }
+        if [.completed, .failed, .cancelled, .stopped].contains(phase) {
+            homeActionRequests.removeValue(forKey: point)
+            homeActionSequences.removeValue(forKey: point)
+        }
+        return request
+    }
+
+    private func performHomeAction(_ point: CoreSetHomeProbePoint,
+                                   completion: @escaping (String?) -> Void) {
+        precondition(Thread.isMainThread)
+        guard !stopping else { completion("HUD 正在停止"); return }
+        switch point {
+        case .kernelAction: performHomeKernelAction(completion: completion)
+        case .informationAction: performHomeInformationAction(completion: completion)
+        default: completion("该主页点不是动作入口")
+        }
+    }
+
+    private func performHomeKernelAction(completion: @escaping (String?) -> Void) {
+        let manager = laramgr.shared
+        guard !manager.dsrunning else { completion("内核环境正在初始化"); return }
+        guard recordHomeAction(.kernelAction, phase: .requested, status: 0) != nil,
+              recordHomeAction(.kernelAction, phase: .running, status: 1) != nil else {
+            completion("内核利用动作回执初始化失败"); return
+        }
+        if !manager.dsready && !ds_is_ready() { init_offsets(); offsets_init() }
+        manager.run { [weak self] ready in
+            guard let self, !self.stopping else { completion("HUD 已停止"); return }
+            let phase: CoreSetHomeProbePhase = ready ? .completed : .failed
+            _ = self.recordHomeAction(.kernelAction, phase: phase,
+                                      status: ready ? 2 : 3, errorCode: ready ? nil : -1)
+            self.refreshHomeObservation()
+            completion(ready ? nil : "内核环境初始化失败")
+        }
+    }
+
+    private func performHomeInformationAction(completion: @escaping (String?) -> Void) {
+        let manager = laramgr.shared
+        guard manager.dsready || ds_is_ready() else {
+            completion("请先完成内核利用"); return
+        }
+        guard !kernelOffsetsRunning else { completion("当前设备信息正在获取"); return }
+        guard recordHomeAction(.informationAction, phase: .requested, status: 0) != nil,
+              recordHomeAction(.informationAction, phase: .running, status: 1) != nil else {
+            completion("获取信息动作回执初始化失败"); return
+        }
+        if manager.hasOffsets {
+            CoreSetKernelInformationOwner.shared.publishCachedValidation()
+            _ = recordHomeAction(.informationAction, phase: .completed, status: 2)
+            refreshHomeObservation(); completion(nil); return
+        }
+        kernelOffsetsRunning = true
+        CoreSetKernelInformationOwner.shared.beginResolve()
+        refreshHomeObservation()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let fetched = fetchkcache()
+            if fetched { CoreSetKernelInformationOwner.shared.didResolveArtifact() }
+            else { CoreSetKernelInformationOwner.shared.failValidation("kernelcache 获取失败") }
+            let loaded = fetched && dlkcache()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.stopping else { completion("HUD 已停止"); return }
+                self.kernelOffsetsRunning = false
+                manager.hasOffsets = loaded
+                if loaded { CoreSetKernelInformationOwner.shared.completeValidation() }
+                else if fetched { CoreSetKernelInformationOwner.shared.failValidation("本机内核偏移验证失败") }
+                _ = self.recordHomeAction(.informationAction,
+                    phase: loaded ? .completed : .failed, status: loaded ? 2 : 3,
+                    errorCode: loaded ? nil : -1)
+                self.refreshHomeObservation()
+                completion(loaded ? nil : (fetched ? "本机内核偏移验证失败" : "kernelcache 获取失败"))
+            }
+        }
     }
     func bindHomeReferenceObservationProvider(_ provider: CoreSetHomeReferenceObservationProvider) {
         precondition(Thread.isMainThread)
@@ -311,11 +411,11 @@ final class CoreSetRuntimeCoordinator {
         if let frameRateConsumer { _ = menu.bindGameConsumer(frameRateConsumer, to: \.frameRate) }
         radarConsumer = CoreSetRadarConsumer(coordinator: self)
         if let radarConsumer { _ = menu.bindGameConsumer(radarConsumer, to: \.radar) }
-        aimConsumer = CoreSetAimConsumer()
+        aimConsumer = CoreSetAimConsumer(coordinator: self)
         if let aimConsumer { _ = menu.bindGameConsumer(aimConsumer, to: \.aim) }
         aimDisplayConsumer = CoreSetAimDisplayConsumer(coordinator: self)
         if let aimDisplayConsumer { _ = menu.bindGameConsumer(aimDisplayConsumer, to: \.aimDisplay) }
-        recoilConsumer = CoreSetRecoilConsumer()
+        if let aimConsumer { recoilConsumer = CoreSetRecoilConsumer(actionConsumer: aimConsumer) }
         if let recoilConsumer { _ = menu.bindGameConsumer(recoilConsumer, to: \.recoil) }
         let homeProducer = CoreSetHomeRuntimeProducer(manager: .shared)
         homeReferenceObservationProvider = homeProducer
@@ -339,6 +439,10 @@ final class CoreSetRuntimeCoordinator {
         menu.onExitHUD = { [weak self] in self?.exitHostedHUD() }
         menu.onHomeProbeRefusal = { [weak self] point, option in
             self?.homeTelemetry.recordRefusedControl(point, option: option)
+        }
+        menu.onHomeAction = { [weak self] point, completion in
+            guard let self else { completion("主页动作 owner 已释放"); return }
+            self.performHomeAction(point, completion: completion)
         }
         Self.retained[identity] = self
         startPerformanceSampling()
@@ -372,7 +476,7 @@ final class CoreSetRuntimeCoordinator {
         guard !stopping, let scene else { return }
         if returnToLocalPending { return }
         if aimSuspendedForHost {
-            guard menu.resumeAimConsumer() else {
+            guard menu.resumeActionConsumers() else {
                 activateAfterAimStop = true
                 publishStatus()
                 return
@@ -545,7 +649,7 @@ final class CoreSetRuntimeCoordinator {
         if let scene, scene.activationState != .foregroundActive {
             host.setApplicationActive(false)
         } else if error != nil, aimSuspendedForHost, host.localSurfacesReady,
-                  menu.resumeAimConsumer() {
+                  menu.resumeActionConsumers() {
             aimSuspendedForHost = false
         }
         publishStatus()
@@ -656,7 +760,7 @@ final class CoreSetRuntimeCoordinator {
     private func installHostedWindows(adapter: CoreSetHUDHostingAdapter, localMode: Bool,
                                        epoch: UInt64, completion: @escaping (String?) -> Void) {
         aimSuspendedForHost = true
-        menu.suspendAimConsumer { [weak self] confirmed in
+        menu.suspendActionConsumers { [weak self] confirmed in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
             guard confirmed, self.scene?.activationState == .foregroundActive,
                   self.host.localSurfacesReady else {
@@ -732,7 +836,7 @@ final class CoreSetRuntimeCoordinator {
                 self.rollbackGameLaunch(epoch: epoch, error: "游戏内菜单显示未确认", completion: completion)
                 return
             }
-            guard !self.aimSuspendedForHost || self.menu.resumeAimConsumer() else {
+            guard !self.aimSuspendedForHost || self.menu.resumeActionConsumers() else {
                 self.rollbackGameLaunch(epoch: epoch, error: "目标动作恢复未确认，已停止游戏启动", completion: completion)
                 return
             }
@@ -904,11 +1008,11 @@ final class CoreSetRuntimeCoordinator {
     func deactivate() {
         guard !stopping, !aimSuspendedForHost else { return }
         aimSuspendedForHost = true
-        menu.suspendAimConsumer { [weak self] confirmed in
+        menu.suspendActionConsumers { [weak self] confirmed in
             guard let self, !self.stopping else { return }
             if self.activateAfterAimStop, confirmed {
                 self.activateAfterAimStop = false
-                guard self.menu.resumeAimConsumer() else { self.publishStatus(); return }
+                guard self.menu.resumeActionConsumers() else { self.publishStatus(); return }
                 self.aimSuspendedForHost = false
                 self.activate()
                 return
@@ -936,9 +1040,9 @@ final class CoreSetRuntimeCoordinator {
            submittedGeneration != host.renderGeneration {
             if submittedGeneration != nil, !aimSuspendedForHost {
                 aimSuspendedForHost = true
-                menu.suspendAimConsumer { [weak self] confirmed in
+                menu.suspendActionConsumers { [weak self] confirmed in
                     guard let self, !self.stopping, confirmed else { return }
-                    _ = self.menu.resumeAimConsumer()
+                    _ = self.menu.resumeActionConsumers()
                     self.aimSuspendedForHost = false
                     if self.activateAfterAimStop {
                         self.activateAfterAimStop = false
@@ -1070,6 +1174,7 @@ final class CoreSetRuntimeCoordinator {
         performanceTimer?.cancel()
         performanceTimer = nil
         observationTimer?.cancel(); observationTimer = nil
+        menu.onHomeAction = nil
         _ = homeTelemetry.stopObservations(); homeReferenceObservationProvider = nil
         menu.updatePresentedFrameObservation(nil)
         stopReceiptsPending = true

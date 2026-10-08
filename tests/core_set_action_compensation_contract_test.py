@@ -84,23 +84,23 @@ class CompensationContracts(unittest.TestCase):
             self.assertTrue(any("game-thread concurrency" in edge for edge in point["next_exact_edges"]))
             self.assertTrue(any("effects restored" in edge for edge in point["next_exact_edges"]))
 
-    def test_runtime_denial_distinguishes_reference_model_from_live_owner(self):
-        for name in ("Aim", "Recoil"):
-            source = (ROOT / f"lara/views/app/CoreSet{name}Consumer.swift").read_text(encoding="utf-8")
-            for marker in ("supportedFields: Set<CoreSetField> { [] }", "upstreamRouteAuthority=unissued",
-                           "producerLease=unissued", "gameThreadExclusive=0", "stopRestore=unverified", ".notApplied(reason:"):
-                self.assertIn(marker, source)
-            self.assertNotIn("writeControllerAction", source)
-            self.assertNotIn(".applied(observed:", source)
+    def test_aim_and_recoil_share_reference_geometry_state_and_writer(self):
+        aim = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
+        self.assertIn("CoreSetIsolatedWriteProbe", aim)
+        self.assertIn("result.committed", aim)
+        self.assertIn(".applied(observed:", aim)
         recoil = (ROOT / "lara/views/app/CoreSetRecoilConsumer.swift").read_text(encoding="utf-8")
-        self.assertIn("postOwnerToken=object-pointer-not-generation", recoil)
-        self.assertIn("localPostState=reference-c416c-valid-input", recoil)
-        # The new pure model is used by the separately compiled offline test,
-        # not by production consumers, Objective-C++ bridges or write sessions.
-        for path in (ROOT / "lara").rglob("*"):
-            if path.suffix not in (".h", ".mm", ".swift"): continue
-            if path.name == "CoreSetActionCompensationState.h": continue
-            self.assertNotIn("CoreSetActionCompensationState.h", path.read_text(encoding="utf-8"))
+        self.assertIn("CoreSetAimConsumer", recoil)
+        self.assertIn("actionConsumer.applyRecoil", recoil)
+        self.assertNotIn("supportedFields: Set<CoreSetField> { [] }", recoil)
+        for marker in ("CoreSetV17RecoilDynamics", "submitMergedAction", "actionSlot(recoilEnabled:",
+                       "observeCommittedRoute", "tickRecoilOnly"):
+            self.assertIn(marker, aim)
+        bridge = (ROOT / "lara/overlay/CoreSetIsolatedWriteProbe.mm").read_text(encoding="utf-8")
+        self.assertIn('CoreSetActionCompensationState.h', bridge)
+        self.assertIn("referenceActionCandidateMotion", bridge)
+        self.assertIn("referenceActionGeometry", bridge)
+        self.assertNotIn("basicAimDynamicStep(", bridge)
 
     def test_local_numerical_bytes_calls_constants_and_feedback_replay(self):
         if not ARGS.reference_ipa: self.skipTest("exact reference IPA required")

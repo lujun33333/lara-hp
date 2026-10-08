@@ -32,33 +32,43 @@ class ActionConfigurationContract(unittest.TestCase):
         cls.aim = read("CoreSetAimConsumer.swift")
         cls.recoil = read("CoreSetRecoilConsumer.swift")
 
-    def test_aim_25_points_have_22_typed_configuration_fields(self):
+    def test_aim_points_have_22_typed_fields_and_18_live_action_fields(self):
         configured = body(self.aim, "var configurableFields:")
         fields = set(re.findall(r"\.(basicAim\w+)", configured))
         self.assertEqual(len(fields), 22)
         configurable = body(self.state, "static func configurable(for capability:")
         self.assertTrue(fields.issubset(set(re.findall(r"\.(basicAim\w+)", configurable))))
         required = body(self.state, "static func required(for capability:")
-        self.assertFalse(set(re.findall(r"\.(basicAim\w+)", required)))
-        self.assertRegex(body(self.aim, "var supportedFields:"), r"^\s*\[\]\s*$")
+        supported = set(re.findall(r"\.(basicAim\w+)", body(self.aim, "var supportedFields:")))
+        self.assertEqual(set(re.findall(r"\.(basicAim\w+)", required)), supported)
+        self.assertEqual(fields - supported, {
+            "basicAimPreaimCircle", "basicAimDynamicCircle",
+            "basicAimShowCircle", "basicAimConnectionLine",
+        })
 
     def test_recoil_six_points_are_typed_and_inverted_flag_is_preserved(self):
-        configured = body(self.recoil, "var configurableFields:")
-        fields = set(re.findall(r"\.(recoil\w+)", configured))
+        supported = body(self.recoil, "var supportedFields:")
+        fields = set(re.findall(r"\.(recoil\w+)", supported))
         self.assertEqual(len(fields), 6)
+        self.assertIn("supportedFields", body(self.recoil, "var configurableFields:"))
         inverted = body(self.state, "struct CoreSetInvertedFlag:")
         self.assertIn("enabled.map { !$0 }", inverted)
         toggle = body(self.menu, "@objc private func toggleRecoilField(")
         self.assertIn("stopWhenNotFiring.enabled", toggle)
         self.assertNotIn("nativeFlag =", toggle)
 
-    def test_configuration_never_enters_action_apply_or_writer(self):
-        for source in (self.aim, self.recoil):
-            apply = body(source, "func apply(")
-            self.assertIn(".notApplied(reason:", apply)
-            self.assertNotIn(".applied(observed:", apply)
-            self.assertNotIn("writeControllerAction", source)
-            self.assertNotIn("initWithRequestAuthority", source)
+    def test_aim_and_recoil_enter_one_checked_shared_writer(self):
+        aim_apply = body(self.aim, "func apply(")
+        self.assertIn("CoreSetIsolatedWriteProbe", self.aim)
+        self.assertIn(".applied(observed:", self.aim)
+        self.assertIn("result.committed", self.aim)
+        recoil_apply = body(self.recoil, "func apply(")
+        self.assertIn("actionConsumer.applyRecoil", recoil_apply)
+        self.assertIn("submitMergedAction", self.aim)
+        self.assertIn("tickRecoilOnly", self.aim)
+        self.assertIn("pendingRecoilCompletion", self.aim)
+        self.assertNotIn("writeControllerAction", self.recoil)
+        self.assertNotIn("initWithRequestAuthority", self.recoil)
         for signature in ("private func recordAimConfiguration(",
                           "private func recordRecoilConfiguration(",
                           "@objc private func configureHomeRunMode(",
