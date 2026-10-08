@@ -125,6 +125,7 @@
 				third_party/imgui/imgui_tables.cpp,
 				third_party/imgui/imgui_widgets.cpp,
 				third_party/imgui/backends/imgui_impl_metal.mm,
+				third_party/imgui/LICENSE.txt,
 				CoreSetAssets,
 				CoreSetLoading.png,
 				Info.plist,
