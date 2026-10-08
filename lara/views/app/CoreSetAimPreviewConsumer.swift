@@ -14,6 +14,7 @@ struct CoreSetAimPreviewFrame {
     let sessionGeneration: UInt64
     let processID: Int32
     let imageBase: UInt64
+    let captureStartedMonotonicSeconds: Double
     let captureCompletedMonotonicSeconds: Double
     let target: CoreSetAimPreviewTarget?
 }
@@ -76,14 +77,14 @@ final class CoreSetAimPreviewConsumer {
                 includeWarningYaw: false, maximumDrawDistance: Double(maximumDistance))
             let captureFailure = self.session.readFailureSequence != failureSequence
                 ? self.session.lastReadDiagnostic
-                : "preview-snapshot-validation-or-freshness-failed transport-errors=0"
+                : "\(CoreSetPlayerCollector.lastCaptureDiagnostic()) transport-errors=0"
             var frame: CoreSetAimPreviewFrame?
             if let snapshot,
                snapshot.sessionGeneration == generation,
                snapshot.processID == pid, snapshot.imageBase == base,
                let id = UUID(uuidString: snapshot.snapshotID.uuidString),
-               CACurrentMediaTime() - snapshot.captureCompletedMonotonicSeconds >= 0,
-               CACurrentMediaTime() - snapshot.captureCompletedMonotonicSeconds <= 0.5 {
+               CACurrentMediaTime() - snapshot.captureStartedMonotonicSeconds >= 0,
+               CACurrentMediaTime() - snapshot.captureStartedMonotonicSeconds <= 0.5 {
                 let center = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
                 var best: (score: CGFloat, target: CoreSetAimPreviewTarget)?
                 for mark in snapshot.marks {
@@ -113,6 +114,7 @@ final class CoreSetAimPreviewConsumer {
                 }
                 frame = CoreSetAimPreviewFrame(snapshotID: id,
                     sessionGeneration: generation, processID: pid, imageBase: base,
+                    captureStartedMonotonicSeconds: snapshot.captureStartedMonotonicSeconds,
                     captureCompletedMonotonicSeconds: snapshot.captureCompletedMonotonicSeconds,
                     target: best?.target)
             }
@@ -125,8 +127,8 @@ final class CoreSetAimPreviewConsumer {
                     completion(nil); return
                 }
                 guard let frame,
-                      CACurrentMediaTime() - frame.captureCompletedMonotonicSeconds >= 0,
-                      CACurrentMediaTime() - frame.captureCompletedMonotonicSeconds <= 0.5 else {
+                      CACurrentMediaTime() - frame.captureStartedMonotonicSeconds >= 0,
+                      CACurrentMediaTime() - frame.captureStartedMonotonicSeconds <= 0.5 else {
                     self.lastCaptureDiagnostic = captureFailure
                     completion(nil); return
                 }

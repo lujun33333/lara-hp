@@ -54,7 +54,7 @@ final class CoreSetActionReadOnlyProbe {
                        snapshot.sessionGeneration == self.session.generation,
                        snapshot.processID == self.session.processID,
                        snapshot.imageBase == self.session.imageBase {
-                        let age = CACurrentMediaTime() - snapshot.captureCompletedMonotonicSeconds
+                        let age = CACurrentMediaTime() - snapshot.captureStartedMonotonicSeconds
                         if age >= 0, age <= 0.5 {
                             NSLog("Core-SET: action-read-probe lane=%@ cycle=%llu stage=inputs-observed complete=1 writeReady=0 originalEffectConfirmed=0 captureGeneration=%llu snapshot=%@ ads=%d fire=%d canvas=synthetic-unit selector=not-run slotRoute=unresolved",
                                   self.lane, captureCycle, snapshot.sessionGeneration,
@@ -81,7 +81,7 @@ final class CoreSetActionReadOnlyProbe {
                     } else if stillCurrent {
                         let reason = self.session.readFailureSequence != failuresBefore
                             ? self.session.lastReadDiagnostic
-                            : "snapshot-validation-or-identity-failed transport-errors=0"
+                            : "\(CoreSetPlayerCollector.lastCaptureDiagnostic()) transport-errors=0"
                         NSLog("Core-SET: action-read-probe lane=%@ cycle=%llu stage=capture complete=0 writeReady=0 reason=%@",
                               self.lane, captureCycle, reason)
                     }

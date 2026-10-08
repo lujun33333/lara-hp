@@ -137,7 +137,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 includeWarningYaw: false, maximumDrawDistance: maximumDrawDistance)
             let captureFailure = self.session.readFailureSequence != failureSequence
                 ? self.session.lastReadDiagnostic
-                : "snapshot-validation-or-identity-failed transport-errors=0"
+                : "\(CoreSetPlayerCollector.lastCaptureDiagnostic()) transport-errors=0"
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.inFlight = false
@@ -146,7 +146,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                     if self.pendingApply != nil { self.capture() }
                     return
                 }
-                let captureAge = snapshot.map { CACurrentMediaTime() - $0.captureCompletedMonotonicSeconds } ?? .nan
+                let captureAge = snapshot.map { CACurrentMediaTime() - $0.captureStartedMonotonicSeconds } ?? .nan
                 let failureReason = snapshot != nil && !(0...0.5).contains(captureAge)
                     ? String(format: "snapshot-stale stage=capture ageSeconds=%.3f limit=0.5", captureAge)
                     : captureFailure
@@ -197,7 +197,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.expectedSessionGeneration = snapshot.sessionGeneration
                 self.expectedProcessID = snapshot.processID
                 self.expectedImageBase = snapshot.imageBase
-                self.expectedCapturedAt = snapshot.captureCompletedMonotonicSeconds
+                self.expectedCapturedAt = snapshot.captureStartedMonotonicSeconds
                 self.expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
                     " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog rayGeometry=reference-top-native-scale headAnchor=known-requested-bone-or-root-plus90"
             }

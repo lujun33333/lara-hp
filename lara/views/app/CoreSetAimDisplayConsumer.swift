@@ -295,7 +295,7 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         let id = frame?.snapshotID ?? UUID()
         expectedSnapshot = id; expectedGeneration = canvas.generation
         expectedReadIdentity = frame.map { ($0.sessionGeneration, $0.processID, $0.imageBase) }
-        expectedCapturedAt = frame?.captureCompletedMonotonicSeconds
+        expectedCapturedAt = frame?.captureStartedMonotonicSeconds
         let input = CoreSetLaneSubmission(lane: .aimDisplay, hostGeneration: canvas.generation,
             configRevision: revision, snapshotID: id, requestToken: token,
             canvasSize: canvas.size, commands: commands(state: state, frame: frame,

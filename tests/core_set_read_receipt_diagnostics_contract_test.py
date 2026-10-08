@@ -104,14 +104,49 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
                 after = capture.index("self.session.readFailureSequence != failureSequence")
                 self.assertLess(before, collect)
                 self.assertLess(collect, after)
-                self.assertIn("snapshot-validation-or-identity-failed transport-errors=0", capture)
+                if name in ("Player", "Radar"):
+                    self.assertIn("CoreSetPlayerCollector.lastCaptureDiagnostic()", capture)
+                else:
+                    self.assertIn("snapshot-validation-or-identity-failed", capture)
+                self.assertIn("transport-errors=0", capture)
                 self.assertIn("snapshot-stale stage=capture", capture)
                 self.assertIn("captureAge >= 0, captureAge <= 0.5", capture)
         preview = read("lara/views/app/CoreSetAimPreviewConsumer.swift")
-        self.assertIn("self.session.readFailureSequence != failureSequence", body(preview, "func capture("))
+        preview_capture = body(preview, "func capture(")
+        self.assertIn("self.session.readFailureSequence != failureSequence", preview_capture)
+        self.assertIn("CoreSetPlayerCollector.lastCaptureDiagnostic()", preview_capture)
         material = body(self.consumers["Material"], "private func capture()")
         self.assertLess(material.index("CoreSetMaterialCollector.capture("),
                         material.index("let capturedAt = snapshot?.captureCompletedMonotonicSeconds"))
+
+    def test_player_capture_diagnostic_covers_roots_stability_budget_and_success(self) -> None:
+        header = read("lara/overlay/CoreSetPlayerSnapshot.h")
+        collector = read("lara/overlay/CoreSetPlayerSnapshot.mm")
+        self.assertIn("+ (NSString *)lastCaptureDiagnostic", header)
+        self.assertIn("captureStartedMonotonicSeconds", header)
+        stages = (
+            "request-validation", "identity-initial", "root-world-character",
+            "root-level-actor-array", "root-controller-local-camera-manager",
+            "camera-candidate", "local-position", "local-team", "actor-scan",
+            "stability-roots", "stability-actor-membership", "stability-player-actors",
+            "stability-count-actors", "stability-grenades", "stability-bones",
+            "stability-battle-inputs", "identity-final", "capture-budget-exceeded-final", "ready",
+        )
+        positions = []
+        for stage in stages:
+            token = f'CSLastCaptureDiagnostic = "{stage}"'
+            self.assertIn(token, collector)
+            positions.append(collector.index(token))
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("static thread_local const char *CSLastCaptureDiagnostic", collector)
+        self.assertIn("snapshot.captureStartedMonotonicSeconds = captureStartedAt", collector)
+        inner_loop = collector.index("for (int32_t index = 0; index < batch; ++index)")
+        inner_budget = collector.index("(index & 15) == 0 && captureBudgetExceeded()", inner_loop)
+        inner_actor = collector.index("uint64_t actor = pointers[index]", inner_loop)
+        self.assertLess(inner_loop, inner_budget)
+        self.assertLess(inner_budget, inner_actor)
+        self.assertLess(collector.index('CSLastCaptureDiagnostic = "request-validation"'),
+                        collector.index('CSLastCaptureDiagnostic = "ready"'))
 
     def test_periodic_failure_invalidates_only_after_exact_clear_receipt(self) -> None:
         for name, source in self.consumers.items():

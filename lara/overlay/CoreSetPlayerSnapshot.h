@@ -84,6 +84,9 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) BOOL localFiring;
 @property(nonatomic, readonly) float controlPitchDegrees;
 @property(nonatomic, readonly) float controlYawDegrees;
+// Oldest sample time for freshness gates; completion time alone can hide a
+// slow mapped-read capture.
+@property(nonatomic, readonly) double captureStartedMonotonicSeconds;
 @property(nonatomic, readonly) double captureCompletedMonotonicSeconds;
 // Counts of already-read fields, never raw names/addresses or a parity claim.
 @property(nonatomic, copy, readonly) NSString *readSemanticDiagnostic;
@@ -97,6 +100,10 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @end
 
 @interface CoreSetPlayerCollector : NSObject
+// Per-thread failure stage for the immediately preceding capture call. The
+// value contains no target addresses or field contents and is intended only
+// for distinguishing semantic/local validation from transport failures.
++ (NSString *)lastCaptureDiagnostic;
 // Nil means no complete, identity-stable capture; it must never be interpreted
 // as an empty successful frame. No remote function calls or writes occur.
 + (nullable CoreSetPlayerSnapshot *)capture:(CoreSetReadSession *)session

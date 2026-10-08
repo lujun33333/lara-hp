@@ -38,9 +38,9 @@ def require_receipt_gates(source: str) -> None:
 
 def require_yaw_reread(source: str) -> None:
     for stable in ("includeWarningYaw && !CoreSet::warningYawRawValid(warningYawRaw)",
-                   "actor + 0x190, &warningFallbackRaw)) return nil",
-                   "actor.warningFallbackObserved", "warningFallbackRaw != actor.warningFallbackRaw",
-                   "warningActorClass != actor.warningActorClass", "warningYawRaw != actor.warningYawRaw"):
+                   "actor + 0x190, &warningFallbackRaw)) continue",
+                   "actor.warningFallbackObserved", "actor.address + 0x190,",
+                   "actorClassAfter != actor.warningActorClass", "actor.address + 0x2758, &warningYawRaw"):
         assert stable in source, stable
 
 
@@ -74,7 +74,7 @@ class ReadDisplayContracts(unittest.TestCase):
             self.assertIn(requested, capture)
         for stable in ("actor.weaponObserved", "weapon != actor.weapon || weaponID != actor.weaponID",
                        "actor.nameObserved", "namePointer != actor.namePointer || nameRaw != actor.nameRaw",
-                       "warningYawRaw != actor.warningYawRaw"):
+                       "actor.address + 0x2758, &warningYawRaw"):
             self.assertIn(stable, self.collector)
 
     def test_warning_order_unit_and_unknown_weapon_are_reference_branches(self) -> None:
@@ -93,8 +93,8 @@ class ReadDisplayContracts(unittest.TestCase):
         require_yaw_reread(self.collector)
         self.assertLess(self.collector.index("CSClassIsChildOf(session, generation, actor, wanted"),
                         self.collector.index("actor + 0x190, &warningFallbackRaw"))
-        for missing in ("warningFallbackRaw != actor.warningFallbackRaw",
-                        "warningActorClass != actor.warningActorClass", "warningYawRaw != actor.warningYawRaw"):
+        for missing in ("actor.address + 0x190,",
+                        "actorClassAfter != actor.warningActorClass", "actor.address + 0x2758, &warningYawRaw"):
             with self.subTest(missing=missing), self.assertRaises(AssertionError):
                 require_yaw_reread(self.collector.replace(missing, "REMOVED"))
         header = read("lara/overlay/CoreSetPlayerSnapshot.h")
@@ -117,9 +117,21 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertLess(self.collector.index("distance > maximumDrawDistance"), self.collector.index("++observedBotCount"))
         self.assertLess(self.collector.index("++observedBotCount"), self.collector.index("bool onScreen ="))
 
+    def test_optional_grenade_and_bone_failures_do_not_poison_player_frame(self) -> None:
+        for token in ("const bool nameIndexReady", "if (nameIndexReady)",
+                      "collectGrenades = false", "invalidGrenadeMarks",
+                      "observedBones.size() < CSMaxBoneActors"):
+            self.assertIn(token, self.collector)
+        self.assertNotIn("grenadeMarks.count >= 256) return nil", self.collector)
+        self.assertNotIn("observedBones.size() >= CSMaxBoneActors) return nil", self.collector)
+        optional_roots = self.collector[self.collector.index('CSLastCaptureDiagnostic = "stability-optional-roots"'):
+                                        self.collector.index('CSLastCaptureDiagnostic = "stability-actor-membership"')]
+        self.assertIn("collectGrenades = false", optional_roots)
+        self.assertNotIn("return nil", optional_roots)
+
     def test_zero_health_extension_is_count_only_and_has_lifecycle_reread(self) -> None:
         for scoped in ("CoreSet::playerCountEligible(health, maximum, countStatus)",
-                       "status != count.status", "type != count.type", "zeroHealthLastBreath=%lu",
+                       "count.address + 0x3be0, &status", "type != count.type", "zeroHealthLastBreath=%lu",
                        "if (health == 0) continue; // Count-only"):
             self.assertIn(scoped, self.collector)
         self.assertLess(self.collector.index("if (health == 0) continue; // Count-only"),
@@ -145,11 +157,11 @@ class ReadDisplayContracts(unittest.TestCase):
                      "world + 0x15b0", "clock->gameState + 0x600", "std::isfinite(clock->worldTime)"):
             self.assertIn(gate, clock)
         self.assertNotIn("reinterpret_cast", clock)
-        for stable in ("type != grenade.type", "outer != grenade.outer", "flags != grenade.flags",
-                       "explosionRaw != grenade.explosionRaw", "eliteClassAfter != eliteProjectileClass",
-                       "gameStateClassAfter != gameStateClass", "after.getter != grenadeClock.getter",
-                       "after.worldTime < grenadeClock.worldTime", "after.worldTime - grenadeClock.worldTime > 0.25",
-                       "std::memcmp(&after.delta, &grenadeClock.delta", "grenadeClockStatus=%u"):
+        for stable in ("type != grenade.type", "outer != grenade.outer", "!(flags & 8) || (flags & 4)",
+                       "grenade.explosionRaw = explosionRaw", "eliteClassAfter == eliteProjectileClass",
+                       "gameStateClassAfter == gameStateClass", "after.getter == grenadeClock.getter",
+                       "after.worldTime >= grenadeClock.worldTime", "after.worldTime - grenadeClock.worldTime <= 0.45",
+                       "invalidGrenadeMarks", "grenadeClockStatus=%u"):
             self.assertIn(stable, self.collector)
         render = body(self.player, "private func render(")
         self.assertIn("mark.countdownSeconds?.doubleValue", render)
@@ -165,8 +177,8 @@ class ReadDisplayContracts(unittest.TestCase):
         for gate in ("state->registered & 4", "state->flags", "state->callback != base + CSPositionCallbackRVA",
                      "CoreSet::decodePositionBlock", "array.count > 256", "state->edges[edge] >= array.count"):
             self.assertIn(gate, bones)
-        for stable in ("left.registered != right.registered", "left.flags != right.flags",
-                       "left.callback != right.callback", "left.key != right.key", "CSBoneStatesEqual(bone.state, after)"):
+        for stable in ("left.registered == right.registered", "left.flags == right.flags",
+                       "left.callback == right.callback", "left.key == right.key", "CSBoneStructureEqual(bone.state, after)"):
             self.assertIn(stable, self.collector)
         self.assertIn("mark.head = top; mark.headBoneIndex = @(headIndex)", self.collector)
         self.assertIn("headScope=requested-bones-only headParity=partial", self.collector)

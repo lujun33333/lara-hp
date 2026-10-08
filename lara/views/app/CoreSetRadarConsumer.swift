@@ -123,7 +123,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                 includeWarningYaw: includeWarningYaw)
             let captureFailure = self.session.readFailureSequence != failureSequence
                 ? self.session.lastReadDiagnostic
-                : "snapshot-validation-or-identity-failed transport-errors=0"
+                : "\(CoreSetPlayerCollector.lastCaptureDiagnostic()) transport-errors=0"
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.inFlight = false
@@ -132,7 +132,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                     if self.pendingApply != nil { self.capture() }
                     return
                 }
-                let captureAge = snapshot.map { CACurrentMediaTime() - $0.captureCompletedMonotonicSeconds } ?? .nan
+                let captureAge = snapshot.map { CACurrentMediaTime() - $0.captureStartedMonotonicSeconds } ?? .nan
                 let failureReason = snapshot != nil && !(0...0.5).contains(captureAge)
                     ? String(format: "snapshot-stale stage=capture ageSeconds=%.3f limit=0.5", captureAge)
                     : captureFailure
@@ -169,7 +169,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                     revision: expectedRevision, canvas: canvas,
                     snapshotID: id, sessionGeneration: snapshot.sessionGeneration,
                     processID: snapshot.processID, imageBase: snapshot.imageBase,
-                    capturedAt: snapshot.captureCompletedMonotonicSeconds)
+                    capturedAt: snapshot.captureStartedMonotonicSeconds)
             }
         }
     }

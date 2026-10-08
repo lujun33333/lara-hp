@@ -15,6 +15,7 @@
 #import <cstring>
 #import <string>
 #import <unordered_map>
+#import <unordered_set>
 #import <utility>
 #import <vector>
 
@@ -31,6 +32,7 @@ static constexpr uint64_t CSServerClockImplementationRVA = 0xa529b68;
 static constexpr int32_t CSMaxActors = 50000;
 static constexpr size_t CSMaxBoneActors = 256;
 static constexpr NSUInteger CSMaxRenderedMarks = 8192;
+static thread_local const char *CSLastCaptureDiagnostic = "not-attempted";
 
 using CSVector = CoreSet::Vec3;
 using CSCamera = CoreSet::Camera;
@@ -276,15 +278,11 @@ static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation, ui
     return true;
 }
 
-static bool CSBoneStatesEqual(const CSBoneState &left, const CSBoneState &right) {
-    if (left.mesh != right.mesh || left.registered != right.registered || left.flags != right.flags ||
-        left.callback != right.callback || left.key != right.key || left.status != right.status ||
-        std::memcmp(&left.array, &right.array, sizeof(left.array)) != 0 ||
-        left.component != right.component || left.samples.size() != right.samples.size()) return false;
-    for (size_t index = 0; index < left.samples.size(); ++index)
-        if (left.samples[index].index != right.samples[index].index ||
-            left.samples[index].bytes != right.samples[index].bytes) return false;
-    return true;
+static bool CSBoneStructureEqual(const CSBoneState &left, const CSBoneState &right) {
+    return left.mesh == right.mesh && left.registered == right.registered &&
+        left.flags == right.flags && left.callback == right.callback && left.key == right.key &&
+        left.status == right.status &&
+        std::memcmp(&left.array, &right.array, sizeof(left.array)) == 0;
 }
 
 @interface CoreSetBoneSegment ()
@@ -398,6 +396,7 @@ static bool CSProjectBoneHead(const CSBoneState &state, CSCamera camera, CGSize 
 @property(nonatomic) BOOL localFiring;
 @property(nonatomic) float controlPitchDegrees;
 @property(nonatomic) float controlYawDegrees;
+@property(nonatomic) double captureStartedMonotonicSeconds;
 @property(nonatomic) double captureCompletedMonotonicSeconds;
 @property(nonatomic, copy) NSString *readSemanticDiagnostic;
 @end
@@ -511,6 +510,9 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
 }
 
 @implementation CoreSetPlayerCollector
++ (NSString *)lastCaptureDiagnostic {
+    return [NSString stringWithUTF8String:CSLastCaptureDiagnostic ?: "unknown"];
+}
 + (CoreSetPlayerSnapshot *)capture:(CoreSetReadSession *)session canvasSize:(CGSize)size {
     return [self capture:session canvasSize:size playerBones:NO botBones:NO
        boneDistanceLimit:0 includeOffscreen:NO includeRadar:NO];
@@ -605,24 +607,34 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         includeGrenadeWarning:(BOOL)includeGrenadeWarning includeCounts:(BOOL)includeCounts
            playerInformation:(BOOL)playerInformation botInformation:(BOOL)botInformation
            includeWarningYaw:(BOOL)includeWarningYaw maximumDrawDistance:(double)maximumDrawDistance {
+    CSLastCaptureDiagnostic = "request-validation";
+    const double captureStartedAt = CACurrentMediaTime();
+    const auto captureBudgetExceeded = [captureStartedAt]() {
+        return CACurrentMediaTime() - captureStartedAt > 0.45;
+    };
     if (!session.ready || session.capabilities != 1 || !std::isfinite(size.width) ||
         !std::isfinite(size.height) || size.width <= 0 || size.height <= 0 ||
         !std::isfinite(boneDistanceLimit) || boneDistanceLimit < 0 ||
         !std::isfinite(maximumDrawDistance) || maximumDrawDistance < 0 ||
         (maximumDrawDistance != 0 && (maximumDrawDistance < 1 || maximumDrawDistance > 1000))) return nil;
+    CSLastCaptureDiagnostic = "identity-initial";
     uint64_t generation = session.generation, base = session.imageBase;
     int32_t pid = session.processID;
     if (!base || pid <= 0 || base > UINT64_MAX - CSGameStateClassSlot) return nil;
+    CSLastCaptureDiagnostic = "root-world-character";
     uint64_t world = 0, wanted = 0;
     if (!CSReadValue(session, generation, base + CSWorldSlot, &world) || !world ||
         !CSReadValue(session, generation, base + CSCharacterClassSlot, &wanted) || !wanted) return nil;
+    CSLastCaptureDiagnostic = "root-name-pool";
     uint64_t namePool = 0;
     uint32_t nameCount = 0;
-    if (includeGrenadeWarning &&
+    bool collectGrenades = includeGrenadeWarning;
+    if (collectGrenades &&
         (!CSReadValue(session, generation, base + 0x11fba198, &namePool) || !namePool ||
          namePool < 0x100000000ULL || namePool > 0x8000000000ULL - 0x1404 ||
          !CSReadValue(session, generation, namePool + 0x1400, &nameCount) ||
-         !nameCount || nameCount > 0xa00000)) return nil;
+         !nameCount || nameCount > 0xa00000)) collectGrenades = false;
+    CSLastCaptureDiagnostic = "root-level-actor-array";
     uint64_t level = 0, cluster = 0;
     if (!CSReadValue(session, generation, world + 0xb8, &level) || !level ||
         !CSReadValue(session, generation, level + 0xe0, &cluster) || !cluster) return nil;
@@ -630,12 +642,14 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     if (!CSRead(session, generation, cluster + 0x28, &array, sizeof(array)) ||
         array.count < 0 || array.count > CSMaxActors || array.capacity < array.count ||
         array.capacity > CSMaxActors || (array.count && !array.data)) return nil;
+    CSLastCaptureDiagnostic = "root-controller-local-camera-manager";
     uint64_t driver = 0, connection = 0, controller = 0, local = 0, manager = 0;
     if (!CSReadValue(session, generation, world + 0xc0, &driver) || !driver ||
         !CSReadValue(session, generation, driver + 0x88, &connection) || !connection ||
         !CSReadValue(session, generation, connection + 0x30, &controller) || !controller ||
         !CSReadValue(session, generation, controller + 0x3540, &local) || !local ||
         !CSReadValue(session, generation, controller + 0x680, &manager) || !manager) return nil;
+    CSLastCaptureDiagnostic = "camera-candidate";
     CSCamera camera = {0};
     bool cameraFound = false;
     uint64_t cameraOffset = 0;
@@ -645,14 +659,17 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             CSCameraValid(candidate)) { camera = candidate; cameraFound = true; cameraOffset = offset; break; }
     }
     if (!cameraFound) return nil;
+    CSLastCaptureDiagnostic = "local-position";
     CSVector localPosition = {0};
     bool hasLocalPosition = false;
     if (!CSPosition(session, generation, base, local, &localPosition, &hasLocalPosition) ||
         !hasLocalPosition) return nil;
+    CSLastCaptureDiagnostic = "local-team";
     uint32_t localTeam = 0;
     if (local > UINT64_MAX - 0xb7c ||
         !CSReadValue(session, generation, local + 0xb78, &localTeam) ||
         localTeam < 1 || localTeam > 100) return nil;
+    CSLastCaptureDiagnostic = "battle-input-initial";
     uint8_t localADS = 0, localFiring = 0;
     float controlRotation[2] = {0};
     if (includeBattleInputs &&
@@ -663,6 +680,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
          !CSRead(session, generation, controller + 0x620, controlRotation, sizeof(controlRotation)) ||
          !std::isfinite(controlRotation[0]) || !std::isfinite(controlRotation[1]) ||
          std::fabs(controlRotation[0]) > 360 || std::fabs(controlRotation[1]) > 360)) return nil;
+    CSLastCaptureDiagnostic = "actor-scan";
     NSMutableArray<CoreSetPlayerMark *> *marks = [NSMutableArray array];
     NSMutableArray<CoreSetGrenadeMark *> *grenadeMarks = [NSMutableArray array];
     NSUInteger observedPlayerCount = 0, observedBotCount = 0;
@@ -670,9 +688,10 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     NSUInteger grenadeCandidates = 0, grenadePositionPresent = 0;
     NSUInteger grenadeTyped = 0, grenadeCountdowns = 0, grenadeLifecycleSuppressed = 0, grenadeActorWorldMismatch = 0;
     uint64_t eliteProjectileClass = 0, gameStateClass = 0;
-    if (includeGrenadeWarning &&
+    if (collectGrenades &&
         (!CSReadValue(session, generation, base + CSEliteProjectileClassSlot, &eliteProjectileClass) ||
-         !CSReadValue(session, generation, base + CSGameStateClassSlot, &gameStateClass))) return nil;
+         !CSReadValue(session, generation, base + CSGameStateClassSlot, &gameStateClass)))
+        collectGrenades = false;
     CSGrenadeClockObservation grenadeClock;
     bool grenadeClockRead = false;
     NSUInteger warningPrimaryValid = 0, warningPrimaryInvalid = 0;
@@ -682,8 +701,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     NSUInteger boneHeadKnownProfile = 0, boneHeadProjected = 0, boneHeadUnknownProfile = 0;
     NSUInteger nameRequested = 0, namePresent = 0, weaponRequested = 0, weaponKnown = 0;
     uint64_t pointers[512];
-    std::vector<uint64_t> observedPointers;
-    observedPointers.reserve((size_t)array.count);
     struct ObservedActor {
         uint64_t address;
         CSVector position;
@@ -697,6 +714,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         uint32_t warningYawRaw;
         uint32_t warningFallbackRaw;
         uint64_t warningActorClass;
+        NSUInteger markIndex;
         bool weaponObserved, nameObserved, warningYawObserved, warningFallbackObserved;
     };
     std::vector<ObservedActor> observedActors;
@@ -712,31 +730,40 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     auto nameRead = [session, generation](uint64_t address, void *output, size_t length) {
         return CSRead(session, generation, address, output, length);
     };
-    struct ObservedBone { uint64_t actor; CSBoneState state; };
+    struct ObservedBone { uint64_t actor; CSBoneState state; NSUInteger markIndex; CGPoint fallbackHead; };
     std::vector<ObservedBone> observedBones;
     for (int32_t start = 0; start < array.count; start += 512) {
+        if (captureBudgetExceeded()) {
+            CSLastCaptureDiagnostic = "capture-budget-exceeded-actor-scan";
+            return nil;
+        }
         int32_t batch = std::min<int32_t>(512, array.count - start);
         if (!CSRead(session, generation, array.data + (uint64_t)start * 8,
                     pointers, (size_t)batch * 8)) return nil;
-        observedPointers.insert(observedPointers.end(), pointers, pointers + batch);
         for (int32_t index = 0; index < batch; ++index) {
+            if ((index & 15) == 0 && captureBudgetExceeded()) {
+                CSLastCaptureDiagnostic = "capture-budget-exceeded-actor-scan";
+                return nil;
+            }
             uint64_t actor = pointers[index];
             if (!actor || actor == local) continue;
-            if (includeGrenadeWarning) {
-                if (actor > UINT64_MAX - 0x20) return nil;
+            if (collectGrenades) {
                 uint32_t nameIndex = 0;
-                if (!CSReadValue(session, generation, actor + 0x18, &nameIndex)) return nil;
                 bool grenade = false;
-                auto cached = grenadeNames.find(nameIndex);
-                if (cached != grenadeNames.end()) grenade = cached->second;
-                else {
-                    if (grenadeNames.size() >= 8192) return nil;
-                    std::string name;
-                    auto status = CoreSet::readMaterialBaseName(nameRead, actor, namePool, &name, base);
-                    if (status == CoreSet::NameReadStatus::readFailure) return nil;
-                    grenade = status == CoreSet::NameReadStatus::ok &&
-                        name.find("ojGrenade_BP_C") != std::string::npos;
-                    grenadeNames.emplace(nameIndex, grenade);
+                const bool nameIndexReady = actor <= UINT64_MAX - 0x20 &&
+                    CSReadValue(session, generation, actor + 0x18, &nameIndex);
+                if (nameIndexReady) {
+                    auto cached = grenadeNames.find(nameIndex);
+                    if (cached != grenadeNames.end()) grenade = cached->second;
+                    else if (grenadeNames.size() < 8192) {
+                        std::string name;
+                        auto status = CoreSet::readMaterialBaseName(nameRead, actor, namePool, &name, base);
+                        if (status != CoreSet::NameReadStatus::readFailure) {
+                            grenade = status == CoreSet::NameReadStatus::ok &&
+                                name.find("ojGrenade_BP_C") != std::string::npos;
+                            grenadeNames.emplace(nameIndex, grenade);
+                        }
+                    }
                 }
                 if (grenade) {
                     ++grenadeCandidates;
@@ -746,12 +773,12 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                     bool timerObserved = false;
                     if (eliteProjectileClass) {
                         bool typed = false;
-                        if (!CSClassIsChildOf(session, generation, actor, eliteProjectileClass, &typed, &grenadeClass)) return nil;
+                        if (!CSClassIsChildOf(session, generation, actor, eliteProjectileClass, &typed, &grenadeClass)) continue;
                         if (typed) {
                             ++grenadeTyped;
                             if (!CSReadValue(session, generation, actor + 0x20, &grenadeOuter) ||
                                 !CSReadValue(session, generation, actor + 0x7fd, &grenadeFlags) ||
-                                !CSReadValue(session, generation, actor + 0x88c, &explosionRaw)) return nil;
+                                !CSReadValue(session, generation, actor + 0x88c, &explosionRaw)) continue;
                             timerObserved = grenadeOuter == level;
                             if (!timerObserved) ++grenadeActorWorldMismatch;
                             if (!(grenadeFlags & 8) || (grenadeFlags & 4)) {
@@ -761,7 +788,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                     }
                     CSVector grenadePosition = {0};
                     bool present = false;
-                    if (!CSPosition(session, generation, base, actor, &grenadePosition, &present)) return nil;
+                    if (!CSPosition(session, generation, base, actor, &grenadePosition, &present)) continue;
                     if (present) {
                         ++grenadePositionPresent;
                         CGPoint point = CGPointZero;
@@ -769,11 +796,14 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                         double dy = (double)grenadePosition.y - localPosition.y;
                         double dz = (double)grenadePosition.z - localPosition.z;
                         double distance = std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
-                        if (!std::isfinite(distance)) return nil;
+                        if (!std::isfinite(distance)) continue;
                         if (CSProject(camera, grenadePosition, size, &point) &&
                             point.x >= 0 && point.x <= size.width &&
                             point.y >= 0 && point.y <= size.height) {
-                            if (grenadeMarks.count >= 256) return nil;
+                            if (grenadeMarks.count >= 256) {
+                                collectGrenades = false;
+                                continue;
+                            }
                             CoreSetGrenadeMark *mark = [CoreSetGrenadeMark new];
                             mark.point = point; mark.distanceUnitsDividedBy100 = distance;
                             mark.predictionSegments = @[];
@@ -781,8 +811,8 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                             mark.motionType = grenadeClass; mark.motionNameIndex = nameIndex;
                             mark.motionExplosionRaw = explosionRaw;
                             if (timerObserved && !grenadeClockRead) {
-                                if (!CSReadGrenadeClock(session, generation, base, world, level, gameStateClass, &grenadeClock)) return nil;
-                                grenadeClockRead = true;
+                                grenadeClockRead = CSReadGrenadeClock(session, generation, base, world,
+                                    level, gameStateClass, &grenadeClock);
                             }
                             const NSUInteger markIndex = grenadeMarks.count;
                             [grenadeMarks addObject:mark];
@@ -795,32 +825,32 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             }
             bool character = false;
             uint64_t actorClass = 0;
-            if (!CSClassIsChildOf(session, generation, actor, wanted, &character, &actorClass)) return nil;
+            if (!CSClassIsChildOf(session, generation, actor, wanted, &character, &actorClass)) continue;
             if (!character) continue;
             uint32_t team = 0;
             if (actor > UINT64_MAX - 0xb7c ||
-                !CSReadValue(session, generation, actor + 0xb78, &team)) return nil;
+                !CSReadValue(session, generation, actor + 0xb78, &team)) continue;
             if (team < 1 || team > 100 || team == localTeam) continue;
             float health = 0, maximum = 0;
             uint8_t ai = 0, status = 0;
             if (!CSReadValue(session, generation, actor + 0x1060, &health) ||
                 !CSReadValue(session, generation, actor + 0x1068, &maximum) ||
-                !CSReadValue(session, generation, actor + 0xb94, &ai)) return nil;
+                !CSReadValue(session, generation, actor + 0xb94, &ai)) continue;
             if (includeBattleInputs &&
                 (actor < 0x100000000ULL || actor > 0x8000000000ULL - 0x3be1 ||
-                 !CSReadValue(session, generation, actor + 0x3be0, &status))) return nil;
+                 !CSReadValue(session, generation, actor + 0x3be0, &status))) continue;
             uint32_t warningYawRaw = 0;
             if (includeWarningYaw &&
-                !CSReadValue(session, generation, actor + 0x2758, &warningYawRaw)) return nil;
+                !CSReadValue(session, generation, actor + 0x2758, &warningYawRaw)) continue;
             uint8_t countStatus = 0;
-            if (includeCounts && !CSReadValue(session, generation, actor + 0x3be0, &countStatus)) return nil;
+            if (includeCounts && !CSReadValue(session, generation, actor + 0x3be0, &countStatus)) continue;
             if (!std::isfinite(health) || !std::isfinite(maximum) ||
                 maximum <= 0 || health < 0 || health > maximum) continue;
             const bool countEligible = includeCounts && CoreSet::playerCountEligible(health, maximum, countStatus);
             if (health == 0 && !countEligible) continue;
             CSVector position = {0};
             bool present = false;
-            if (!CSPosition(session, generation, base, actor, &position, &present)) return nil;
+            if (!CSPosition(session, generation, base, actor, &position, &present)) continue;
             if (!present) continue;
             double dx = (double)position.x - localPosition.x;
             double dy = (double)position.y - localPosition.y;
@@ -835,7 +865,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             if (includeWarningYaw && !CoreSet::warningYawRawValid(warningYawRaw)) {
                 // Actor.ReplicatedMovement.Rotation.Yaw, target descriptor chain:
                 // 1107bbb70(+168) -> 11083e2d0(+24) -> 1103e7118(+4).
-                if (!CSReadValue(session, generation, actor + 0x190, &warningFallbackRaw)) return nil;
+                if (!CSReadValue(session, generation, actor + 0x190, &warningFallbackRaw)) continue;
                 warningFallbackObserved = true;
             }
             if (countEligible) {
@@ -849,7 +879,9 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                 (playerWeaponText || playerInformation);
             uint64_t weapon = 0;
             uint32_t weaponID = 0;
-            if (wantsWeapon && !CSWeaponID(session, generation, actor, &weapon, &weaponID)) return nil;
+            if (wantsWeapon && !CSWeaponID(session, generation, actor, &weapon, &weaponID)) {
+                weapon = 0; weaponID = 0;
+            }
             CSVector head = position, feet = position;
             head.z += 90; feet.z -= 90;
             CGPoint centerPoint = CGPointZero, headPoint = CGPointZero, feetPoint = CGPointZero;
@@ -866,7 +898,9 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             std::array<uint16_t, 16> nameRaw = {};
             NSString *playerName = nil;
             if (wantsInformation && !CSPlayerName(session, generation, actor,
-                                                   &namePointer, &nameRaw, &playerName)) return nil;
+                                                   &namePointer, &nameRaw, &playerName)) {
+                namePointer = 0; nameRaw.fill(0); playerName = nil;
+            }
             if (wantsInformation) { ++nameRequested; if (playerName.length) ++namePresent; }
             CoreSetPlayerMark *mark = [CoreSetPlayerMark new];
             mark.actorAddress = actor; mark.bot = ai != 0;
@@ -903,12 +937,14 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             }
             mark.boneSegments = @[];
             if (onScreen && (ai ? botBones : playerBones) &&
-                (boneDistanceLimit == 0 || distance <= boneDistanceLimit)) {
-                if (observedBones.size() >= CSMaxBoneActors) return nil;
+                (boneDistanceLimit == 0 || distance <= boneDistanceLimit) &&
+                observedBones.size() < CSMaxBoneActors) {
                 CSBoneState bones;
                 bool present = false;
                 ++boneRequested;
-                if (!CSReadBoneState(session, generation, base, actor, &bones, &present)) return nil;
+                if (!CSReadBoneState(session, generation, base, actor, &bones, &present)) {
+                    present = false;
+                }
                 if (present) {
                     ++bonePresent;
                     if (bones.status == 7) ++boneDecoded; else ++bonePlain;
@@ -922,7 +958,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                             ++boneHeadProjected;
                         }
                     } else ++boneHeadUnknownProfile;
-                    observedBones.push_back({actor, std::move(bones)});
+                    observedBones.push_back({actor, std::move(bones), marks.count, headPoint});
                 } else if (bones.status < 6) ++boneUnavailable[bones.status];
             }
             if (marks.count >= CSMaxRenderedMarks) return nil;
@@ -930,9 +966,11 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             observedActors.push_back({actor, position, health, maximum,
                                       weapon, weaponID, namePointer, nameRaw,
                                       team, ai, status, warningYawRaw, warningFallbackRaw, actorClass,
-                                      wantsWeapon, wantsInformation, includeWarningYaw, warningFallbackObserved});
+                                      marks.count - 1, wantsWeapon, wantsInformation,
+                                      includeWarningYaw, warningFallbackObserved});
         }
     }
+    CSLastCaptureDiagnostic = "stability-roots";
     uint64_t worldAfter = 0, levelAfter = 0, clusterAfter = 0, controllerAfter = 0;
     uint64_t managerAfter = 0, classAfter = 0, localAfter = 0;
     uint32_t localTeamAfter = 0;
@@ -944,32 +982,58 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         !CSReadValue(session, generation, world + 0xb8, &levelAfter) || levelAfter != level ||
         !CSReadValue(session, generation, level + 0xe0, &clusterAfter) || clusterAfter != cluster ||
         !CSRead(session, generation, cluster + 0x28, &arrayAfter, sizeof(arrayAfter)) ||
-        std::memcmp(&array, &arrayAfter, sizeof(array)) != 0 ||
+        arrayAfter.data != array.data || arrayAfter.count < 0 || arrayAfter.count > CSMaxActors ||
+        arrayAfter.capacity < arrayAfter.count || arrayAfter.capacity > CSMaxActors ||
+        (arrayAfter.count && !arrayAfter.data) ||
         !CSReadValue(session, generation, connection + 0x30, &controllerAfter) ||
         controllerAfter != controller || !session.ready || session.generation != generation ||
         !CSReadValue(session, generation, base + CSCharacterClassSlot, &classAfter) || classAfter != wanted ||
         !CSReadValue(session, generation, controller + 0x3540, &localAfter) || localAfter != local ||
         !CSReadValue(session, generation, controller + 0x680, &managerAfter) || managerAfter != manager ||
         !CSRead(session, generation, manager + cameraOffset, &cameraAfter, sizeof(cameraAfter)) ||
-        std::memcmp(&camera, &cameraAfter, sizeof(camera)) != 0 ||
+        !CSCameraValid(cameraAfter) ||
         !CSPosition(session, generation, base, local, &localPositionAfter, &hasLocalPositionAfter) ||
-        !hasLocalPositionAfter || std::memcmp(&localPosition, &localPositionAfter, sizeof(localPosition)) != 0 ||
+        !hasLocalPositionAfter ||
         !CSReadValue(session, generation, local + 0xb78, &localTeamAfter) || localTeamAfter != localTeam ||
         session.processID != pid || session.imageBase != base) return nil;
-    if (includeGrenadeWarning) {
+    CSLastCaptureDiagnostic = "stability-optional-roots";
+    NSMutableIndexSet *invalidGrenadeMarks = [NSMutableIndexSet indexSet];
+    if (collectGrenades) {
         uint64_t poolAfter = 0;
         uint32_t countAfter = 0;
         if (!CSReadValue(session, generation, base + 0x11fba198, &poolAfter) || poolAfter != namePool ||
-            !CSReadValue(session, generation, namePool + 0x1400, &countAfter) || countAfter != nameCount)
+            !CSReadValue(session, generation, namePool + 0x1400, &countAfter) ||
+            countAfter < nameCount || countAfter > 0xa00000) {
+            collectGrenades = false;
+            if (grenadeMarks.count)
+                [invalidGrenadeMarks addIndexesInRange:NSMakeRange(0, grenadeMarks.count)];
+        }
+    }
+    CSLastCaptureDiagnostic = "stability-actor-membership";
+    std::unordered_set<uint64_t> currentActors;
+    currentActors.reserve((size_t)arrayAfter.count);
+    for (int32_t start = 0; start < arrayAfter.count; start += 512) {
+        if (captureBudgetExceeded()) {
+            CSLastCaptureDiagnostic = "capture-budget-exceeded-membership";
             return nil;
+        }
+        int32_t batch = std::min<int32_t>(512, arrayAfter.count - start);
+        if (!CSRead(session, generation, arrayAfter.data + (uint64_t)start * 8,
+                    pointers, (size_t)batch * 8)) return nil;
+        for (int32_t index = 0; index < batch; ++index)
+            if (pointers[index]) currentActors.insert(pointers[index]);
     }
-    for (int32_t start = 0; start < array.count; start += 512) {
-        int32_t batch = std::min<int32_t>(512, array.count - start);
-        if (!CSRead(session, generation, array.data + (uint64_t)start * 8,
-                    pointers, (size_t)batch * 8) ||
-            std::memcmp(pointers, observedPointers.data() + start, (size_t)batch * 8) != 0) return nil;
-    }
+    CSLastCaptureDiagnostic = "stability-player-actors";
+    NSMutableIndexSet *invalidActorMarks = [NSMutableIndexSet indexSet];
     for (const ObservedActor &actor : observedActors) {
+        if (captureBudgetExceeded()) {
+            CSLastCaptureDiagnostic = "capture-budget-exceeded-player-actors";
+            return nil;
+        }
+        if (currentActors.find(actor.address) == currentActors.end()) {
+            [invalidActorMarks addIndex:actor.markIndex];
+            continue;
+        }
         float health = 0, maximum = 0;
         uint8_t ai = 0, status = 0;
         uint32_t team = 0;
@@ -982,33 +1046,86 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         NSString *name = nil;
         uint32_t warningYawRaw = 0;
         uint32_t warningFallbackRaw = 0;
-        uint64_t warningActorClass = 0;
+        uint64_t actorClassAfter = 0;
         if (!CSReadValue(session, generation, actor.address + 0x1060, &health) ||
             !CSReadValue(session, generation, actor.address + 0x1068, &maximum) ||
             !CSReadValue(session, generation, actor.address + 0xb94, &ai) ||
             !CSReadValue(session, generation, actor.address + 0xb78, &team) ||
             (includeBattleInputs &&
              !CSReadValue(session, generation, actor.address + 0x3be0, &status)) ||
-            (actor.warningYawObserved &&
-             (!CSReadValue(session, generation, actor.address + 0x10, &warningActorClass) ||
-              warningActorClass != actor.warningActorClass ||
-              !CSReadValue(session, generation, actor.address + 0x2758, &warningYawRaw) ||
-              warningYawRaw != actor.warningYawRaw)) ||
-            (actor.warningFallbackObserved &&
-             (!CSReadValue(session, generation, actor.address + 0x190, &warningFallbackRaw) ||
-              warningFallbackRaw != actor.warningFallbackRaw)) ||
-            !CSPosition(session, generation, base, actor.address, &position, &present) ||
-            !present || health != actor.health || maximum != actor.maximum ||
-            ai != actor.ai || status != actor.status || team != actor.team ||
-            std::memcmp(&position, &actor.position, sizeof(position)) != 0 ||
-            (actor.weaponObserved &&
-             (!CSWeaponID(session, generation, actor.address, &weapon, &weaponID) ||
-              weapon != actor.weapon || weaponID != actor.weaponID)) ||
-            (actor.nameObserved &&
-             (!CSPlayerName(session, generation, actor.address, &namePointer, &nameRaw, &name) ||
-              namePointer != actor.namePointer || nameRaw != actor.nameRaw))) return nil;
+            !CSReadValue(session, generation, actor.address + 0x10, &actorClassAfter) ||
+            !CSPosition(session, generation, base, actor.address, &position, &present)) {
+            [invalidActorMarks addIndex:actor.markIndex];
+            continue;
+        }
+        if (actorClassAfter != actor.warningActorClass || !present ||
+            !std::isfinite(health) || !std::isfinite(maximum) || maximum <= 0 ||
+            health < 0 || health > maximum || ai != actor.ai || team != actor.team) {
+            [invalidActorMarks addIndex:actor.markIndex];
+            continue;
+        }
+        CoreSetPlayerMark *mark = marks[actor.markIndex];
+        if (includeBattleInputs) mark.healthStatusCode = status;
+        if (actor.weaponObserved) {
+            if (!CSWeaponID(session, generation, actor.address, &weapon, &weaponID)) {
+                mark.weaponID = 0;
+                mark.weaponName = nil;
+            } else if (weapon != actor.weapon || weaponID != actor.weaponID) {
+                mark.weaponID = weaponID;
+                const char *weaponName = CoreSet::weaponNameForCanonicalID(weaponID);
+                mark.weaponName = weaponName ? [NSString stringWithUTF8String:weaponName] : nil;
+            }
+        }
+        if (actor.nameObserved) {
+            if (!CSPlayerName(session, generation, actor.address, &namePointer, &nameRaw, &name))
+                mark.playerName = nil;
+            else if (namePointer != actor.namePointer || nameRaw != actor.nameRaw)
+                mark.playerName = name;
+        }
+        if (actor.warningYawObserved) {
+            if (!CSReadValue(session, generation, actor.address + 0x2758, &warningYawRaw)) {
+                mark.warningServerYawDegrees = nil;
+                mark.warningYawDegrees = nil;
+                mark.warningYawSource = CoreSetWarningYawSourceNone;
+                continue;
+            }
+            bool fallbackObserved = false;
+            if (!CoreSet::warningYawRawValid(warningYawRaw) || actor.warningFallbackObserved) {
+                fallbackObserved = CSReadValue(session, generation, actor.address + 0x190,
+                                                &warningFallbackRaw);
+            }
+            mark.warningServerYawDegrees = nil;
+            mark.warningYawDegrees = nil;
+            mark.warningYawSource = CoreSetWarningYawSourceNone;
+            float serverYaw = 0;
+            if (CoreSet::warningYawRawValid(warningYawRaw, &serverYaw))
+                mark.warningServerYawDegrees = @(serverYaw);
+            const CoreSet::WarningYawSelection selected = CoreSet::selectWarningYaw(
+                warningYawRaw, fallbackObserved, warningFallbackRaw);
+            if (selected.valid) {
+                mark.warningYawDegrees = @(selected.degrees);
+                mark.warningYawSource = selected.source == CoreSet::WarningYawSource::replicatedMovement ?
+                    CoreSetWarningYawSourceReplicatedMovement : CoreSetWarningYawSourceServerControlRotation;
+            }
+        }
     }
+    CSLastCaptureDiagnostic = "stability-count-actors";
+    const auto discardObservedCount = [&](const ObservedCount &count) {
+        if (count.ai) {
+            if (observedBotCount) --observedBotCount;
+        } else if (observedPlayerCount) --observedPlayerCount;
+        if (count.health == 0 && observedZeroHealthLastBreath)
+            --observedZeroHealthLastBreath;
+    };
     for (const ObservedCount &count : observedCounts) {
+        if (captureBudgetExceeded()) {
+            CSLastCaptureDiagnostic = "capture-budget-exceeded-count-actors";
+            return nil;
+        }
+        if (currentActors.find(count.address) == currentActors.end()) {
+            discardObservedCount(count);
+            continue;
+        }
         float health = 0, maximum = 0;
         uint8_t ai = 0;
         uint8_t status = 0;
@@ -1020,14 +1137,34 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             !CSReadValue(session, generation, count.address + 0x1068, &maximum) ||
             !CSReadValue(session, generation, count.address + 0xb94, &ai) ||
             !CSReadValue(session, generation, count.address + 0xb78, &team) ||
-            !CSReadValue(session, generation, count.address + 0x10, &type) || type != count.type ||
-            !CSReadValue(session, generation, count.address + 0x3be0, &status) || status != count.status ||
-            !CSPosition(session, generation, base, count.address, &position, &present) ||
-            !present || health != count.health || maximum != count.maximum ||
+            !CSReadValue(session, generation, count.address + 0x10, &type) ||
+            !CSReadValue(session, generation, count.address + 0x3be0, &status) ||
+            !CSPosition(session, generation, base, count.address, &position, &present)) {
+            discardObservedCount(count);
+            continue;
+        }
+        if (type != count.type || !present || !std::isfinite(health) ||
+            !std::isfinite(maximum) || maximum <= 0 || health < 0 || health > maximum ||
             ai != count.ai || team != count.team ||
-            std::memcmp(&position, &count.position, sizeof(position)) != 0) return nil;
+            !CoreSet::playerCountEligible(health, maximum, status)) {
+            discardObservedCount(count);
+            continue;
+        }
+        if (count.health == 0 && health > 0 && observedZeroHealthLastBreath)
+            --observedZeroHealthLastBreath;
+        else if (count.health > 0 && health == 0)
+            ++observedZeroHealthLastBreath;
     }
-    for (const ObservedGrenade &grenade : observedGrenades) {
+    CSLastCaptureDiagnostic = "stability-grenades";
+    for (ObservedGrenade &grenade : observedGrenades) {
+        if (captureBudgetExceeded()) {
+            CSLastCaptureDiagnostic = "capture-budget-exceeded-grenades";
+            return nil;
+        }
+        if (currentActors.find(grenade.address) == currentActors.end()) {
+            [invalidGrenadeMarks addIndex:grenade.markIndex];
+            continue;
+        }
         uint32_t nameIndex = 0;
         CSVector position = {0};
         bool present = false;
@@ -1035,38 +1172,70 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         uint64_t type = 0, outer = 0;
         uint32_t explosionRaw = 0;
         uint8_t flags = 0;
-        if (!CSReadValue(session, generation, grenade.address + 0x18, &nameIndex) ||
-            nameIndex != grenade.nameIndex ||
-            CoreSet::readMaterialBaseName(nameRead, grenade.address, namePool, &name, base) !=
-                CoreSet::NameReadStatus::ok ||
-            name.find("ojGrenade_BP_C") == std::string::npos ||
-            !CSPosition(session, generation, base, grenade.address, &position, &present) ||
-            !present || std::memcmp(&position, &grenade.position, sizeof(position)) != 0 ||
-            (grenade.timerObserved &&
-             (!CSReadValue(session, generation, grenade.address + 0x10, &type) || type != grenade.type ||
-              !CSReadValue(session, generation, grenade.address + 0x20, &outer) || outer != grenade.outer ||
-              !CSReadValue(session, generation, grenade.address + 0x7fd, &flags) || flags != grenade.flags ||
-              !CSReadValue(session, generation, grenade.address + 0x88c, &explosionRaw) ||
-              explosionRaw != grenade.explosionRaw))) return nil;
+        if (!CSReadValue(session, generation, grenade.address + 0x18, &nameIndex)) {
+            [invalidGrenadeMarks addIndex:grenade.markIndex];
+            continue;
+        }
+        const CoreSet::NameReadStatus nameStatus =
+            CoreSet::readMaterialBaseName(nameRead, grenade.address, namePool, &name, base);
+        if (nameStatus == CoreSet::NameReadStatus::readFailure) {
+            [invalidGrenadeMarks addIndex:grenade.markIndex];
+            continue;
+        }
+        if (nameIndex != grenade.nameIndex || nameStatus != CoreSet::NameReadStatus::ok ||
+            name.find("ojGrenade_BP_C") == std::string::npos) {
+            [invalidGrenadeMarks addIndex:grenade.markIndex];
+            continue;
+        }
+        if (!CSPosition(session, generation, base, grenade.address, &position, &present)) {
+            [invalidGrenadeMarks addIndex:grenade.markIndex];
+            continue;
+        }
+        if (!present) {
+            [invalidGrenadeMarks addIndex:grenade.markIndex];
+            continue;
+        }
+        CoreSetGrenadeMark *mark = grenadeMarks[grenade.markIndex];
+        mark.motionPosition = position;
+        if (grenade.timerObserved) {
+            if (!CSReadValue(session, generation, grenade.address + 0x10, &type) ||
+                !CSReadValue(session, generation, grenade.address + 0x20, &outer) ||
+                !CSReadValue(session, generation, grenade.address + 0x7fd, &flags) ||
+                !CSReadValue(session, generation, grenade.address + 0x88c, &explosionRaw)) {
+                [invalidGrenadeMarks addIndex:grenade.markIndex];
+                continue;
+            }
+            if (type != grenade.type || outer != grenade.outer || !(flags & 8) || (flags & 4)) {
+                [invalidGrenadeMarks addIndex:grenade.markIndex];
+                continue;
+            }
+            grenade.flags = flags;
+            grenade.explosionRaw = explosionRaw;
+            mark.motionExplosionRaw = explosionRaw;
+        }
     }
-    if (includeGrenadeWarning) {
+    if (collectGrenades) {
         uint64_t eliteClassAfter = 0, gameStateClassAfter = 0;
-        if (!CSReadValue(session, generation, base + CSEliteProjectileClassSlot, &eliteClassAfter) ||
-            eliteClassAfter != eliteProjectileClass ||
-            !CSReadValue(session, generation, base + CSGameStateClassSlot, &gameStateClassAfter) ||
-            gameStateClassAfter != gameStateClass) return nil;
-        if (grenadeClockRead) {
+        const bool grenadeRootsStable =
+            CSReadValue(session, generation, base + CSEliteProjectileClassSlot, &eliteClassAfter) &&
+            eliteClassAfter == eliteProjectileClass &&
+            CSReadValue(session, generation, base + CSGameStateClassSlot, &gameStateClassAfter) &&
+            gameStateClassAfter == gameStateClass;
+        if (!grenadeRootsStable) {
+            if (grenadeMarks.count)
+                [invalidGrenadeMarks addIndexesInRange:NSMakeRange(0, grenadeMarks.count)];
+        } else if (grenadeClockRead) {
             CSGrenadeClockObservation after;
-            if (!CSReadGrenadeClock(session, generation, base, world, level, gameStateClass, &after) ||
-                after.gameState != grenadeClock.gameState || after.type != grenadeClock.type ||
-                after.outer != grenadeClock.outer || after.vtable != grenadeClock.vtable ||
-                after.getter != grenadeClock.getter || after.present != grenadeClock.present || after.status != grenadeClock.status ||
-                (after.present &&
-                 (std::memcmp(&after.delta, &grenadeClock.delta, sizeof(after.delta)) != 0 ||
-                  after.worldTime < grenadeClock.worldTime || after.worldTime - grenadeClock.worldTime > 0.25))) return nil;
-            if (after.present) {
+            const bool clockRead = CSReadGrenadeClock(session, generation, base, world,
+                                                       level, gameStateClass, &after);
+            const bool clockStable = clockRead && after.gameState == grenadeClock.gameState &&
+                after.type == grenadeClock.type && after.outer == grenadeClock.outer &&
+                after.vtable == grenadeClock.vtable && after.getter == grenadeClock.getter &&
+                after.present && after.worldTime >= grenadeClock.worldTime &&
+                after.worldTime - grenadeClock.worldTime <= 0.45;
+            if (clockStable) {
                 for (const ObservedGrenade &grenade : observedGrenades) {
-                    if (!grenade.timerObserved) continue;
+                    if (!grenade.timerObserved || [invalidGrenadeMarks containsIndex:grenade.markIndex]) continue;
                     float explosion = 0, countdown = 0;
                     std::memcpy(&explosion, &grenade.explosionRaw, sizeof(explosion));
                     if (CoreSet::grenadeCountdownSeconds(explosion, after.worldTime, after.delta, grenade.flags, &countdown)) {
@@ -1074,25 +1243,48 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                         ++grenadeCountdowns;
                     }
                 }
+            } else {
+                for (const ObservedGrenade &grenade : observedGrenades)
+                    if (grenade.timerObserved) [invalidGrenadeMarks addIndex:grenade.markIndex];
             }
         }
     }
+    CSLastCaptureDiagnostic = "stability-bones";
     for (const ObservedBone &bone : observedBones) {
+        if (captureBudgetExceeded()) {
+            CSLastCaptureDiagnostic = "capture-budget-exceeded-bones";
+            return nil;
+        }
+        if ([invalidActorMarks containsIndex:bone.markIndex] ||
+            currentActors.find(bone.actor) == currentActors.end()) continue;
         CSBoneState after;
         bool present = false;
-        if (!CSReadBoneState(session, generation, base, bone.actor, &after, &present) ||
-            !present || !CSBoneStatesEqual(bone.state, after)) return nil;
+        const bool boneRead = CSReadBoneState(session, generation, base, bone.actor, &after, &present);
+        if (!boneRead || !present || !CSBoneStructureEqual(bone.state, after)) {
+            CoreSetPlayerMark *mark = marks[bone.markIndex];
+            mark.boneSegments = @[];
+            mark.headBoneIndex = nil;
+            mark.head = bone.fallbackHead;
+        }
     }
+    CSLastCaptureDiagnostic = "stability-battle-inputs";
     if (includeBattleInputs) {
         uint8_t adsAfter = 0, firingAfter = 0;
         float rotationAfter[2] = {0};
         if (!CSReadValue(session, generation, local + 0x1848, &adsAfter) ||
             !CSReadValue(session, generation, local + 0x2750, &firingAfter) ||
             !CSRead(session, generation, controller + 0x620, rotationAfter, sizeof(rotationAfter)) ||
-            adsAfter != localADS || firingAfter != localFiring ||
-            std::memcmp(controlRotation, rotationAfter, sizeof(controlRotation)) != 0) return nil;
+            !std::isfinite(rotationAfter[0]) || !std::isfinite(rotationAfter[1]) ||
+            std::fabs(rotationAfter[0]) > 360 || std::fabs(rotationAfter[1]) > 360) return nil;
     }
+    if (invalidActorMarks.count) [marks removeObjectsAtIndexes:invalidActorMarks];
+    if (invalidGrenadeMarks.count) [grenadeMarks removeObjectsAtIndexes:invalidGrenadeMarks];
+    CSLastCaptureDiagnostic = "identity-final";
     if (!session.ready || session.generation != generation) return nil;
+    if (captureBudgetExceeded()) {
+        CSLastCaptureDiagnostic = "capture-budget-exceeded-final";
+        return nil;
+    }
     CoreSetPlayerSnapshot *snapshot = [CoreSetPlayerSnapshot new];
     snapshot.sessionGeneration = generation; snapshot.processID = pid;
     snapshot.imageBase = base; snapshot.snapshotID = [NSUUID UUID];
@@ -1109,13 +1301,14 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         snapshot.controlPitchDegrees = controlRotation[0];
         snapshot.controlYawDegrees = controlRotation[1];
     }
+    snapshot.captureStartedMonotonicSeconds = captureStartedAt;
     snapshot.captureCompletedMonotonicSeconds = CACurrentMediaTime();
     snapshot.marks = [marks copy];
     snapshot.grenadeMarks = [grenadeMarks copy];
     snapshot.observedPlayerCount = observedPlayerCount;
     snapshot.observedBotCount = observedBotCount;
     snapshot.readSemanticDiagnostic = [NSString stringWithFormat:
-        @"candidateCounts=capture-pass displayFields=end-reread actors=%d marks=%lu players=%lu bots=%lu zeroHealthLastBreath=%lu countScope=positive-health-or-last-breath-enemy-draw-range countParity=partial "
+        @"candidateCounts=capture-pass displayFields=initial-sample-validated-at-end detailCounters=initial-observation marks=final-after-degradation actors=%d marks=%lu players=%lu bots=%lu zeroHealthLastBreath=%lu countScope=positive-health-or-last-breath-enemy-draw-range countParity=partial "
          "grenadeRequested=%d grenadeCandidates=%lu grenadePosition=%lu grenadeOnscreen=%lu "
          "grenadeClassKnown=%d gameStateClassKnown=%d grenadeTyped=%lu grenadeCountdowns=%lu grenadeLifecycleSuppressed=%lu grenadeActorWorldMismatch=%lu grenadeClockKnown=%d grenadeClockStatus=%u "
          "grenadeTimer=target-server-clock-clamped grenadeRadius=unproven grenadeAnimation=local-prediction-partial "
@@ -1123,7 +1316,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
          "warningUnavailable=%lu warningFallbackOwner=actor-replicated-movement-rotation-yaw "
          "boneRequested=%lu bonePresent=%lu bonePlain=%lu boneDecoded=%lu boneMissing=%lu boneUnregistered=%lu boneArrayInvalid=%lu boneBounds=%lu boneDecoderUnknown=%lu "
          "boneHeadKnownProfile=%lu boneHeadProjected=%lu boneHeadUnknownProfile=%lu headScope=requested-bones-only headParity=partial "
-         "networkFreshness=unproven captureStability=end-reread grenadeAnimationScope=local-position-history grenadeRadiusGap=no-verified-elite-blast-field "
+         "networkFreshness=unproven captureStability=stable-identity-plus-bounded-dynamic-reread grenadeAnimationScope=local-position-history grenadeRadiusGap=no-verified-elite-blast-field "
          "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationLayout=local-subset informationGap=native-font-icons-and-anchors",
         array.count, (unsigned long)marks.count, (unsigned long)observedPlayerCount,
         (unsigned long)observedBotCount, (unsigned long)observedZeroHealthLastBreath,
@@ -1141,6 +1334,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         (unsigned long)boneHeadKnownProfile, (unsigned long)boneHeadProjected, (unsigned long)boneHeadUnknownProfile,
         (unsigned long)nameRequested, (unsigned long)namePresent,
         (unsigned long)weaponRequested, (unsigned long)weaponKnown];
+    CSLastCaptureDiagnostic = "ready";
     return snapshot;
 }
 @end
