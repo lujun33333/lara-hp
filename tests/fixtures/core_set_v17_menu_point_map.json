@@ -29,6 +29,18 @@
       "scope": "diagnostic-only; no action consumer or progress provider attached",
       "original_runtime_receipt_verified": false
     },
+    "local_observation_receipts": {
+      "source_contract": "tests/core_set_local_observation_receipt_contract_test.py",
+      "cadence_math_contract": "tests/core_set_presentation_cadence_test.cpp",
+      "host_palette_points": ["v17-014", "v17-022", "v17-023", "v17-024", "v17-025", "v17-026", "v17-027", "v17-028"],
+      "current_live_home_points": ["v17-004", "v17-007"],
+      "unbound_reference_status_points": ["v17-005", "v17-006", "v17-008"],
+      "reference_provider_protocol": "CoreSetHomeReferenceObservationProvider.readObservation(hostGeneration:)",
+      "reference_provider_binding": "CoreSetRuntimeCoordinator.bindHomeReferenceObservationProvider; no default reference implementation",
+      "cadence": "MTLDrawable addPresentedHandler/presentedTime; positive monotonically increasing host timestamps in a bounded window, same adapter epoch + host/render generation; preferred FPS and command completion are NOT samples",
+      "original_runtime_receipt_verified": false,
+      "device_effect_verified": false
+    },
     "local_behavior_probe": {
       "tool": "tools/core_set_v17_local_behavior_probe.py",
       "source_contract": "tests/core_set_local_behavior_contract_test.py",
@@ -77,13 +89,25 @@
     "home_observation": {
       "source": "lara/views/app/CoreSetHomeTelemetrySource.swift",
       "producer": "CoreSetHomeTelemetrySource.capture",
-      "receipt": "observed supportedFields + snapshot; NOT an action receipt",
-      "scope": "this app initialization / target identity / hosted status observations",
+      "receipt": "observer epoch/monotone sequence/age0..5s + actual host generation; kernel double ds_is_ready corroboration; host floating geometry/panel/registration/cleanup properties; NOT native action receipt",
+      "scope": "004/007 current same-meaning local init/host observations; 005/006/008 require separately bound original environment/info/stage provider, never nativeReady/target-read-ready/running substitutes",
       "runtime_device_verified": false,
       "lifecycle": {
-        "start": "CoreSetHomeTelemetrySource.capture",
-        "update": "updateRuntimeObservations -> homeStatusRows",
-        "stop": "observations disappear with source/scene; NOT an action restore receipt"
+        "start": "CoreSetLaraHomeRuntimeObservationProvider + CoreSetHomeTelemetrySource.capture; optional reference provider defaults unbound",
+        "update": "250ms read-only capture -> current epoch/sequence/host generation validation -> per-field value/reason; malformed reference counters fail closed",
+        "stop": "cancel observation timer -> stopObservations clears provider/identity -> stopped source returns empty snapshot; late probe rejected; NOT native action/kernel restore receipt"
+      }
+    },
+    "host_palette": {
+      "source": "lara/views/app/CoreSetRuntimeCoordinator.swift",
+      "producer": "CoreSetLocalHostConsumer.apply/refreshObservation",
+      "receipt": "original Float32 palette -> actual owned CAGradientLayer colours/geometry/direction + menu visibility, exact host generation/apply token; mismatch revokes actual without forgiving stop obligation",
+      "scope": "actual current Host floating gradient property contract; not original floating device pixel/lifecycle parity",
+      "runtime_device_verified": false,
+      "lifecycle": {
+        "start": "applyLocalMenu writes real Host palette; matching readback -> applied receipt",
+        "update": "250ms current-token readback; skip pendingApply/pendingStop; changed host/value/geometry -> invalidateHostPresentationObservation",
+        "stop": "Host.stop/async stop -> resources complete + no live floating control + empty colour readback -> exact stop-token receipt; persisted palette retained"
       }
     },
     "performance_observation": {
@@ -253,7 +277,7 @@
       "0x1000cbe6c / 0x1000cbf94 / 0x1000cbfb4",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x12c int32/4bytes value",
-      "local optional desired state; unselected stays nil; native conversion must not be inferred",
+      "local optional desired state; unselected stays nil; native conversion must not be inferred; read-only original action tracing boundary exists, no action consumer or effect receipt is attached",
       "original-consumer-missing / fail-closed-local-configuration-or-explanation",
       "carrier-only; NOT feature algorithm/source",
       "sol-e30-home-run-cover-gate.md#run-mode"
@@ -277,7 +301,7 @@
       "0x1000cc060 / 0x1000cc078 / 0x1000cc088",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x2f bool/1bytes enabled; Core-self-configuration: 0x100c58270+0x130 int32/4bytes mode",
-      "local optional desired state; unselected stays nil; native conversion must not be inferred",
+      "local optional desired state; unselected stays nil; native conversion must not be inferred; read-only original action tracing boundary exists, no action consumer or effect receipt is attached",
       "original-consumer-missing / fail-closed-local-configuration-or-explanation",
       "carrier-only; NOT feature algorithm/source",
       "sol-e30-home-run-cover-gate.md#cover-mode"
@@ -301,7 +325,7 @@
       "0x1000cc8c8 / 0x1000cc8d0",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       null,
-      "local optional desired state; unselected stays nil; native conversion must not be inferred",
+      "local optional desired state; unselected stays nil; native conversion must not be inferred; read-only original action tracing boundary exists, no action consumer or effect receipt is attached",
       "original-consumer-missing / fail-closed-local-configuration-or-explanation",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#initialization-buttons"
@@ -325,7 +349,7 @@
       "0x1000cc920 / 0x1000cc928",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       null,
-      "local optional desired state; unselected stays nil; native conversion must not be inferred",
+      "local optional desired state; unselected stays nil; native conversion must not be inferred; read-only original action tracing boundary exists, no action consumer or effect receipt is attached",
       "original-consumer-missing / fail-closed-local-configuration-or-explanation",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#initialization-buttons"
@@ -349,10 +373,10 @@
       "0x1000cb8c8 / 0x1000cc0c0",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-home-snapshot: unknown-base+0x114 utf8-buffer/unknown-widthbytes value",
-      "typed observed value; identity/freshness checked; nil is unavailable, never fabricated zero",
-      "local-observation-only / original-effect-unverified",
+      "live laramgr running/failed/attempted + two ds_is_ready readings -> own initialization status; observer epoch/sequence/host generation; NOT native4f00 action receipt",
+      "same-meaning-current-runtime-observation-contract / original-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/home"
+      "core_set_v17_native_function_slices.json#/functions/home | tools/core_set_v17_home_producer_probe.py#status_semantics"
     ],
     [
       "v17-005",
@@ -373,10 +397,10 @@
       "0x1000cb8c8 / 0x1000cc180",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-home-snapshot: unknown-base+0x2e4 utf8-buffer/unknown-widthbytes value",
-      "typed observed value; identity/freshness checked; nil is unavailable, never fabricated zero",
-      "local-observation-only / original-effect-unverified",
+      "original5f14 support + QXA107 inFlight/ready/phase, NOT nativeReady; CoreSetHomeReferenceObservationProvider defaults unbound",
+      "reference-observation-provider-unbound / fail-closed",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/home"
+      "core_set_v17_native_function_slices.json#/functions/home | tools/core_set_v17_home_producer_probe.py#status_semantics"
     ],
     [
       "v17-006",
@@ -397,10 +421,10 @@
       "0x1000cb8c8 / 0x1000cc1e0",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-home-snapshot: unknown-base+0x464 utf8-buffer/unknown-widthbytes value",
-      "typed observed value; identity/freshness checked; nil is unavailable, never fabricated zero",
-      "local-observation-only / original-effect-unverified",
+      "original4e00 global0x100c56da0/info538c lifecycle, NOT target read identity; reference provider defaults unbound",
+      "reference-observation-provider-unbound / fail-closed",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/home"
+      "core_set_v17_native_function_slices.json#/functions/home | tools/core_set_v17_home_producer_probe.py#status_semantics"
     ],
     [
       "v17-007",
@@ -421,10 +445,10 @@
       "0x1000cb8c8 / 0x1000cc228",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-home-snapshot: unknown-base+0x584 utf8-buffer/unknown-widthbytes value",
-      "typed observed value; identity/freshness checked; nil is unavailable, never fabricated zero",
-      "local-observation-only / original-effect-unverified",
+      "actual Host floating geometry/panel visibility/registration/cleanup readback; current host generation; local structural status, not remote pixel proof",
+      "same-meaning-current-runtime-observation-contract / original-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/home"
+      "core_set_v17_native_function_slices.json#/functions/home | tools/core_set_v17_home_producer_probe.py#status_semantics"
     ],
     [
       "v17-008",
@@ -445,10 +469,10 @@
       "0x1000cb8c8 / 0x1000cc134",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-home-snapshot: unknown-base+0x144 utf8-buffer/unknown-widthbytes value",
-      "typed observed value; identity/freshness checked; nil is unavailable, never fabricated zero",
-      "local-observation-only / original-effect-unverified",
+      "original5c6a8 locked0x168 snapshot global0x100c2c3b8 string+0x78, NOT running bool; reference provider defaults unbound",
+      "reference-observation-provider-unbound / fail-closed",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/home"
+      "core_set_v17_native_function_slices.json#/functions/home | tools/core_set_v17_home_producer_probe.py#status_semantics"
     ],
     [
       "v17-009",
@@ -469,8 +493,8 @@
       "0x1000cb8c8 / 0x1000cc440",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-home-snapshot: unknown-base+0x20 uint64-count-pair/16bytes value",
-      "typed observed value; identity/freshness checked; nil is unavailable, never fabricated zero",
-      "same-meaning-observation-producer-missing / nil",
+      "CoreSetHomeReferenceObservationProvider same-request real counts only; observer epoch/sequence/host generation/native generation/freshness + monotone counts + fixed denominator; no default producer",
+      "reference-progress-provider-unbound / fail-closed",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/home"
     ],
@@ -493,8 +517,8 @@
       "0x1000cb8c8 / 0x1000cc2f0",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-home-snapshot: unknown-base+0x38 uint64-count-pair/16bytes value",
-      "typed observed value; identity/freshness checked; nil is unavailable, never fabricated zero",
-      "same-meaning-observation-producer-missing / nil",
+      "CoreSetHomeReferenceObservationProvider same-request real counts only; observer epoch/sequence/host generation/native generation/freshness + monotone counts + fixed denominator; no default producer",
+      "reference-progress-provider-unbound / fail-closed",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/home"
     ],
@@ -577,8 +601,8 @@
       "悬浮颜色",
       "floatingColorRows",
       "descriptor",
-      "home.desired.floatingPalette",
-      "local_appearance",
+      "home.desired.floatingPalette -> hostChannel.desired.floatingPalette",
+      "host_palette",
       "",
       "",
       null,
@@ -587,10 +611,10 @@
       false,
       "native-v17/v17-014",
       "0x1000ccdfc",
-      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
+      "native menu Float32 swatch/index evidence + actual current Host property consumer; original device/lifecycle effect NOT proved",
       null,
-      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
-      "same-meaning-menu-component-only / original-floating-effect-unverified",
+      "native UI index -> enum[6,4,1,0,2,3,5] -> original Float32 colours/gradient0,2 -> owned Host CAGradientLayer; exact generation/apply token; loss revokes proof; stop verifies removal",
+      "current-live-host-floating-palette-contract / original-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
@@ -769,8 +793,8 @@
       "悬浮颜色 1",
       "selectFloatingColor",
       "floatingColor",
-      "home.desired.floatingPalette[0]",
-      "local_appearance",
+      "home.desired.floatingPalette -> hostChannel.desired.floatingPalette",
+      "host_palette",
       "",
       "",
       null,
@@ -779,10 +803,10 @@
       false,
       "native-v17/v17-022",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
+      "native menu Float32 swatch/index evidence + actual current Host property consumer; original device/lifecycle effect NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
-      "same-meaning-menu-component-only / original-floating-effect-unverified",
+      "native UI index -> enum[6,4,1,0,2,3,5] -> original Float32 colours/gradient0,2 -> owned Host CAGradientLayer; exact generation/apply token; loss revokes proof; stop verifies removal",
+      "current-live-host-floating-palette-contract / original-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
@@ -793,8 +817,8 @@
       "悬浮颜色 2",
       "selectFloatingColor",
       "floatingColor",
-      "home.desired.floatingPalette[1]",
-      "local_appearance",
+      "home.desired.floatingPalette -> hostChannel.desired.floatingPalette",
+      "host_palette",
       "",
       "",
       null,
@@ -803,10 +827,10 @@
       false,
       "native-v17/v17-023",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
+      "native menu Float32 swatch/index evidence + actual current Host property consumer; original device/lifecycle effect NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
-      "same-meaning-menu-component-only / original-floating-effect-unverified",
+      "native UI index -> enum[6,4,1,0,2,3,5] -> original Float32 colours/gradient0,2 -> owned Host CAGradientLayer; exact generation/apply token; loss revokes proof; stop verifies removal",
+      "current-live-host-floating-palette-contract / original-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
@@ -817,8 +841,8 @@
       "悬浮颜色 3",
       "selectFloatingColor",
       "floatingColor",
-      "home.desired.floatingPalette[2]",
-      "local_appearance",
+      "home.desired.floatingPalette -> hostChannel.desired.floatingPalette",
+      "host_palette",
       "",
       "",
       null,
@@ -827,10 +851,10 @@
       false,
       "native-v17/v17-024",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
+      "native menu Float32 swatch/index evidence + actual current Host property consumer; original device/lifecycle effect NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
-      "same-meaning-menu-component-only / original-floating-effect-unverified",
+      "native UI index -> enum[6,4,1,0,2,3,5] -> original Float32 colours/gradient0,2 -> owned Host CAGradientLayer; exact generation/apply token; loss revokes proof; stop verifies removal",
+      "current-live-host-floating-palette-contract / original-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
@@ -841,8 +865,8 @@
       "悬浮颜色 4",
       "selectFloatingColor",
       "floatingColor",
-      "home.desired.floatingPalette[3]",
-      "local_appearance",
+      "home.desired.floatingPalette -> hostChannel.desired.floatingPalette",
+      "host_palette",
       "",
       "",
       null,
@@ -851,10 +875,10 @@
       false,
       "native-v17/v17-025",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
+      "native menu Float32 swatch/index evidence + actual current Host property consumer; original device/lifecycle effect NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
-      "same-meaning-menu-component-only / original-floating-effect-unverified",
+      "native UI index -> enum[6,4,1,0,2,3,5] -> original Float32 colours/gradient0,2 -> owned Host CAGradientLayer; exact generation/apply token; loss revokes proof; stop verifies removal",
+      "current-live-host-floating-palette-contract / original-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
@@ -865,8 +889,8 @@
       "悬浮颜色 5",
       "selectFloatingColor",
       "floatingColor",
-      "home.desired.floatingPalette[4]",
-      "local_appearance",
+      "home.desired.floatingPalette -> hostChannel.desired.floatingPalette",
+      "host_palette",
       "",
       "",
       null,
@@ -875,10 +899,10 @@
       false,
       "native-v17/v17-026",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
+      "native menu Float32 swatch/index evidence + actual current Host property consumer; original device/lifecycle effect NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
-      "same-meaning-menu-component-only / original-floating-effect-unverified",
+      "native UI index -> enum[6,4,1,0,2,3,5] -> original Float32 colours/gradient0,2 -> owned Host CAGradientLayer; exact generation/apply token; loss revokes proof; stop verifies removal",
+      "current-live-host-floating-palette-contract / original-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
@@ -889,8 +913,8 @@
       "悬浮颜色 6",
       "selectFloatingColor",
       "floatingColor",
-      "home.desired.floatingPalette[5]",
-      "local_appearance",
+      "home.desired.floatingPalette -> hostChannel.desired.floatingPalette",
+      "host_palette",
       "",
       "",
       null,
@@ -899,10 +923,10 @@
       false,
       "native-v17/v17-027",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
+      "native menu Float32 swatch/index evidence + actual current Host property consumer; original device/lifecycle effect NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
-      "same-meaning-menu-component-only / original-floating-effect-unverified",
+      "native UI index -> enum[6,4,1,0,2,3,5] -> original Float32 colours/gradient0,2 -> owned Host CAGradientLayer; exact generation/apply token; loss revokes proof; stop verifies removal",
+      "current-live-host-floating-palette-contract / original-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
@@ -913,8 +937,8 @@
       "悬浮颜色 7",
       "selectFloatingColor",
       "floatingColor",
-      "home.desired.floatingPalette[6]",
-      "local_appearance",
+      "home.desired.floatingPalette -> hostChannel.desired.floatingPalette",
+      "host_palette",
       "",
       "",
       null,
@@ -923,10 +947,10 @@
       false,
       "native-v17/v17-028",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
+      "native menu Float32 swatch/index evidence + actual current Host property consumer; original device/lifecycle effect NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
-      "same-meaning-menu-component-only / original-floating-effect-unverified",
+      "native UI index -> enum[6,4,1,0,2,3,5] -> original Float32 colours/gradient0,2 -> owned Host CAGradientLayer; exact generation/apply token; loss revokes proof; stop verifies removal",
+      "current-live-host-floating-palette-contract / original-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
@@ -952,8 +976,8 @@
       "0x1000cd128 / 0x1000cd150 / 0x1000cd15c",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-fps-state: unknown-base+unknown-offset int32/4bytes value",
-      "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "declared-readonly-subset / original-device-effect-unverified",
+      "bounded requested Int -> actual Metal preferred property readback; independent actual MTLDrawable.presentedTime window with adapter epoch + host/render generation; never infer presentation rate from request",
+      "live-scheduler-property-and-present-timestamp-window / original-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/fps_get,fps_set,fps_update"
     ],
@@ -3808,6 +3832,21 @@
     }
   },
   "missing_observation_producers": {
+    "v17-005": {
+      "field": "homeSnapshot.environment",
+      "producer_available": false,
+      "requirement": "原4010+2e4字段由5f14系统支持分类与QXA107 phase/inFlight/ready合成，不能用nativeReady替代。固定CoreSetHomeReferenceObservationProvider接口；下一包记录同请求/observer epoch/sequence/host generation及原始环境状态，文本UTF8最多63字节。"
+    },
+    "v17-006": {
+      "field": "homeSnapshot.information",
+      "producer_available": false,
+      "requirement": "原4010→4e00将global0x100c56da0状态与可选信息消息格式化到+464，生命周期属于538c；目标只读身份不是此字段。provider接口保留真实request/generation/状态转换/失败/停止，文本UTF8最多191字节。"
+    },
+    "v17-008": {
+      "field": "homeSnapshot.stage",
+      "producer_available": false,
+      "requirement": "原4010→5c6a8持锁复制global0x100c2c3b8的0x168快照，读取+78阶段缓冲到home+144；running bool不是阶段。provider需真实阶段文本及同请求/epoch/sequence/host generation，文本UTF8最多127字节；无绑定时保持unavailable。"
+    },
     "v17-009": {
       "field": "homeSnapshot.completedPages/totalPages",
       "producer_available": false,
@@ -3828,7 +3867,7 @@
     "observation_points": 10,
     "original_action_consumer_missing_points": 35,
     "alternative_aim_preview_points": 7,
-    "missing_observation_producers": 2,
+    "missing_observation_producers": 5,
     "source_same_meaning_local_contract_points": 26,
     "remaining_local_or_observation_points": 13,
     "device_effect_verified_points": 0

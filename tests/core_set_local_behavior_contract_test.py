@@ -43,6 +43,12 @@ class LocalBehaviorContract(unittest.TestCase):
         self.assertIn("CoreSetReferenceMenuAppearance.preset(6)", self.menu)
         self.assertIn("CoreSetReferenceMenuAppearance.preset(sender.tag)", self.menu)
         self.assertIn("if $0.theme == nil { $0.theme = storedTheme() }", self.menu)
+        rows = body(self.menu, "func localColorRows(")
+        self.assertIn("matchesPreset(CoreSetReferenceMenuAppearance.preset(index))", rows)
+        self.assertNotIn("matchesPreset(rgb)", rows)
+        match = body(self.menu, "func matchesPreset(")
+        self.assertIn("CGFloat(preset.red)", match)
+        self.assertNotIn("/ 255", match)
 
     def test_directory_receipt_is_not_accessibility_text_parser(self):
         observe = body(self.menu, "func observeDirectory()")

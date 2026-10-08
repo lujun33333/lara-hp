@@ -184,6 +184,8 @@ final class CoreSetRuntimeCoordinator {
     private var recoilConsumer: CoreSetRecoilConsumer?
     private let performanceSampler = CoreSetPerformanceSampler()
     private let homeTelemetry = CoreSetHomeTelemetrySource()
+    private var homeReferenceObservationProvider: CoreSetHomeReferenceObservationProvider?
+    private var observationTimer: DispatchSourceTimer?
     private let performanceQueue = DispatchQueue(label: "coreset.local.performance", qos: .utility)
     private var performanceTimer: DispatchSourceTimer?
     private var performanceEpoch = UUID()
@@ -213,6 +215,13 @@ final class CoreSetRuntimeCoordinator {
         precondition(Thread.isMainThread)
         return homeTelemetry.recordProducerProbeEvent(event)
     }
+    func bindHomeReferenceObservationProvider(_ provider: CoreSetHomeReferenceObservationProvider) {
+        precondition(Thread.isMainThread)
+        guard !stopping else { return }
+        homeReferenceObservationProvider = provider
+        homeTelemetry.bindReferenceObservationProvider(provider)
+        publishStatus()
+    }
     func invalidateReadFrameObservation(_ capability: CoreSetCapability, reason: String) {
         precondition(Thread.isMainThread)
         menu.invalidateReadFrameObservation(capability: capability, reason: reason)
@@ -234,6 +243,17 @@ final class CoreSetRuntimeCoordinator {
         return CoreSetFrameRateObservation(hostGeneration: generation, preferredFramesPerSecond: observed)
     }
     var frameRateReady: Bool { frameRateObservation != nil }
+    var presentedFrameObservation: CoreSetPresentedFrameObservation? {
+        precondition(Thread.isMainThread)
+        let generation = host.generation, renderGeneration = host.renderGeneration
+        let sample = host.observedPresentationCadence()
+        guard sample.valid, host.localSurfacesReady,
+              host.generation == generation, host.renderGeneration == renderGeneration else { return nil }
+        return CoreSetPresentedFrameObservation(hostGeneration: generation, renderGeneration: renderGeneration,
+            adapterEpoch: sample.adapterEpoch, sampleCount: sample.sampleCount, framesPerSecond: sample.framesPerSecond,
+            firstPresentedTime: sample.firstPresentedTime, lastPresentedTime: sample.lastPresentedTime,
+            observedHostTime: sample.observedHostTime)
+    }
     func invalidateFrameRateObservation(reason: String) {
         precondition(Thread.isMainThread)
         menu.invalidateFrameRateObservation(reason: reason)
@@ -317,6 +337,13 @@ final class CoreSetRuntimeCoordinator {
         }
         Self.retained[identity] = self
         startPerformanceSampling()
+        let observationTimer = DispatchSource.makeTimerSource(queue: .main)
+        observationTimer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250), leeway: .milliseconds(50))
+        observationTimer.setEventHandler { [weak self] in
+            guard let self, !self.stopping else { return }
+            self.publishStatus() // All sources are read-only; no action or target probe is retried.
+        }
+        self.observationTimer = observationTimer; observationTimer.resume()
     }
 
     private func startPerformanceSampling() {
@@ -963,7 +990,11 @@ final class CoreSetRuntimeCoordinator {
     }
 
     private func publishStatus() {
+        consumer.refreshObservation(isCurrent: menu.menuHostRequestIsCurrent,
+                                    canInspect: menu.menuHostObservationMayBeRefreshed,
+                                    invalidate: menu.invalidateMenuHostObservation)
         frameRateConsumer?.refreshSchedulerObservation()
+        menu.updatePresentedFrameObservation(presentedFrameObservation)
         let local = host.localSurfacesReady ? "本应用悬浮可用" : "本应用悬浮未就绪"
         let renderer = host.activeBackend == CoreSetHUDBackendMetal ? "Metal" : "CA"
         let frame = host.lastConsumedSequence > 0 ? "\(renderer) 本地帧已消费" : "\(renderer) 本地帧未确认"
@@ -976,11 +1007,14 @@ final class CoreSetRuntimeCoordinator {
         launcher?.updateRuntimePresentation(menuVisible: host.panelVisible,
             status: "\(local) · \(frame) · \(hosting)\(cleanup)\(launch)",
             cleanupRetryRequired: remoteCleanupFailed)
-        menu.updateRuntimeObservations(homeTelemetry.capture(
+        let homeGeneration = host.generation
+        let homeObservation = homeTelemetry.capture(
             hostReady: host.localSurfacesReady, panelVisible: host.panelVisible,
             cleanupPending: host.cleanupPending,
             remoteHosted: remoteHosted,
-            targetReadReady: playerConsumer?.availability == .ready))
+            hostGeneration: homeGeneration,
+            floatingReady: host.floatingControlReady)
+        menu.updateRuntimeObservations(homeObservation, expectedHostGeneration: host.generation)
     }
 
     private func releaseStoppedOwnerIfReady() {
@@ -1016,6 +1050,9 @@ final class CoreSetRuntimeCoordinator {
         performanceEpoch = UUID()
         performanceTimer?.cancel()
         performanceTimer = nil
+        observationTimer?.cancel(); observationTimer = nil
+        _ = homeTelemetry.stopObservations(); homeReferenceObservationProvider = nil
+        menu.updatePresentedFrameObservation(nil)
         stopReceiptsPending = true
         stopChannelsConfirmed = false
         stopWindowsConfirmed = false
@@ -1077,48 +1114,71 @@ private final class CoreSetLocalHostConsumer: CoreSetFeatureConsumer {
     typealias State = CoreSetMenuHostSettings
     let capability = CoreSetCapability.hostWindow
     private let host: CoreSetHUDHost
+    private var appliedGeneration: UInt64?
+    private var appliedState: State?
+    private var appliedToken: CoreSetRequestToken?
     init(host: CoreSetHUDHost) { self.host = host }
     var availability: CoreSetAvailability {
-        host.localSurfacesReady ? .ready : .unavailable(reason: "本应用窗口未就绪；跨应用 unavailable")
+        guard host.localSurfacesReady else { return .unavailable(reason: "本应用窗口未就绪；跨应用 unavailable") }
+        if let generation = appliedGeneration, let state = appliedState, !matches(state, generation: generation) {
+            return .unavailable(reason: "Host palette generation/property observation no longer matches")
+        }
+        return .ready
     }
 
     // Same v1.7 palette bytes as the menu, indexed by the typed native enum.
     private func colors(for palette: CoreSetFloatingPalette) -> [UIColor] {
-        let rgb: [[CGFloat]] = [[174,139,148], [180,85,94], [68,119,168],
-                               [58,133,120], [126,98,171], [181,86,137], [56,139,155]]
-        func color(_ index: Int) -> UIColor {
-            UIColor(red: rgb[index][0] / 255, green: rgb[index][1] / 255,
-                    blue: rgb[index][2] / 255, alpha: 1)
-        }
-        if palette == .gradient { return [color(0), color(2)] }
-        let index = CoreSetFloatingPalette.allCases.firstIndex(of: palette)!
-        return [color(index), color(index)]
+        palette.referenceColors.map { UIColor(red: CGFloat($0.red), green: CGFloat($0.green), blue: CGFloat($0.blue), alpha: 1) }
+    }
+    private func matches(_ state: State, generation: UInt64) -> Bool {
+        guard host.generation == generation, host.floatingControlReady,
+              host.panelVisible == state.menuVisible, let palette = state.floatingPalette else { return false }
+        let expected = colors(for: palette), observed = host.observedFloatingColors
+        return observed.count == expected.count && zip(observed, expected).allSatisfy { $0.0.isEqual($0.1) }
+    }
+    func refreshObservation(isCurrent: (CoreSetRequestToken) -> Bool,
+                            canInspect: (CoreSetRequestToken) -> Bool, invalidate: (String) -> Void) {
+        guard let generation = appliedGeneration, let state = appliedState, let token = appliedToken,
+              canInspect(token), !matches(state, generation: generation) else { return }
+        appliedGeneration = nil; appliedState = nil; appliedToken = nil
+        if isCurrent(token) { invalidate("Host generation/floating geometry/gradient/menu visibility no longer matches its exact apply token") }
     }
 
     func apply(_ request: CoreSetApplyRequest<State>,
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
+        precondition(Thread.isMainThread)
         guard availability == .ready, let palette = request.desired.floatingPalette else {
-            completion(request.token, .unavailable(reason: "本地宿主或颜色未就绪")); return
+            completion(request.token, .notApplied(reason: "本地宿主或颜色未就绪")); return
         }
+        let generation = host.generation
         let colors = colors(for: palette)
         guard host.applyLocalMenu(visible: request.desired.menuVisible, colors: colors) else {
             completion(request.token, .failed(reason: "本地菜单设置失败")); return
         }
-        let observed = host.observedFloatingColors
-        guard observed.count == colors.count, zip(observed, colors).allSatisfy({ $0.0.isEqual($0.1) }),
-              host.panelVisible == request.desired.menuVisible else {
+        guard matches(request.desired, generation: generation) else {
             completion(request.token, .failed(reason: "本地窗口读回不匹配")); return
         }
+        appliedGeneration = generation; appliedState = request.desired; appliedToken = request.token
+        NSLog("Core-SET: hosted-palette stage=apply point=v17-014 generation=%llu palette=%d token=%@/%@/%@ confirmed=1 scope=actual-host-floating-gradient-property original-runtime-receipt=0 device-effect-verified=0",
+              generation, palette.rawValue, request.token.generation.uuidString, request.token.consumerID.uuidString, request.token.requestID.uuidString)
         completion(request.token, .applied(observed: State(menuVisible: host.panelVisible, floatingPalette: palette)))
     }
 
     func stop(_ token: CoreSetRequestToken, completion: @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) {
+        precondition(Thread.isMainThread)
+        func finish(_ result: CoreSetHUDStopResult) {
+            let stopped = result.complete.boolValue && !host.localSurfacesReady && !host.floatingControlReady && host.observedFloatingColors.isEmpty
+            if stopped { appliedGeneration = nil; appliedState = nil; appliedToken = nil }
+            NSLog("Core-SET: hosted-palette stage=stop point=v17-014 token=%@/%@/%@ confirmed=%d scope=owned-host-window-and-gradient-removal persisted-palette-retained=1",
+                  token.generation.uuidString, token.consumerID.uuidString, token.requestID.uuidString, stopped ? 1 : 0)
+            completion(token, stopped ? .restored : .failed(reason: "窗口/浮球清理读回未确认"))
+        }
         let result = host.stop()
         if result.complete.boolValue {
-            completion(token, .restored)
+            finish(result)
         } else if host.hostedCleanupInFlight {
             host.stopHostedAsync { final in
-                completion(token, final.complete.boolValue ? .restored : .failed(reason: "窗口清理未确认"))
+                finish(final)
             }
         } else {
             completion(token, .failed(reason: "窗口清理未确认"))

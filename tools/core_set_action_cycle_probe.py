@@ -242,6 +242,8 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
     assert native_map["reference_image_sha256"] == IMAGE_SHA
     from core_set_action_selection_probe import static_edges
     selection_edges = static_edges(core)
+    from core_set_action_compensation_probe import static_edges as compensation_static_edges
+    compensation_edges = compensation_static_edges(core)
     anchors = [(0x1000C1A78, 32), (0x1000C22A0, 0x80), (0x1000C3278, 64),
                (0x1000C1378, 0x180), (0x1000C1664, 0x180), (0x1000C4854, 0x160),
                (0x1000C5AD8, 0x100), (0x1000C6730, 0x64), (0x1000C2E24, 64),
@@ -252,7 +254,7 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
         raw = core.raw(va, count * 4)
         tables.append({"address": hex(va), "file_offset": hex(core.file_offset(va)),
                        "bytes": raw.hex(), "int32_values": list(struct.unpack(f"<{count}i", raw))})
-    common_edges = ["candidate/publishedKey/controller generation + upstream route predicates/feedback → trusted current request/snapshot authority",
+    common_edges = ["candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
                     "checked-write result → current independent readback under game-thread concurrency",
                     "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"]
     points = []
@@ -270,6 +272,11 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
         if number in (120, 129, 130): closed.append("takeover")
         if number in (131, 133, 134): closed.append("recoil_raw_state")
         if number in (116, 126, 127, 128): closed.append("candidate_motion")
+        closed.append("single_worker_sink")
+        if number <= 130:
+            closed.extend(["geometry_full", "prediction_distance_gain", "angular_motion_projection", "residual_filter", "compensation_curve"])
+        if number >= 131:
+            closed.extend(["post_state_two_axis", "recoil_caller_merge", "prior_aim_feedback", "stop_post_state_local"])
         edge = ("c4af8/c571c prior-state/history/delta-time → same-cycle two-axis increment" if number >= 126 else
                 "candidate worldpoint/filter/sticky state → original selector/result observable")
         if number == 114:
@@ -290,15 +297,19 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
                        "current_alternative_preview": point["alternative_preview"],
                        "component_parity_contracts": components,
                        "closed_reference_edges": closed,
-                       "next_exact_edges": [edge] + common_edges,
+                       # Former c4af8/c416c numeric-component gap is now exact
+                       # reference parity; the three authority/receipt/restore
+                       # edges still include the unresolved live owner lifetime.
+                       "next_exact_edges": ([edge] if number < 126 else []) + common_edges,
                        "original_runtime_receipt_verified": False, "one_to_one_complete": False})
-    return {"schema_version": 2, "reference_ipa_sha256": IPA_SHA,
+    return {"schema_version": 3, "reference_ipa_sha256": IPA_SHA,
             "reference_image_sha256": IMAGE_SHA, "reference_uuid": native_map["reference_uuid"],
             "scope": "static bytes + offline pure-CFG parity contracts; no target writer authority or original device action receipt",
             "point_count": len(points), "one_to_one_complete_count": 0,
             "reference_windows": [core.proof_window(va, size) for va, size in anchors],
             "reference_tables": tables, "target_static_evidence": target,
             "selection_route_history_evidence": selection_edges,
+            "compensation_evidence": compensation_edges,
             "function_edges": [
                 {"caller": "0x1000c1a04", "slice": "0x1000c22a0..0x1000c2318", "sink": "Core-self BSS 0x100c519b8",
                  "semantics": "valid-input mode 1=ADS/2=fire/0=either/3=both; match sets deadline=now+0.25; active iff enabled and now<deadline"},
@@ -331,6 +342,7 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
                                                  "object_lifetime_atomic": False, "selects_slot_or_authorizes_writer": False},
             "reproduce": "python -B tests/core_set_action_cycle_contract_test.py --reference-ipa <exact-v1.7-ipa> --target-ipa <exact-1.38.12-ipa> --planner-exe tests/.action-cycle-build/core_set_action_cycle_plan_test.exe",
             "reproduce_selection_state": "python -B tests/core_set_action_selection_contract_test.py --reference-ipa <exact-v1.7-ipa> --planner-exe tests/.action-cycle-build/core_set_action_selection_state_test.exe --read-contract-exe tests/.action-cycle-build/core_set_action_input_read_contract_test.exe",
+            "reproduce_compensation_state": "python -B tests/core_set_action_compensation_contract_test.py --reference-ipa <exact-v1.7-ipa> --planner-exe tests/.action-cycle-build/core_set_action_compensation_state_test.exe",
             "points": points}
 
 

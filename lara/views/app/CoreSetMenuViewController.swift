@@ -86,6 +86,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private var configurationFeedback = "配置选择须等待消费者回执后才生效"
     private var hostConsumer: CoreSetMenuConsumer<CoreSetMenuHostSettings>?
     private var hostChannel = CoreSetFeatureChannel(capability: .hostWindow, desired: CoreSetMenuHostSettings())
+    private var lastHostAppliedToken: CoreSetRequestToken?
     private var appearanceConsumer: CoreSetMenuConsumer<CoreSetMenuAppearance>?
     private var directoryConsumer: CoreSetMenuConsumer<CoreSetDirectoryPresentation>?
     private var appearanceChannel: CoreSetFeatureChannel<CoreSetMenuAppearance>?
@@ -139,16 +140,43 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private let radarRangeRows = UIView()
     private var radarRangeCanvas: CoreSetRadarCanvas?
     private var performanceValueLabels: [UILabel] = []
+    private weak var presentationRateLabel: UILabel?
+    private var presentationProofSignature: String?
     private var pageContentOffsets: [Int: CGPoint] = [:]
     private var hostedPointerID: String?
     private var homeStatusNeedsRebuild = false
     private var homeStatusSnapshot: CoreSetHomeSnapshot? { featureState.homeSnapshot }
-    func updateRuntimeObservations(_ observation: CoreSetHomeObservation) {
+    func updateRuntimeObservations(_ observation: CoreSetHomeObservation, expectedHostGeneration: UInt64) {
         precondition(Thread.isMainThread)
+        if let identity = observation.identity {
+            let age = Date().timeIntervalSince(identity.observedAt)
+            let old = featureState.homeObservationIdentity
+            guard identity.hostGeneration == expectedHostGeneration, identity.sequence > 0, age >= 0, age <= 5,
+                  old?.observerEpoch != identity.observerEpoch || identity.sequence > (old?.sequence ?? 0) else {
+                NSLog("Core-SET: home-observation stage=rejected confirmed=0 reason=epoch/sequence/host-generation/freshness-mismatch"); return
+            }
+        }
         let changed = featureState.homeSnapshot != observation.snapshot ||
-            featureState.homeObservationSupportedFields != observation.supportedFields
+            featureState.homeObservationSupportedFields != observation.supportedFields ||
+            featureState.homeObservationUnavailableReasons != observation.unavailableReasons ||
+            featureState.homeObservationFieldIdentities.mapValues({ $0.observerEpoch }) != observation.fieldIdentities.mapValues({ $0.observerEpoch }) ||
+            featureState.homeObservationIdentity?.hostGeneration != observation.identity?.hostGeneration
         featureState.homeSnapshot = observation.snapshot
+        featureState.homeObservationIdentity = observation.identity
+        featureState.homeObservationUnavailableReasons = observation.unavailableReasons
+        featureState.homeObservationFieldIdentities = observation.fieldIdentities
         featureState.homeObservationSupportedFields = observation.supportedFields
+        if changed {
+            let fields: [(Int, CoreSetHomeObservationField)] = [(4, .kernel), (5, .environment), (6, .information), (7, .floating), (8, .stage), (9, .pageProgress), (10, .firmwareProgress)]
+            for (point, field) in fields {
+                let fieldIdentity = observation.fieldIdentities[field]
+                NSLog("Core-SET: home-observation stage=field-state point=v17-%03d observed=%d observerEpoch=%@ sequence=%llu hostGeneration=%llu reason=%@ scope=typed-read-only-producer original-runtime-receipt=0 device-effect-verified=0",
+                      point, observation.supportedFields.contains(field) ? 1 : 0,
+                      fieldIdentity?.observerEpoch.uuidString ?? "unavailable", fieldIdentity?.sequence ?? 0,
+                      fieldIdentity?.hostGeneration ?? expectedHostGeneration,
+                      observation.unavailableReasons[field] ?? (observation.supportedFields.contains(field) ? "matched-live-producer" : "field-producer-unconfirmed"))
+            }
+        }
         guard changed else { return }
         if isViewLoaded && selectedPage == 0 {
             if hostedPointerID == nil { rebuildMenu() }
@@ -166,6 +194,17 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 peakFootprintMiB: sample.peakValid ? sample.peakFootprintMiB : nil)
         } else { featureState.performanceSnapshot = nil }
         if isViewLoaded && selectedPage == 0 { refreshPerformanceLabels() }
+    }
+    func updatePresentedFrameObservation(_ observation: CoreSetPresentedFrameObservation?) {
+        precondition(Thread.isMainThread)
+        featureState.presentedFrameSnapshot = observation
+        let signature = observation.map { "\($0.hostGeneration)/\($0.renderGeneration)/\($0.adapterEpoch)/\($0.sampleCount)/\($0.lastPresentedTime)" } ?? "unavailable"
+        if signature != presentationProofSignature {
+            presentationProofSignature = signature
+            NSLog("Core-SET: presentation-cadence point=v17-029 observed=%d sample=%@ scope=actual-drawable-present-time-window requested-fps-input=0 original-runtime-receipt=0 device-effect-verified=0",
+                  observation == nil ? 0 : 1, signature)
+        }
+        presentationRateLabel?.text = observation.map { String(format: "实测呈现 %.1f FPS · %llu 帧", $0.framesPerSecond, $0.sampleCount) } ?? "实测呈现 unavailable · 无新鲜 present 时间窗口"
     }
     // v1.7 palette bytes at file 0xac813c; swatch spacing is 7, not the selection helper's 6.
     private let presetRGB: [[CGFloat]] = [
@@ -1206,6 +1245,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         consumer.stop(token) { [weak self] token, outcome in
             DispatchQueue.main.async {
                 guard let self, self.hostChannel.receiveStop(token, outcome: outcome) else { completion(false); return }
+                if self.hostChannel.restoration == .confirmed { self.lastHostAppliedToken = nil }
                 _ = self.featureState.setInfrastructure(.hostWindow, availability: .unavailable(reason: "Host consumer stopped"))
                 completion(self.hostChannel.restoration == .confirmed)
             }
@@ -1215,23 +1255,52 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     func resumeMenuHostConsumer() -> Bool {
         precondition(Thread.isMainThread)
         let result = hostChannel.resume()
+        if result { lastHostAppliedToken = nil }
         refreshConsumerAvailability()
         return result
     }
 
     private func applyHostSettings(completion: @escaping (Bool) -> Void = { _ in }) {
         guard let consumer = hostConsumer, let request = hostChannel.prepareApply() else { completion(false); return }
-        let hostedSource = hostedDispatchControlID ?? "host-or-UIKit"
+        let hostedSource = interactionControlIdentifier
         consumer.apply(request) { [weak self] token, outcome in
             DispatchQueue.main.async {
-                guard let self, self.hostChannel.receive(token, outcome: outcome) else { completion(false); return }
+                guard let self else { completion(false); return }
+                guard self.hostChannel.receive(token, outcome: outcome) else {
+                    if token.generation == self.hostChannel.generation, self.hostChannel.pendingStop == nil {
+                        self.invalidateMenuHostObservation(reason: "Host apply receipt no longer matches its live producer")
+                    }
+                    completion(false); return
+                }
+                if case .applied = outcome { self.lastHostAppliedToken = token }
                 _ = self.featureState.setInfrastructure(.hostWindow, availability: self.hostChannel.isDesiredConfirmed
                     ? .ready : .unavailable(reason: "Host request has not been confirmed"))
-                NSLog("Core-SET: hosted input stage=actual control=%@ capability=hostWindow confirmed=%d",
-                      hostedSource, self.hostChannel.isDesiredConfirmed ? 1 : 0)
+                NSLog("Core-SET: hosted input stage=actual control=%@ capability=hostWindow confirmed=%d result=%@ scope=actual-host-floating-gradient-property original-runtime-receipt=0 device-effect-verified=0",
+                      hostedSource, self.hostChannel.isDesiredConfirmed ? 1 : 0, String(describing: outcome))
                 completion(self.hostChannel.isDesiredConfirmed)
+                if self.isViewLoaded && self.selectedPage == 0 { self.rebuildMenu() }
             }
         }
+    }
+    func menuHostRequestIsCurrent(_ token: CoreSetRequestToken) -> Bool {
+        lastHostAppliedToken == token && hostChannel.generation == token.generation &&
+            hostChannel.pendingApply == nil && hostChannel.pendingStop == nil
+    }
+    func menuHostObservationMayBeRefreshed(_ token: CoreSetRequestToken) -> Bool {
+        hostChannel.pendingApply == nil && hostChannel.pendingStop == nil
+    }
+    func invalidateMenuHostObservation(reason: String) {
+        precondition(Thread.isMainThread)
+        hostChannel.invalidateHostPresentationObservation(reason: reason)
+        lastHostAppliedToken = nil
+        NSLog("Core-SET: hosted-palette stage=invalidated point=v17-014 confirmed=0 scope=actual-host-floating-gradient-property reason=%@", reason)
+        if isViewLoaded && selectedPage == 0 { rebuildMenu() }
+    }
+    private var hostPaletteReceiptReason: String {
+        if let reason = hostChannel.observationInvalidationReason { return reason }
+        if case .failed(let reason) = hostChannel.phase { return reason }
+        if case .unavailable(let reason) = hostChannel.availability { return reason }
+        return "awaiting-matched-host-palette-receipt"
     }
 
     private func uiColor(_ value: CoreSetRGBA) -> UIColor {
@@ -2339,7 +2408,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             swatch.layer.cornerRadius = 5
             swatch.tag = index
             swatch.accessibilityLabel = "预设颜色 \(index + 1)"
-            let selected = matchesPreset(rgb)
+            let selected = matchesPreset(CoreSetReferenceMenuAppearance.preset(index))
             swatch.isSelected = selected
             swatch.isEnabled = localAppearanceReady
             swatch.accessibilityTraits = selected ? [.button, .selected] : .button
@@ -2363,13 +2432,12 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         floatingColorRows(in: card)
     }
 
-    private func matchesPreset(_ rgb: [CGFloat]) -> Bool {
-        guard rgb.count == 3 else { return false }
+    private func matchesPreset(_ preset: CoreSetRGBA) -> Bool {
         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
         guard accent.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return false }
-        let dr = red - rgb[0] / 255
-        let dg = green - rgb[1] / 255
-        let db = blue - rgb[2] / 255
+        let dr = red - CGFloat(preset.red)
+        let dg = green - CGFloat(preset.green)
+        let db = blue - CGFloat(preset.blue)
         return dr * dr + dg * dg + db * db < 0.0001
     }
 
@@ -2558,7 +2626,12 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             swatch.isSelected = selected
             swatch.isEnabled = localAppearanceReady
             swatch.accessibilityLabel = "悬浮颜色 \(index + 1)"
-            swatch.accessibilityHint = "本应用/宿主浮球配置；v1.7完整palette和跨应用颜色效果未验证"
+            let confirmed = selected && hostChannel.isDesiredConfirmed && hostChannel.actual?.floatingPalette == CoreSetFloatingPalette(rawValue: floatingThemeValues[index])
+            swatch.accessibilityValue = confirmed ? "宿主浮球颜色属性已回读" : "颜色已配置，等待宿主浮球回执"
+            swatch.accessibilityHint = "实际 Host 浮球 gradient 属性/代次回读；不代表原包设备像素或跨应用呈现验收"
+            NSLog("Core-SET: hosted-palette stage=field-state point=v17-%03d field=floatingPalette configured=%d confirmed=%d scope=actual-host-floating-gradient-property original-runtime-receipt=0 device-effect-verified=0 reason=%@",
+                  22 + index, selected ? 1 : 0, confirmed ? 1 : 0,
+                  confirmed ? "matched-host-palette-token" : hostPaletteReceiptReason)
             swatch.accessibilityTraits = selected ? [.button, .selected] : .button
             if selected {
                 let outline = CAShapeLayer()
@@ -3268,6 +3341,11 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             localColorRows(in: settings)
             let fps = card("局内绘制帧率", CGRect(x: 335, y: 203, width: 323, height: 90))
             disabledRows(["FPS 调节"], in: fps, y: 38)
+            let presented = label("", size: 9, frame: CGRect(x: 12, y: 65, width: 299, height: 18), secondary: true)
+            presented.accessibilityIdentifier = "core-set.0.v17-029.presentation-observation"
+            presented.accessibilityHint = "实际 drawable presentedTime 窗口；不是 preferredFramesPerSecond，也不是跨应用像素验收"
+            fps.addSubview(presented); presentationRateLabel = presented
+            updatePresentedFrameObservation(featureState.presentedFrameSnapshot)
             let performance = card("性能监测", CGRect(x: 335, y: 321, width: 323, height: 145))
             let values = performanceValues()
             for (index, title) in ["CPU 占用", "内存占用", "内存峰值"].enumerated() {

@@ -8,6 +8,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) CGPoint end;
 @end
 
+typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
+    CoreSetWarningYawSourceNone = 0,
+    CoreSetWarningYawSourceServerControlRotation = 1,
+    CoreSetWarningYawSourceReplicatedMovement = 2,
+};
+
 @interface CoreSetPlayerMark : NSObject
 @property(nonatomic, readonly) uint64_t actorAddress;
 // Raw reflected HealthStatus byte, only when battleInputsPresent is true;
@@ -31,11 +37,17 @@ NS_ASSUME_NONNULL_BEGIN
 // Core's primary server-rotation yaw only; nil for non-finite/out-of-range
 // values. This is not a promise that the current controller is aiming here.
 @property(nonatomic, readonly, nullable) NSNumber *warningServerYawDegrees;
+// Reference primary/fallback selection with an explicit reflected owner.
+// Neither source proves current controller aim or network replication freshness.
+@property(nonatomic, readonly, nullable) NSNumber *warningYawDegrees;
+@property(nonatomic, readonly) CoreSetWarningYawSource warningYawSource;
 @end
 
 @interface CoreSetGrenadeMark : NSObject
 @property(nonatomic, readonly) CGPoint point;
 @property(nonatomic, readonly) double distanceUnitsDividedBy100;
+// Seconds (0,10], only for a typed EliteProjectile and verified target clock.
+@property(nonatomic, readonly, nullable) NSNumber *countdownSeconds;
 @end
 
 @interface CoreSetPlayerSnapshot : NSObject
@@ -174,5 +186,7 @@ FOUNDATION_EXPORT NSString * _Nullable CoreSetReferencePlayerDistanceText(double
 FOUNDATION_EXPORT NSString * _Nullable CoreSetReferenceWarningText(
     NSString * _Nullable playerName, BOOL bot, NSString * _Nullable weaponName,
     uint32_t weaponID, double distance);
+FOUNDATION_EXPORT BOOL CoreSetReferencePlayerRay(CGSize canvasSize, double nativeScale,
+    CGPoint head, CGPoint *origin, CGPoint *endpoint);
 
 NS_ASSUME_NONNULL_END

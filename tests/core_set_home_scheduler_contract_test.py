@@ -125,7 +125,9 @@ class HomeSchedulerContract(unittest.TestCase):
         self.assertIn("downloadedBytes: nil, totalBytes: nil", capture)
         self.assertIn("producer=unbound confirmed=0 required=%@ scope=reference-contract", capture)
         self.assertNotIn("fetchkcache", capture)
-        self.assertIn("manager.dsrunning && progress.isFinite", capture)
+        provider = body(self.telemetry.split("final class CoreSetLaraHomeRuntimeObservationProvider", 1)[1], "func readObservation(hostGeneration:")
+        self.assertIn("running && progress.isFinite", provider)
+        self.assertIn("let kernelProgress = runtime.kernelProgress", capture)
 
     def test_137_matrix_links_executable_home_probe_without_closure_credit(self):
         matrix = json.loads((ROOT / "tests/fixtures/core_set_v17_menu_point_map.json").read_text(encoding="utf-8"))
@@ -145,7 +147,7 @@ def replay(path):
     from core_set_v17_home_producer_probe import probe
     core = CoreImage(path)
     evidence = probe(core)
-    assert evidence["point_ids"] == ["v17-000", "v17-001", "v17-002", "v17-003", "v17-009", "v17-010"]
+    assert evidence["point_ids"] == [f"v17-{point:03}" for point in range(11)]
     assert not evidence["original_runtime_verified"]
     names = {(method["class"], method["owner"], method["selector"]): method["implementation"]
              for method in evidence["objc_methods"]}
@@ -165,6 +167,10 @@ def replay(path):
             assert core.raw(int(site["address"], 16), 4).hex() == word["bytes"]
     assert evidence["functions"]["firmware_workflow_block"]["entry"] == "0x10000f8f0"
     assert "digest only" in evidence["progress_sources"]["v17-010"]["next_capture"]
+    assert evidence["status_semantics"]["v17-004"]["strings"] == ["未初始化", "初始化中", "初始化成功", "初始化失败", "初始化超时"]
+    assert evidence["status_semantics"]["v17-005"]["strings"][:4] == ["正在联网适配", "环境已就绪", "环境适配失败", "等待授权后适配"]
+    assert evidence["status_semantics"]["v17-007"]["strings"] == ["等待内核成功利用", "已开启全局悬浮"]
+    assert "running alone is NOT" in evidence["status_semantics"]["v17-008"]["current"]
     selectors = {stub["stub"]: stub["selector"] for stub in evidence["selector_stubs"]}
     assert selectors == {"0x10072ce60": "qx327", "0x10072cda0": "qx307:",
                          "0x100729e80": "generation", "0x10072f780": "setGeneration:",

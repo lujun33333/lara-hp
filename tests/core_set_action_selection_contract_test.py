@@ -104,8 +104,8 @@ class SelectionContracts(unittest.TestCase):
 
     def test_fixture_has_closed_reference_edges_and_fewer_unresolved_edges(self):
         evidence = json.loads((ROOT / "tests/fixtures/core_set_v17_action_cycle_evidence.json").read_text(encoding="utf-8"))
-        self.assertEqual(evidence["schema_version"], 2)
-        self.assertEqual(sum(len(point["next_exact_edges"]) for point in evidence["points"]), 124)
+        self.assertEqual(evidence["schema_version"], 3)
+        self.assertEqual(sum(len(point["next_exact_edges"]) for point in evidence["points"]), 113)
         edges = evidence["selection_route_history_evidence"]
         self.assertEqual(len(edges["closed_edges"]), 10)
         self.assertFalse(edges["write_ready"])

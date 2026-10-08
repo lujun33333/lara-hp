@@ -3,12 +3,75 @@ import Foundation
 // Read-only observations are not feature action receipts. Each supported
 // field has an observed producer and can disappear independently.
 enum CoreSetHomeObservationField: Hashable {
-    case kernel, stage, environment, information, floating, kernelProgress
+    case kernel, stage, environment, information, floating, kernelProgress, pageProgress, firmwareProgress
 }
 
+struct CoreSetHomeObservationIdentity: Equatable {
+    let observerEpoch: UUID // Observation owner only, never a native exploit request ID.
+    let sequence: UInt64
+    let hostGeneration: UInt64
+    let observedAt: Date
+}
 struct CoreSetHomeObservation {
     let snapshot: CoreSetHomeSnapshot
     let supportedFields: Set<CoreSetHomeObservationField>
+    let identity: CoreSetHomeObservationIdentity?
+    let unavailableReasons: [CoreSetHomeObservationField: String]
+    let fieldIdentities: [CoreSetHomeObservationField: CoreSetHomeObservationIdentity]
+}
+
+// Original OTA/environment/info/stage/page providers have a fixed read-only
+// insertion boundary. No implementation is fabricated from DarkSword fraction,
+// target-read readiness, file-copy sizes, or a submit function's return value.
+struct CoreSetHomeReferenceObservation {
+    let identity: CoreSetHomeObservationIdentity
+    let nativeRequestID: UUID
+    let nativeGeneration: UInt64?
+    let snapshot: CoreSetHomeSnapshot
+    let supportedFields: Set<CoreSetHomeObservationField>
+    let actionProbeEvents: [CoreSetHomeProducerProbeEvent]
+}
+protocol CoreSetHomeReferenceObservationProvider: AnyObject {
+    var observerEpoch: UUID { get }
+    func readObservation(hostGeneration: UInt64) -> CoreSetHomeReferenceObservation?
+}
+
+struct CoreSetExistingHomeRuntimeObservation {
+    let identity: CoreSetHomeObservationIdentity
+    let kernel: String?
+    let executing: Bool
+    let kernelProgress: Double?
+}
+protocol CoreSetExistingHomeRuntimeObservationProvider: AnyObject {
+    func readObservation(hostGeneration: UInt64) -> CoreSetExistingHomeRuntimeObservation?
+    func stopObservation() -> Bool
+}
+final class CoreSetLaraHomeRuntimeObservationProvider: CoreSetExistingHomeRuntimeObservationProvider {
+    private let observerEpoch = UUID()
+    private var sequence: UInt64 = 0
+    private var stopped = false
+    func readObservation(hostGeneration: UInt64) -> CoreSetExistingHomeRuntimeObservation? {
+        precondition(Thread.isMainThread)
+        guard !stopped else { return nil }
+        let nativeBefore = ds_is_ready()
+        let manager = laramgr.shared
+        let running = manager.dsrunning, ready = manager.dsready && nativeBefore
+        let failed = manager.dsfailed, attempted = manager.dsattempted, progress = manager.dsprogress
+        guard nativeBefore == ds_is_ready(), !(running && failed) else { return nil }
+        let kernel: String?
+        if running { kernel = "本应用初始化中" }
+        else if ready { kernel = "本应用初始化成功 · 内核访问已核对" }
+        else if failed { kernel = "本应用初始化失败" }
+        else if !attempted { kernel = "本应用未初始化" }
+        else { kernel = nil }
+        sequence &+= 1
+        if sequence == 0 { sequence = 1 }
+        let identity = CoreSetHomeObservationIdentity(observerEpoch: observerEpoch, sequence: sequence,
+            hostGeneration: hostGeneration, observedAt: Date())
+        return CoreSetExistingHomeRuntimeObservation(identity: identity, kernel: kernel, executing: running,
+            kernelProgress: running && progress.isFinite && (0...1).contains(progress) ? progress : nil)
+    }
+    func stopObservation() -> Bool { stopped = true; return stopped }
 }
 
 enum CoreSetHomeProbePoint: Int, CaseIterable {
@@ -63,6 +126,30 @@ struct CoreSetHomeProducerProbeEvent {
 }
 
 final class CoreSetHomeTelemetrySource {
+    private let runtimeProvider: CoreSetExistingHomeRuntimeObservationProvider
+    private weak var referenceProvider: CoreSetHomeReferenceObservationProvider?
+    private var referenceIdentity: CoreSetHomeObservationIdentity?
+    private var referenceRequest: UUID?
+    private var referenceNativeGeneration: UInt64?
+    private var referenceSnapshot: CoreSetHomeSnapshot?
+    private var observationsStopped = false
+    init(runtimeProvider: CoreSetExistingHomeRuntimeObservationProvider = CoreSetLaraHomeRuntimeObservationProvider()) {
+        self.runtimeProvider = runtimeProvider
+    }
+    func bindReferenceObservationProvider(_ provider: CoreSetHomeReferenceObservationProvider) {
+        precondition(Thread.isMainThread)
+        guard !observationsStopped else { return }
+        referenceProvider = provider; referenceIdentity = nil; referenceRequest = nil; referenceNativeGeneration = nil; referenceSnapshot = nil
+    }
+    @discardableResult
+    func stopObservations() -> Bool {
+        precondition(Thread.isMainThread)
+        observationsStopped = true; referenceProvider = nil
+        referenceIdentity = nil; referenceRequest = nil; referenceNativeGeneration = nil; referenceSnapshot = nil
+        let stopped = runtimeProvider.stopObservation()
+        NSLog("Core-SET: home-observation stage=stop confirmed=%d scope=read-only-observation-owner native-action-stop=0", stopped ? 1 : 0)
+        return stopped && referenceProvider == nil
+    }
     private let probeEpoch = UUID()
     private var probeEvents: [CoreSetHomeProbePoint: CoreSetHomeProducerProbeEvent] = [:]
     private var requirementsLogged = false
@@ -74,6 +161,7 @@ final class CoreSetHomeTelemetrySource {
                   event.point.stableID, event.producerEpoch.uuidString, event.requestID.uuidString, event.sequence, reason)
             return false
         }
+        guard !observationsStopped else { return rejected("observation-owner-stopped") }
         let age = Date().timeIntervalSince(event.observedAt)
         guard age >= 0, age <= 5, event.sequence > 0 else { return rejected("stale-or-future-observation/zero-sequence") }
         if let option = event.requestedOption {
@@ -125,7 +213,7 @@ final class CoreSetHomeTelemetrySource {
             completedCount: nil, totalCount: nil, errorCode: nil))
     }
     func capture(hostReady: Bool, panelVisible: Bool, cleanupPending: Bool,
-                 remoteHosted: Bool, targetReadReady: Bool) -> CoreSetHomeObservation {
+                 remoteHosted: Bool, hostGeneration: UInt64, floatingReady: Bool) -> CoreSetHomeObservation {
         precondition(Thread.isMainThread)
         if !requirementsLogged {
             requirementsLogged = true
@@ -134,49 +222,107 @@ final class CoreSetHomeTelemetrySource {
                       point.stableID, point.requiredEvidence)
             }
         }
-        let manager = laramgr.shared
-        let nativeReady = manager.dsready && ds_is_ready()
-        var supported: Set<CoreSetHomeObservationField> = []
-        var kernel: String?
-        if manager.dsrunning {
-            kernel = "DarkSword 初始化中"
-        } else if nativeReady {
-            kernel = "DarkSword 已就绪"
-        } else if manager.dsfailed {
-            kernel = "DarkSword 初始化失败"
-        } else if manager.dsattempted {
-            kernel = "DarkSword 未就绪"
+        var reasons: [CoreSetHomeObservationField: String] = [
+            .environment: "v17-005: QXA107 OTA/system-support environment provider is not bound",
+            .information: "v17-006: native538c information lifecycle provider is not bound; target identity is not this status",
+            .stage: "v17-008: native5c6a8 stage buffer provider is not bound; running is not a stage",
+            .pageProgress: "v17-009: native2fd1c same-request page producer is not bound",
+            .firmwareProgress: "v17-010: QXA107 qm571/qm543 byte producer is not bound"]
+        guard !observationsStopped, let runtime = runtimeProvider.readObservation(hostGeneration: hostGeneration) else {
+            reasons[.kernel] = "v17-004: runtime observation owner stopped or native readiness changed during capture"
+            reasons[.floating] = "v17-007: observation owner stopped/unavailable"
+            return CoreSetHomeObservation(snapshot: CoreSetHomeSnapshot(), supportedFields: [], identity: nil, unavailableReasons: reasons, fieldIdentities: [:])
         }
-        if kernel != nil { supported.insert(.kernel) }
-        let stage = manager.dsrunning ? "DarkSword 初始化进行中" : nil
-        if stage != nil { supported.insert(.stage) }
-        let environment = nativeReady ? "本应用内核访问已核对" : nil
-        if environment != nil { supported.insert(.environment) }
-        let information = targetReadReady ? "目标只读身份已核对" : nil
-        if information != nil { supported.insert(.information) }
+        let referenceFields: Set<CoreSetHomeObservationField> = [.environment, .information, .stage, .pageProgress, .firmwareProgress]
+        var fieldIdentities: [CoreSetHomeObservationField: CoreSetHomeObservationIdentity] = [:]
+        var supported: Set<CoreSetHomeObservationField> = []
+        let kernel = runtime.kernel
+        if kernel != nil { supported.insert(.kernel); fieldIdentities[.kernel] = runtime.identity }
         let floating: String?
         if cleanupPending {
             floating = "悬浮资源清理待确认"
-        } else if remoteHosted && hostReady {
-            floating = panelVisible ? "跨应用双面挂接已回读 · 菜单显示" : "跨应用双面挂接已回读"
-        } else if hostReady {
+        } else if remoteHosted && hostReady && floatingReady {
+            floating = panelVisible ? "跨应用注册回执有效 · 本地菜单显示" : "跨应用注册回执有效"
+        } else if hostReady && floatingReady {
             floating = panelVisible ? "本应用悬浮已显示" : "本应用悬浮已就绪"
         } else {
             floating = nil
         }
-        if floating != nil { supported.insert(.floating) }
+        if floating != nil { supported.insert(.floating); fieldIdentities[.floating] = runtime.identity }
         // dsprogress is set to 1 even on failure; never display it as a
         // completion/success receipt after dsrunning becomes false.
-        let progress = manager.dsprogress
-        let kernelProgress = manager.dsrunning && progress.isFinite &&
-            (0...1).contains(progress) ? progress : nil
-        if kernelProgress != nil { supported.insert(.kernelProgress) }
-        let snapshot = CoreSetHomeSnapshot(kernel: kernel, stage: stage,
-            environment: environment, information: information, floating: floating,
-            executing: manager.dsrunning, status: nil,
+        let kernelProgress = runtime.kernelProgress
+        if kernelProgress != nil { supported.insert(.kernelProgress); fieldIdentities[.kernelProgress] = runtime.identity }
+        var snapshot = CoreSetHomeSnapshot(kernel: kernel, stage: nil,
+            environment: nil, information: nil, floating: floating,
+            executing: runtime.executing, status: nil,
             completedPages: nil, totalPages: nil, environmentStage: nil,
             downloadedBytes: nil, totalBytes: nil,
             kernelProgressFraction: kernelProgress)
-        return CoreSetHomeObservation(snapshot: snapshot, supportedFields: supported)
+        if let provider = referenceProvider, let reference = provider.readObservation(hostGeneration: hostGeneration) {
+            for field in referenceFields {
+                reasons[field] = "bound reference provider returned no validated value for this field"
+            }
+            let identity = reference.identity, age = Date().timeIntervalSince(identity.observedAt)
+            let current = identity.observerEpoch == provider.observerEpoch && identity.hostGeneration == hostGeneration &&
+                identity.sequence > 0 && age >= 0 && age <= 5
+            let ordered = referenceIdentity.map { $0.observerEpoch != identity.observerEpoch || identity.sequence > $0.sequence } ?? true
+            let requestStable = referenceIdentity?.observerEpoch != identity.observerEpoch ||
+                referenceRequest != reference.nativeRequestID || referenceNativeGeneration == reference.nativeGeneration
+            let sameRequest = referenceIdentity?.observerEpoch == identity.observerEpoch && referenceRequest == reference.nativeRequestID
+            func countContinues(_ old: UInt64?, _ oldTotal: UInt64?, _ new: UInt64?, _ newTotal: UInt64?) -> Bool {
+                guard sameRequest, let old, let new else { return true }
+                return new >= old && (oldTotal == nil || newTotal == nil || oldTotal == newTotal)
+            }
+            let countersStable = countContinues(referenceSnapshot?.completedPages, referenceSnapshot?.totalPages,
+                reference.snapshot.completedPages, reference.snapshot.totalPages) &&
+                countContinues(referenceSnapshot?.downloadedBytes, referenceSnapshot?.totalBytes,
+                reference.snapshot.downloadedBytes, reference.snapshot.totalBytes)
+            if current && ordered && requestStable && countersStable {
+                referenceIdentity = identity; referenceRequest = reference.nativeRequestID; referenceNativeGeneration = reference.nativeGeneration
+                if !sameRequest { referenceSnapshot = nil }
+                for field in [CoreSetHomeObservationField.environment, .information, .stage] where reference.supportedFields.contains(field) {
+                    let text = field == .environment ? reference.snapshot.environment : (field == .information ? reference.snapshot.information : reference.snapshot.stage)
+                    let limit = field == .environment ? 63 : (field == .information ? 191 : 127)
+                    guard let text, !text.isEmpty, text.utf8.count <= limit else { continue }
+                    supported.insert(field); reasons[field] = nil; fieldIdentities[field] = identity
+                    switch field {
+                    case .environment: snapshot.environment = text
+                    case .information: snapshot.information = text
+                    case .stage: snapshot.stage = text
+                    default: break
+                    }
+                }
+                if reference.supportedFields.contains(.pageProgress), let completed = reference.snapshot.completedPages,
+                   let total = reference.snapshot.totalPages, total > 0, completed <= total, reference.snapshot.executing != nil {
+                    snapshot.completedPages = completed; snapshot.totalPages = total; snapshot.executing = reference.snapshot.executing
+                    snapshot.status = reference.snapshot.status; supported.insert(.pageProgress); reasons[.pageProgress] = nil
+                    fieldIdentities[.pageProgress] = identity
+                    if referenceSnapshot == nil { referenceSnapshot = CoreSetHomeSnapshot() }
+                    referenceSnapshot?.completedPages = completed; referenceSnapshot?.totalPages = total
+                }
+                if reference.supportedFields.contains(.firmwareProgress), reference.nativeGeneration != nil,
+                   let downloaded = reference.snapshot.downloadedBytes, let total = reference.snapshot.totalBytes,
+                   total > 0, downloaded <= total, reference.snapshot.environmentStage == "ota-download" {
+                    snapshot.downloadedBytes = downloaded; snapshot.totalBytes = total; snapshot.environmentStage = "ota-download"
+                    supported.insert(.firmwareProgress); reasons[.firmwareProgress] = nil
+                    fieldIdentities[.firmwareProgress] = identity
+                    if referenceSnapshot == nil { referenceSnapshot = CoreSetHomeSnapshot() }
+                    referenceSnapshot?.downloadedBytes = downloaded; referenceSnapshot?.totalBytes = total
+                }
+                for event in reference.actionProbeEvents where event.producerEpoch == identity.observerEpoch &&
+                    event.requestID == reference.nativeRequestID && event.nativeGeneration == reference.nativeGeneration {
+                    _ = recordProducerProbeEvent(event)
+                }
+            } else {
+                for field in reference.supportedFields.intersection(referenceFields) { reasons[field] = "reference-provider epoch/host generation/sequence/freshness/native request/counter continuity mismatch" }
+            }
+        } else if referenceProvider != nil {
+            for field in referenceFields {
+                reasons[field] = "bound reference provider returned no fresh observation"
+            }
+        }
+        return CoreSetHomeObservation(snapshot: snapshot, supportedFields: supported, identity: runtime.identity,
+            unavailableReasons: reasons, fieldIdentities: fieldIdentities)
     }
 }

@@ -1,7 +1,8 @@
 import Foundation
 
-// Independent battle lane. No recoil delta formula or verified mapped write
-// profile is available, so binding never promotes any action field.
+// Reference-only raw/post numerical models exist. Live sample ownership,
+// mapped-write authority and independent readback/restore remain unverified.
+// Binding this lane never promotes an action field to a target effect.
 final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
     typealias State = CoreSetRecoilSettings
     let capability = CoreSetCapability.recoilControl
@@ -9,14 +10,14 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
     private let inputProbe = CoreSetActionReadOnlyProbe(lane: "recoil")
 
     init() {
-        NSLog("Core-SET: target-write lane=recoil stage=capability ready=0 reason=audited-writer-or-receipt-unavailable localStateMachine=reference-c571c-valid-input callerMerge=unverified controllerSlots=static-typed axisUnitRoute=unverified lifecycleReceipt=unverified")
+        NSLog("Core-SET: target-write lane=recoil stage=capability ready=0 reason=audited-writer-or-receipt-unavailable localStateMachine=reference-c571c-valid-input localPostState=reference-c416c-valid-input callerMerge=reference-c2d34 postOwnerToken=object-pointer-not-generation controllerSlots=static-typed liveOwnerMapping=unverified lifecycleReceipt=unverified")
         inputProbe.requestIfDue()
     }
 
     var availability: CoreSetAvailability {
         inputProbe.requestIfDue()
         return .unavailable(reason: writer.pendingCleanup
-            ? "压枪写会话清理待确认" : "压枪增量公式及目标写 profile 未验证")
+            ? "压枪写会话清理待确认" : "压枪目标采样 owner、写权限与回读恢复未验证")
     }
     var supportedFields: Set<CoreSetField> { [] }
 
@@ -24,8 +25,8 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
         NSLog("Core-SET: target-write lane=recoil stage=request-denied committed=0 reason=audited-writer-or-receipt-unavailable request=%@", request.token.requestID.uuidString)
         inputProbe.requestIfDue()
-        NSLog("Core-SET: target-write lane=recoil stage=planner-boundary pointIDs=v17-131..136 postStateFlag=verticalEnabled-and-storedContinue rawFire=separate directMergeSlots=reference-closed upstreamRouteAuthority=unissued localStateMachine=reference-c571c-valid-input callerMerge=unverified producerLease=unissued stopRestore=unverified committed=0")
-        completion(request.token, .notApplied(reason: "压枪公式未闭合，未执行目标写入"))
+        NSLog("Core-SET: target-write lane=recoil stage=planner-boundary pointIDs=v17-131..136 postStateFlag=verticalEnabled-and-storedContinue rawFire=separate directMergeSlots=reference-closed upstreamRouteAuthority=unissued localStateMachine=reference-c571c-valid-input localPostState=reference-c416c-valid-input callerMerge=reference-c2d34 postOwnerToken=object-pointer-not-generation producerLease=unissued gameThreadExclusive=0 stopRestore=unverified committed=0")
+        completion(request.token, .notApplied(reason: "压枪目标采样 owner 与动作回执未闭合，未执行目标写入"))
     }
 
     func stop(_ token: CoreSetRequestToken,

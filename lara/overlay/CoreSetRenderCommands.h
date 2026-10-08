@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import "CoreSetPresentationCadence.h"
 #import "CoreSetHUDLifecycle.h"
 
 NS_ASSUME_NONNULL_BEGIN
@@ -101,6 +102,8 @@ typedef NS_ENUM(NSInteger, CoreSetRenderStyleRole) {
 // CADisplayLink/Metal drawable loop) may implement these observed controls.
 - (NSInteger)observedRenderFPS;
 - (BOOL)setPreferredRenderFPS:(NSInteger)fps;
+// Present-handler host timestamps only; zero/dropped/stale observations fail closed.
+- (CoreSetPresentationCadenceSample)observedPresentationCadence;
 @end
 
 @interface CoreSetCoreAnimationConsumer : NSObject <CoreSetFrameConsumer>

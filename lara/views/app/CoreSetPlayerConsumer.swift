@@ -193,7 +193,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.expectedImageBase = snapshot.imageBase
                 self.expectedCapturedAt = snapshot.captureCompletedMonotonicSeconds
                 self.expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
-                    " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog"
+                    " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog rayGeometry=reference-top-native-scale headAnchor=root-plus90-fallback"
             }
         }
     }
@@ -225,10 +225,15 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 guard point.x.isFinite, point.y.isFinite, distance.isFinite,
                       distance >= 0, point.x >= 0, point.x <= size.width,
                       point.y >= 0, point.y <= size.height else { return nil }
+                let text: String
+                if let timer = mark.countdownSeconds?.doubleValue {
+                    guard timer.isFinite, timer > 0, timer <= 10 else { return nil }
+                    text = String(format: "手雷 %.1fs %.0fm", timer, distance)
+                } else { text = String(format: "手雷 %.0fm", distance) }
                 result.append(CoreSetRenderCommand(kind: .text,
                     rect: CGRect(x: point.x - 55, y: point.y - 10, width: 110, height: 20),
                     endpoint: .zero, color: .systemOrange, lineWidth: 0,
-                    filled: false, text: String(format: "手雷 %.0fm", distance), fontSize: 14))
+                    filled: false, text: text, fontSize: 14))
                 if result.count > 8000 { return nil }
             }
         }
@@ -290,9 +295,12 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                     text: nil, fontSize: 12))
             }
             if display.ray == true {
+                var origin = CGPoint.zero, endpoint = CGPoint.zero
+                guard CoreSetReferencePlayerRay(size, Double(UIScreen.main.nativeScale), head,
+                                                &origin, &endpoint) else { return nil }
                 result.append(CoreSetRenderCommand(kind: .line,
-                    rect: CGRect(origin: CGPoint(x: size.width / 2, y: size.height), size: .zero),
-                    endpoint: feet, color: color, lineWidth: 1, filled: false,
+                    rect: CGRect(origin: origin, size: .zero),
+                    endpoint: endpoint, color: color, lineWidth: 1, filled: false,
                     text: nil, fontSize: 12)
                     .styled(role: mark.bot ? .botRay : .playerRay))
             }

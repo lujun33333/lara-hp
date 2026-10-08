@@ -12,7 +12,7 @@ final class CoreSetFrameRateConsumer: CoreSetFeatureConsumer {
     init(coordinator: CoreSetRuntimeCoordinator) { self.coordinator = coordinator }
     var availability: CoreSetAvailability {
         guard coordinator?.frameRateReady == true else {
-            return .unavailable(reason: "v17-029：当前宿主没有已呈现且活跃的 Metal 固定 FPS 调度器")
+            return .unavailable(reason: "v17-029：当前宿主没有活跃且命令完成已核对的 Metal 固定 FPS 调度器；实际呈现另行测量")
         }
         if let appliedObservation, coordinator?.frameRateObservation != appliedObservation {
             return .unavailable(reason: "v17-029：Metal 调度器代次或读值已变化，旧回执失效")

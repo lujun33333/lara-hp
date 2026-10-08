@@ -141,6 +141,8 @@ typedef struct CoreSetHUDStopResult {
 // Core Animation's event-driven consumer is intentionally unavailable here.
 // A scheduled Metal adapter must return an actual scheduler readback.
 - (NSInteger)observedRenderFPS;
+// Actual drawable present-time window; not the configured scheduler property.
+- (CoreSetPresentationCadenceSample)observedPresentationCadence;
 - (BOOL)applyRenderFPS:(NSInteger)fps observed:(NSInteger *)observed;
 - (BOOL)restoreRenderFPS;
 // The owner must call stop before releasing the host, and retain it while

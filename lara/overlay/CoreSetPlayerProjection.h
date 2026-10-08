@@ -128,4 +128,21 @@ inline bool radarPoint(Point cameraMinusActor, double cameraYawDegrees,
     *out = {x, y};
     return true;
 }
+// Core layoutSubviews uses UIScreen.nativeScale to form drawable pixels;
+// dc75c..dc780 starts at (pixelWidth/2,10) and ends 30*nativeScale above the
+// top anchor. Convert this verified fallback geometry to our canvas points.
+inline bool referencePlayerRay(double width, double height, double nativeScale,
+                                Point head, Point *origin, Point *endpoint) {
+    if (!origin || !endpoint) return false;
+    *origin = {0, 0}; *endpoint = {0, 0};
+    if (!std::isfinite(width) || !std::isfinite(height) || width <= 0 || height <= 0 ||
+        !std::isfinite(nativeScale) || nativeScale <= 0 || nativeScale > 8 ||
+        !std::isfinite(head.x) || !std::isfinite(head.y) ||
+        head.x < 0 || head.x > width || head.y < 0 || head.y > height ||
+        10.0 / nativeScale > height) return false;
+    *origin = {width / 2.0, 10.0 / nativeScale};
+    *endpoint = {head.x, head.y - 30.0};
+    return true;
+}
+
 } // namespace CoreSet

@@ -24,7 +24,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
         NSLog("Core-SET: target-write lane=aim stage=request-denied committed=0 reason=audited-writer-or-receipt-unavailable request=%@", request.token.requestID.uuidString)
         inputProbe.requestIfDue()
-        NSLog("Core-SET: target-write lane=aim stage=planner-boundary pointIDs=v17-106..130 triggerLatch=reference-0.25s sceneTables=reference-typed directMergeSlots=reference-closed upstreamRouteAuthority=unissued selector=reference-raw-point-rank liveBoneOwner=unverified geometryClock=reference-first-reset-50ms producerLease=unissued stopRestore=unverified committed=0")
+        NSLog("Core-SET: target-write lane=aim stage=planner-boundary pointIDs=v17-106..130 triggerLatch=reference-0.25s sceneTables=reference-typed directMergeSlots=reference-closed upstreamRouteAuthority=unissued selector=reference-raw-point-rank liveBoneOwner=unverified geometryClock=reference-first-reset-50ms localGeometry=reference-c4af8-valid-input angularMotion=reference-c642c-not-ballistic producerLease=unissued gameThreadExclusive=0 stopRestore=unverified committed=0")
         completion(request.token, .notApplied(reason: "自瞄目标写能力未验证，未执行目标写入"))
     }
 

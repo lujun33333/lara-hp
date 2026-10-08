@@ -22,6 +22,7 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
     BOOL _visible;
     BOOL _lastDrawSucceeded;
     NSInteger _requestedFPS;
+    CoreSetPresentationCadence::Window _presentationCadence;
 }
 
 - (CoreSetHUDBackend)backend { return CoreSetHUDBackendMetal; }
@@ -60,7 +61,7 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
 }
 
 - (BOOL)renderLastImage:(MTKView *)view {
-    if (!_visible || !_lastImage || !view.window || !view.currentDrawable || !_queue || !_ciContext)
+    if (!NSThread.isMainThread || !_visible || !_lastImage || !view.window || !view.currentDrawable || !_queue || !_ciContext)
         return NO;
     id<CAMetalDrawable> drawable = view.currentDrawable;
     id<MTLCommandBuffer> buffer = [_queue commandBuffer];
@@ -74,10 +75,24 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
     [_ciContext render:image toMTLTexture:drawable.texture commandBuffer:buffer
                  bounds:CGRectMake(0, 0, size.width, size.height) colorSpace:space];
     CGColorSpaceRelease(space);
+    // Apple's presentedTime is zero for an unpresented/dropped drawable.
+    // Completion time and preferredFramesPerSecond are not measurement inputs.
+    const uint64_t presentationEpoch = _presentationCadence.epoch();
+    __weak CoreSetMetalRenderAdapter *weakSelf = self;
+    [drawable addPresentedHandler:^(id<MTLDrawable> presentedDrawable) {
+        const CFTimeInterval presentedTime = presentedDrawable.presentedTime;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            CoreSetMetalRenderAdapter *owner = weakSelf;
+            if (!owner || !owner->_visible || !owner->_metalView.window || owner->_metalView.paused) return;
+            (void)owner->_presentationCadence.accept(presentationEpoch, presentedTime, CACurrentMediaTime());
+        });
+    }];
     [buffer presentDrawable:drawable];
     [buffer commit];
     [buffer waitUntilCompleted];
-    return buffer.status == MTLCommandBufferStatusCompleted && buffer.error == nil;
+    const BOOL completed = buffer.status == MTLCommandBufferStatusCompleted && buffer.error == nil;
+    if (!completed) _presentationCadence.reset();
+    return completed;
 }
 
 - (void)drawInMTKView:(MTKView *)view {
@@ -128,11 +143,12 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
     _lastImage = CGImageRetain(bitmap.CGImage);
     _lastDrawSucceeded = NO;
     [_metalView draw];
-    if (!_lastDrawSucceeded && error) *error = CSMetalError(5, @"Metal drawable was not presented");
+    if (!_lastDrawSucceeded && error) *error = CSMetalError(5, @"Metal command buffer completion was not confirmed");
     return _lastDrawSucceeded;
 }
 
 - (void)setVisible:(BOOL)visible {
+    if (_visible != (visible && _metalView != nil)) _presentationCadence.reset();
     _visible = visible && _metalView != nil;
     _metalView.hidden = !_visible;
     // Only the visible, foreground Metal surface owns a running scheduler.
@@ -143,14 +159,21 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
         _metalView.paused || _metalView.hidden || !_lastDrawSucceeded) return 0;
     return _metalView.preferredFramesPerSecond;
 }
+- (CoreSetPresentationCadenceSample)observedPresentationCadence {
+    if (!NSThread.isMainThread || !_visible || !_metalView.window || _metalView.paused || _metalView.hidden)
+        return CoreSetPresentationCadenceSample{};
+    return _presentationCadence.observe(CACurrentMediaTime());
+}
 - (BOOL)setPreferredRenderFPS:(NSInteger)fps {
     if (!NSThread.isMainThread || !_visible || !_metalView || !_metalView.window ||
         fps < 30 || fps > 144 || fps > _metalView.window.screen.maximumFramesPerSecond) return NO;
+    if (_metalView.preferredFramesPerSecond != fps) _presentationCadence.reset();
     _metalView.preferredFramesPerSecond = fps;
     _requestedFPS = fps;
     return [self observedRenderFPS] == fps;
 }
 - (void)clear {
+    _presentationCadence.reset();
     [_raster clear];
     if (_lastImage) { CGImageRelease(_lastImage); _lastImage = nil; }
     _lastDrawSucceeded = NO;

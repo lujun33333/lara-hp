@@ -278,6 +278,13 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         phase = mayHaveEffects ? .active : .unknown
         // The underlying scheduler baseline still has to be restored on stop.
     }
+    mutating func invalidateHostPresentationObservation(reason: String) {
+        guard capability == .hostWindow else { return }
+        actual = nil; observationInvalidationReason = reason
+        guard pendingStop == nil else { return }
+        generation = UUID(); pendingApply = nil
+        phase = mayHaveEffects ? .active : .unknown // Window cleanup obligation survives revocation.
+    }
 
     mutating func prepareApply() -> CoreSetApplyRequest<Value>? {
         refreshAvailability()
@@ -435,6 +442,11 @@ enum CoreSetCoverMode: String { case global, inGame, off } // No guessed backend
 enum CoreSetTheme: String { case dark, light }
 enum CoreSetFloatingPalette: Int, CaseIterable {
     case first = 6, second = 4, third = 1, fourth = 0, fifth = 2, sixth = 3, gradient = 5
+    var referenceColors: [CoreSetRGBA] {
+        if self == .gradient { return [CoreSetReferenceMenuAppearance.preset(0), CoreSetReferenceMenuAppearance.preset(2)] }
+        let color = CoreSetReferenceMenuAppearance.preset(Self.allCases.firstIndex(of: self)!)
+        return [color, color]
+    }
 }
 
 struct CoreSetHomeSettings: Equatable {
@@ -454,6 +466,17 @@ struct CoreSetFrameRateSettings: Equatable {
 struct CoreSetFrameRateObservation: Equatable {
     let hostGeneration: UInt64
     let preferredFramesPerSecond: Int
+}
+
+struct CoreSetPresentedFrameObservation: Equatable {
+    let hostGeneration: UInt64
+    let renderGeneration: UInt64
+    let adapterEpoch: UInt64
+    let sampleCount: UInt64
+    let framesPerSecond: Double
+    let firstPresentedTime: Double
+    let lastPresentedTime: Double
+    let observedHostTime: Double
 }
 
 // Read-only observations: these are not desired configuration or fabricated status.
@@ -762,8 +785,12 @@ struct CoreSetFeatureState {
     var aimDisplay = CoreSetFeatureChannel(capability: .localAimDisplay, desired: CoreSetAimDisplaySettings())
     var recoil = CoreSetFeatureChannel(capability: .recoilControl, desired: CoreSetRecoilSettings())
     var homeSnapshot: CoreSetHomeSnapshot?
+    var homeObservationIdentity: CoreSetHomeObservationIdentity?
+    var homeObservationUnavailableReasons: [CoreSetHomeObservationField: String] = [:]
+    var homeObservationFieldIdentities: [CoreSetHomeObservationField: CoreSetHomeObservationIdentity] = [:]
     var homeObservationSupportedFields: Set<CoreSetHomeObservationField> = []
     var performanceSnapshot: CoreSetPerformanceSnapshot?
+    var presentedFrameSnapshot: CoreSetPresentedFrameObservation?
     private(set) var infrastructure: [CoreSetCapability: CoreSetAvailability] = [:]
     func infrastructureAvailability(_ capability: CoreSetCapability) -> CoreSetAvailability {
         infrastructure[capability] ?? .unavailable(reason: "No infrastructure observation")

@@ -280,7 +280,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
               let textSize = settings.warningTextSize.value else { return nil }
         let hits = snapshot.marks.filter { mark in
             guard !(settings.ignoreBots == true && mark.bot),
-                  let yaw = mark.warningServerYawDegrees?.doubleValue,
+                  let yaw = mark.warningYawDegrees?.doubleValue,
                   mark.distanceUnitsDividedBy100.isFinite,
                   mark.distanceUnitsDividedBy100 >= 0,
                   mark.distanceUnitsDividedBy100 <= Double(range) else { return false }

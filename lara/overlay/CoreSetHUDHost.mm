@@ -350,6 +350,9 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 }
 - (uint64_t)lastConsumedSequence { return _lastConsumedSequence; }
 - (NSArray<UIColor *> *)observedFloatingColors {
+    if (!self.floatingControlReady || _floatingGradient.superlayer != _floating.layer ||
+        !CGPointEqualToPoint(_floatingGradient.startPoint, CGPointMake(0, .5)) ||
+        !CGPointEqualToPoint(_floatingGradient.endPoint, CGPointMake(1, .5))) return @[];
     NSMutableArray<UIColor *> *colors = [NSMutableArray array];
     for (id value in _floatingGradient.colors) [colors addObject:[UIColor colorWithCGColor:(__bridge CGColorRef)value]];
     return colors;
@@ -366,6 +369,12 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     if (!self.renderFPSControlReady) return 0;
     const NSInteger value = [_metal observedRenderFPS];
     return value >= 30 && value <= 144 ? value : 0;
+}
+- (CoreSetPresentationCadenceSample)observedPresentationCadence {
+    if (!NSThread.isMainThread || !self.localSurfacesReady || _activeBackend != CoreSetHUDBackendMetal ||
+        !_metal || ![_metal respondsToSelector:@selector(observedPresentationCadence)])
+        return CoreSetPresentationCadenceSample{};
+    return [_metal observedPresentationCadence];
 }
 - (BOOL)applyRenderFPS:(NSInteger)fps observed:(NSInteger *)observed {
     if (observed) *observed = 0;

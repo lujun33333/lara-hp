@@ -97,18 +97,37 @@ def validate_owner(text):
     assert not re.search(r"\.wait\(|DispatchQueue\.main\.sync|semaphore", swift(owner, "stopAllForTermination"), re.I)
     consumer = text.split("private final class CoreSetLocalHostConsumer:")[1]
     apply = swift(consumer, "apply")
-    need(apply, "guard availability == .ready", "host.applyLocalMenu(visible:", "host.observedFloatingColors",
-         "observed.count == colors.count", "zip(observed, colors).allSatisfy", "host.panelVisible == request.desired.menuVisible",
+    need(apply, "precondition(Thread.isMainThread)", "guard availability == .ready",
+         "let generation = host.generation", "host.applyLocalMenu(visible:",
+         "guard matches(request.desired, generation: generation) else", "appliedGeneration = generation",
+         "appliedState = request.desired", "appliedToken = request.token",
          ".applied(observed: State(menuVisible: host.panelVisible, floatingPalette: palette))")
-    assert apply.index("host.observedFloatingColors") < apply.index(".applied(observed:")
-    need(swift(consumer, "stop"), "let result = host.stop()", "host.hostedCleanupInFlight",
-         "host.stopHostedAsync", "final.complete.boolValue ? .restored : .failed")
+    # apply delegates the same real full-palette readback to matches. Verify
+    # that helper's data source and full UIColor (RGBA) equality, not merely
+    # the presence of a helper name or requested palette/configuration state.
+    match = swift(consumer, "matches")
+    need(match, "host.generation == generation", "host.floatingControlReady",
+         "host.panelVisible == state.menuVisible", "let palette = state.floatingPalette",
+         "let expected = colors(for: palette), observed = host.observedFloatingColors",
+         "return observed.count == expected.count && zip(observed, expected).allSatisfy { $0.0.isEqual($0.1) }")
+    assert apply.index("host.applyLocalMenu(visible:") < apply.index("guard matches(request.desired")
+    assert apply.index("guard matches(request.desired") < apply.index("appliedToken = request.token") < apply.index(".applied(observed:")
+    stop = swift(consumer, "stop")
+    need(stop, "let result = host.stop()", "host.hostedCleanupInFlight", "host.stopHostedAsync", "finish(result)", "finish(final)")
+    finish = swift(consumer, "finish")
+    need(finish, "result.complete.boolValue && !host.localSurfacesReady && !host.floatingControlReady && host.observedFloatingColors.isEmpty",
+         "appliedGeneration = nil; appliedState = nil; appliedToken = nil",
+         "completion(token, stopped ? .restored : .failed")
     assert "crossApplicationHosted" not in consumer
 
 
 validate_owner(coordinator)
 for old in ["stopWindowsConfirmed", "host.observedFloatingColors",
-            "submittedGeneration != host.renderGeneration", "CoreSetHUDHost(hostingAdapter: nil)"]:
+            "submittedGeneration != host.renderGeneration", "CoreSetHUDHost(hostingAdapter: nil)",
+            "guard matches(request.desired, generation: generation) else",
+            "host.generation == generation", "host.floatingControlReady",
+            "observed.count == expected.count", "zip(observed, expected)", "$0.0.isEqual($0.1)",
+            "appliedToken = request.token", "finish(final)"]:
     try:
         validate_owner(coordinator.replace(old, "REMOVED_GATE"))
     except AssertionError:

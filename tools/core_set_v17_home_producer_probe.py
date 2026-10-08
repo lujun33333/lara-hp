@@ -28,6 +28,8 @@ ROOTS = {
     "pages_reset": 0x10002F9F8, "firmware_shared": 0x100009DA8,
     "firmware_download": 0x10000BFC0, "firmware_cancel": 0x100010FCC,
     "firmware_workflow_block": 0x10000F8F0,
+    "environment_support": 0x100005F14, "information_status": 0x100004E00,
+    "stage_snapshot": 0x10005C6A8, "host_snapshot": 0x100055834,
     "configuration_get": 0x1000122A4, "configuration_set": 0x100012E34,
 }
 PROOF_SITES = [0x100004278, 0x100004284, 0x1000042C0, 0x1000042D0,
@@ -39,7 +41,10 @@ PROOF_SITES = [0x100004278, 0x100004284, 0x1000042C0, 0x1000042D0,
                0x100033BE8, 0x100033C28, 0x1000124C8, 0x100012548,
                0x10000FF00, 0x10000FF08, 0x10000FF18, 0x10000FF24,
                0x10000D45C, 0x10000D468, 0x10000CAB0, 0x10000CBD0,
-               0x10000D6CC, 0x10000D6D4, 0x10000A1A4, 0x10000A1BC]
+               0x10000D6CC, 0x10000D6D4, 0x10000A1A4, 0x10000A1BC,
+               0x100004204, 0x100004230, 0x100004244, 0x100004338,
+               0x1000043BC, 0x100004414, 0x100004428, 0x10000444C,
+               0x100004E28, 0x10005C6D0]
 PAGES = {0x100C20280, 0x100C20281, 0x100C20284, 0x100C20288,
          0x100C20290, 0x100C20298, 0x100C202A0}
 CONFIG = {0x100C5839C, 0x100C5829F, 0x100C583A0}
@@ -167,7 +172,7 @@ def probe(core: CoreImage) -> dict:
     assert class_name == "QXA107"
     return {"schema_version": 1, "ipa_sha256": IPA_SHA, "image_sha256": IMAGE_SHA,
             "evidence_grade": "identity-bound static partial; no native execution/runtime receipt",
-            "point_ids": ["v17-000", "v17-001", "v17-002", "v17-003", "v17-009", "v17-010"],
+            "point_ids": [f"v17-{point:03}" for point in range(11)],
             "original_runtime_verified": False, "functions": functions,
             "objc_methods": methods(core), "global_reference_candidates": global_references(core),
             "firmware_class_reference": {"slot": "0x100bd5488", "class": class_name, "class_address": hex(class_reference)},
@@ -191,6 +196,20 @@ def probe(core: CoreImage) -> dict:
                             "total_update": "d458 obtains generation; d460 compares supplied generation; only equal branch d470 setOtaTotalBytes",
                             "next_capture": "record request/epoch/sequence plus native generation raw bits; path/URL/product/build/board/client as presence or digest only; callback transferred byte count; qm543 stage/inFlight/ready/error and snapshot totalBytes; task return is not completed",
                             "limit": "current DarkSword or fetchkcache local copy is not this producer"}},
+            "status_semantics": {
+                "v17-004": {"snapshot_offset": "0x114", "status_owner": "lock-protected global0x100c20078 int32",
+                            "strings": [core.string(address) for address in (0x10073A4B8, 0x10073A48B, 0x10073A498, 0x10073A4A8, 0x10073A47B)],
+                            "current": "laramgr running/failed/attempted + two ds_is_ready readings; same-meaning local init observation, not original4f00 action receipt"},
+                "v17-005": {"snapshot_offset": "0x2e4", "sources": ["5f14 system-support classification", "QXA107 inFlight/ready/phase"],
+                            "strings": [core.string(address) for address in (0x10073ACB2, 0x10073ACC5, 0x10073ACD5, 0x10073ACE8, 0x10073AD70, 0x10073AD54, 0x10073ACFE)],
+                            "current": "reference provider unbound; nativeReady is NOT this environment"},
+                "v17-006": {"snapshot_offset": "0x464", "source": "4e00 formats int32 global0x100c56da0 and optional message; action538c owns lifecycle",
+                            "current": "reference provider unbound; target read identity is NOT this status"},
+                "v17-007": {"snapshot_offset": "0x584", "source": "55834 host snapshot state0==1 plus byte5/byte7 branches",
+                            "strings": [core.string(address) for address in (0x10073AD80, 0x10073AD99)],
+                            "current": "actual local host geometry/panel/registration/cleanup observation, not remote device pixel proof"},
+                "v17-008": {"snapshot_offset": "0x144", "source": "5c6a8 lock + memcpy0x168 from0x100c2c3b8; string buffer+0x78",
+                            "current": "reference stage provider unbound; running alone is NOT the original stage buffer"}},
             "current_insertion_interface": "CoreSetRuntimeCoordinator.recordHomeProducerProbeEvent; diagnostics only, never FeatureChannel apply or UI progress"}
 
 

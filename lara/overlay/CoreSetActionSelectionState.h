@@ -145,7 +145,7 @@ struct ActionCandidateMotionState {
 // Full c494c valid-finite-input state/expiry path. Positions come from the
 // Core-local publication's target/camera XYZ, not guessed game-object fields.
 // Changed publication estimates relative velocity; unchanged generation never
-// invents a new sample. This does not implement ballistic prediction c642c.
+// invents a new sample. Angular-motion projection c642c is a separate helper.
 inline bool referenceActionCandidateMotion(ActionCandidateMotionState &state, uint64_t key,
                                            uint64_t publicationGeneration, double now,
                                            AimWorldPoint target, AimWorldPoint camera) {
