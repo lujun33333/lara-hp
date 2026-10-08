@@ -659,7 +659,8 @@ fi
 MAIN_DYLIB_LOADS="$(xcrun otool -L "$BIN" | tail -n +2 | awk '{print $1}')"
 for required_private_framework in \
     /System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard \
-    /System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices; do
+    /System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices \
+    /System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices; do
     grep -Fxq -- "$required_private_framework" <<<"$MAIN_DYLIB_LOADS" \
         || die "最终主 Mach-O 缺少 Core 1.7 固定依赖：$required_private_framework"
 done
