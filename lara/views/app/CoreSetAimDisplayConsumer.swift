@@ -15,7 +15,7 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
     private var expectedSnapshot: UUID?
     private var expectedGeneration: UInt64?
     private var expectedReadIdentity: (generation: UInt64, pid: Int32, base: UInt64)?
-    private var expectedCapturedAt: Double?
+    private var expectedCompletedAt: Double?
     private var dynamicCandidateKey: UInt64?
     private var dynamicReadIdentity: (generation: UInt64, pid: Int32, base: UInt64)?
     private var dynamicStartedAt: CFTimeInterval?
@@ -295,14 +295,14 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         let id = frame?.snapshotID ?? UUID()
         expectedSnapshot = id; expectedGeneration = canvas.generation
         expectedReadIdentity = frame.map { ($0.sessionGeneration, $0.processID, $0.imageBase) }
-        expectedCapturedAt = frame?.captureStartedMonotonicSeconds
+        expectedCompletedAt = frame?.captureCompletedMonotonicSeconds
         let input = CoreSetLaneSubmission(lane: .aimDisplay, hostGeneration: canvas.generation,
             configRevision: revision, snapshotID: id, requestToken: token,
             canvasSize: canvas.size, commands: commands(state: state, frame: frame,
                                                        canvas: canvas.size, ring: ring))
         if coordinator?.submitLane(input) != true {
             expectedSnapshot = nil; expectedGeneration = nil
-            expectedReadIdentity = nil; expectedCapturedAt = nil
+            expectedReadIdentity = nil; expectedCompletedAt = nil
             if let pending = pendingApply, pending.0 == token {
                 pendingApply = nil
                 pending.2(token, .failed(reason: "本地预览帧未进入合成器"))
@@ -354,7 +354,7 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         }
         if let pending = pendingApply, pending.0 == receipt.requestToken {
             let identityValid = expectedReadIdentity.map { preview.matchesIdentity($0) } ?? true
-            let freshnessValid = expectedCapturedAt.map {
+            let freshnessValid = expectedCompletedAt.map {
                 CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
             } ?? true
             guard receipt.acceptedByLocalRenderer, availability == .ready,
@@ -369,7 +369,7 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
                 return
             }
             pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
-            expectedReadIdentity = nil; expectedCapturedAt = nil
+            expectedReadIdentity = nil; expectedCompletedAt = nil
             pending.2(pending.0, .applied(observed: pending.1))
             if needsTarget(pending.1) {
                 refresh = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in self?.capture() }
@@ -385,7 +385,7 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
             }
             return
         }
-        let periodicStale = expectedCapturedAt.map {
+        let periodicStale = expectedCompletedAt.map {
             CACurrentMediaTime() - $0 < 0 || CACurrentMediaTime() - $0 > 0.5
         } ?? false
         if let identity = expectedReadIdentity,
@@ -405,7 +405,7 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         pendingApply = nil
         pendingFailure = nil
         pendingClearInvalidation = nil
-        expectedReadIdentity = nil; expectedCapturedAt = nil
+        expectedReadIdentity = nil; expectedCompletedAt = nil
         guard revision < UInt64.max else {
             completion(token, .failed(reason: "本地预览圈序号耗尽")); return
         }
@@ -439,7 +439,7 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         pendingApply = nil; pendingFailure = nil
         pendingClearInvalidation = nil
         expectedSnapshot = nil; expectedGeneration = nil; expectedReadIdentity = nil
-        expectedCapturedAt = nil
+        expectedCompletedAt = nil
         if revision < UInt64.max { revision += 1 }
     }
 }

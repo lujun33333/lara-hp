@@ -54,7 +54,7 @@ final class CoreSetActionReadOnlyProbe {
                        snapshot.sessionGeneration == self.session.generation,
                        snapshot.processID == self.session.processID,
                        snapshot.imageBase == self.session.imageBase {
-                        let age = CACurrentMediaTime() - snapshot.captureStartedMonotonicSeconds
+                        let age = CACurrentMediaTime() - snapshot.captureCompletedMonotonicSeconds
                         if age >= 0, age <= 0.5 {
                             NSLog("Core-SET: action-read-probe lane=%@ cycle=%llu stage=inputs-observed complete=1 writeReady=0 originalEffectConfirmed=0 captureGeneration=%llu snapshot=%@ ads=%d fire=%d canvas=synthetic-unit selector=not-run slotRoute=unresolved",
                                   self.lane, captureCycle, snapshot.sessionGeneration,

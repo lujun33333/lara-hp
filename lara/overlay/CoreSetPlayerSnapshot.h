@@ -84,8 +84,9 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) BOOL localFiring;
 @property(nonatomic, readonly) float controlPitchDegrees;
 @property(nonatomic, readonly) float controlYawDegrees;
-// Oldest sample time for freshness gates; completion time alone can hide a
-// slow mapped-read capture.
+// Start time is diagnostic duration evidence. Consumers use the completion
+// time for delivery freshness because the collector revalidates identity,
+// roots, membership and observed fields immediately before publishing.
 @property(nonatomic, readonly) double captureStartedMonotonicSeconds;
 @property(nonatomic, readonly) double captureCompletedMonotonicSeconds;
 // Counts of already-read fields, never raw names/addresses or a parity claim.

@@ -30,7 +30,9 @@ static constexpr uint64_t CSEliteProjectileClassSlot = 0x11b3c458;
 static constexpr uint64_t CSGameStateClassSlot = 0x120a9590;
 static constexpr uint64_t CSServerClockImplementationRVA = 0xa529b68;
 static constexpr int32_t CSMaxActors = 50000;
-static constexpr int32_t CSActorPointerBatch = 8192; // Transport limit: 0x10000 bytes.
+// Core v1.7 helper 0x1000d632c copies at most 0x200 pointers per batch,
+// then falls back to individual 8-byte reads when the bulk copy fails.
+static constexpr int32_t CSActorPointerBatch = 0x200;
 static constexpr size_t CSMaxBoneActors = 256;
 static constexpr NSUInteger CSMaxRenderedMarks = 8192;
 static thread_local const char *CSLastCaptureDiagnostic = "not-attempted";
@@ -676,9 +678,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
            includeWarningYaw:(BOOL)includeWarningYaw maximumDrawDistance:(double)maximumDrawDistance {
     CSLastCaptureDiagnostic = "request-validation";
     const double captureStartedAt = CACurrentMediaTime();
-    const auto captureBudgetExceeded = [captureStartedAt]() {
-        return CACurrentMediaTime() - captureStartedAt > 0.45;
-    };
     if (!session.ready || session.capabilities != 1 || !std::isfinite(size.width) ||
         !std::isfinite(size.height) || size.width <= 0 || size.height <= 0 ||
         !std::isfinite(boneDistanceLimit) || boneDistanceLimit < 0 ||
@@ -817,19 +816,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     std::unordered_map<uint64_t, bool> characterClassCache;
     std::unordered_map<uint64_t, bool> grenadeClassCache;
     NSUInteger nonzeroActors = 0;
-    auto logActorBudget = [&](int32_t scanned) {
-        NSLog(@"Core-SET: player-capture stage=budget reason=actor-scan source=%s actors=%d scanned=%d nonzero=%lu characterClasses=%lu grenadeClasses=%lu elapsed=%.3f",
-              actorArraySource == CSActorArraySource::primary ? "core17-primary" : "core17-level-a0-a8-fallback",
-              array.count, scanned, (unsigned long)nonzeroActors,
-              (unsigned long)characterClassCache.size(),
-              (unsigned long)grenadeClassCache.size(), CACurrentMediaTime() - captureStartedAt);
-    };
     for (int32_t start = 0; start < array.count; start += CSActorPointerBatch) {
-        if (captureBudgetExceeded()) {
-            logActorBudget(start);
-            CSLastCaptureDiagnostic = "capture-budget-exceeded-actor-scan";
-            return nil;
-        }
         int32_t batch = std::min<int32_t>(CSActorPointerBatch, array.count - start);
         if (!CSRead(session, generation, array.data + (uint64_t)start * 8,
                     pointers.data(), (size_t)batch * 8)) {
@@ -843,11 +830,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             }
         }
         for (int32_t index = 0; index < batch; ++index) {
-            if ((index & 15) == 0 && captureBudgetExceeded()) {
-                logActorBudget(start + index);
-                CSLastCaptureDiagnostic = "capture-budget-exceeded-actor-scan";
-                return nil;
-            }
             uint64_t actor = pointers[(size_t)index];
             if (!actor || actor == local) continue;
             ++nonzeroActors;
@@ -1147,10 +1129,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     std::unordered_set<uint64_t> currentActors;
     currentActors.reserve((size_t)arrayAfter.count);
     for (int32_t start = 0; start < arrayAfter.count; start += CSActorPointerBatch) {
-        if (captureBudgetExceeded()) {
-            CSLastCaptureDiagnostic = "capture-budget-exceeded-membership";
-            return nil;
-        }
         int32_t batch = std::min<int32_t>(CSActorPointerBatch, arrayAfter.count - start);
         if (!CSRead(session, generation, arrayAfter.data + (uint64_t)start * 8,
                     pointers.data(), (size_t)batch * 8)) {
@@ -1166,10 +1144,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     CSLastCaptureDiagnostic = "stability-player-actors";
     NSMutableIndexSet *invalidActorMarks = [NSMutableIndexSet indexSet];
     for (const ObservedActor &actor : observedActors) {
-        if (captureBudgetExceeded()) {
-            CSLastCaptureDiagnostic = "capture-budget-exceeded-player-actors";
-            return nil;
-        }
         if (currentActors.find(actor.address) == currentActors.end()) {
             [invalidActorMarks addIndex:actor.markIndex];
             continue;
@@ -1258,10 +1232,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             --observedZeroHealthLastBreath;
     };
     for (const ObservedCount &count : observedCounts) {
-        if (captureBudgetExceeded()) {
-            CSLastCaptureDiagnostic = "capture-budget-exceeded-count-actors";
-            return nil;
-        }
         if (currentActors.find(count.address) == currentActors.end()) {
             discardObservedCount(count);
             continue;
@@ -1297,10 +1267,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     }
     CSLastCaptureDiagnostic = "stability-grenades";
     for (ObservedGrenade &grenade : observedGrenades) {
-        if (captureBudgetExceeded()) {
-            CSLastCaptureDiagnostic = "capture-budget-exceeded-grenades";
-            return nil;
-        }
         if (currentActors.find(grenade.address) == currentActors.end()) {
             [invalidGrenadeMarks addIndex:grenade.markIndex];
             continue;
@@ -1391,10 +1357,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     }
     CSLastCaptureDiagnostic = "stability-bones";
     for (const ObservedBone &bone : observedBones) {
-        if (captureBudgetExceeded()) {
-            CSLastCaptureDiagnostic = "capture-budget-exceeded-bones";
-            return nil;
-        }
         if ([invalidActorMarks containsIndex:bone.markIndex] ||
             currentActors.find(bone.actor) == currentActors.end()) continue;
         CSBoneState after;
@@ -1421,10 +1383,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     if (invalidGrenadeMarks.count) [grenadeMarks removeObjectsAtIndexes:invalidGrenadeMarks];
     CSLastCaptureDiagnostic = "identity-final";
     if (!session.ready || session.generation != generation) return nil;
-    if (captureBudgetExceeded()) {
-        CSLastCaptureDiagnostic = "capture-budget-exceeded-final";
-        return nil;
-    }
     CoreSetPlayerSnapshot *snapshot = [CoreSetPlayerSnapshot new];
     snapshot.sessionGeneration = generation; snapshot.processID = pid;
     snapshot.imageBase = base; snapshot.snapshotID = [NSUUID UUID];
@@ -1457,7 +1415,8 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
          "boneRequested=%lu bonePresent=%lu bonePlain=%lu boneDecoded=%lu boneMissing=%lu boneUnregistered=%lu boneArrayInvalid=%lu boneBounds=%lu boneDecoderUnknown=%lu "
          "boneHeadKnownProfile=%lu boneHeadProjected=%lu boneHeadUnknownProfile=%lu headScope=requested-bones-only headParity=partial "
          "networkFreshness=unproven captureStability=stable-identity-plus-bounded-dynamic-reread grenadeAnimationScope=local-position-history grenadeRadiusGap=no-verified-elite-blast-field "
-         "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationLayout=local-subset informationGap=native-font-icons-and-anchors",
+         "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationLayout=local-subset informationGap=native-font-icons-and-anchors "
+         "captureDuration=%.3f freshnessBasis=completion",
         actorArraySource == CSActorArraySource::primary ? "core17-primary" : "core17-level-a0-a8-fallback",
         array.count, (unsigned long)marks.count, (unsigned long)observedPlayerCount,
         (unsigned long)observedBotCount, (unsigned long)observedZeroHealthLastBreath,
@@ -1474,7 +1433,8 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         (unsigned long)boneUnavailable[4], (unsigned long)boneUnavailable[5],
         (unsigned long)boneHeadKnownProfile, (unsigned long)boneHeadProjected, (unsigned long)boneHeadUnknownProfile,
         (unsigned long)nameRequested, (unsigned long)namePresent,
-        (unsigned long)weaponRequested, (unsigned long)weaponKnown];
+        (unsigned long)weaponRequested, (unsigned long)weaponKnown,
+        snapshot.captureCompletedMonotonicSeconds - captureStartedAt];
     CSLastCaptureDiagnostic = "ready";
     return snapshot;
 }

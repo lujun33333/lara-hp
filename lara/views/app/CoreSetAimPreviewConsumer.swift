@@ -83,8 +83,8 @@ final class CoreSetAimPreviewConsumer {
                snapshot.sessionGeneration == generation,
                snapshot.processID == pid, snapshot.imageBase == base,
                let id = UUID(uuidString: snapshot.snapshotID.uuidString),
-               CACurrentMediaTime() - snapshot.captureStartedMonotonicSeconds >= 0,
-               CACurrentMediaTime() - snapshot.captureStartedMonotonicSeconds <= 0.5 {
+               CACurrentMediaTime() - snapshot.captureCompletedMonotonicSeconds >= 0,
+               CACurrentMediaTime() - snapshot.captureCompletedMonotonicSeconds <= 0.5 {
                 let center = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
                 var best: (score: CGFloat, target: CoreSetAimPreviewTarget)?
                 for mark in snapshot.marks {
@@ -127,8 +127,8 @@ final class CoreSetAimPreviewConsumer {
                     completion(nil); return
                 }
                 guard let frame,
-                      CACurrentMediaTime() - frame.captureStartedMonotonicSeconds >= 0,
-                      CACurrentMediaTime() - frame.captureStartedMonotonicSeconds <= 0.5 else {
+                      CACurrentMediaTime() - frame.captureCompletedMonotonicSeconds >= 0,
+                      CACurrentMediaTime() - frame.captureCompletedMonotonicSeconds <= 0.5 else {
                     self.lastCaptureDiagnostic = captureFailure
                     completion(nil); return
                 }

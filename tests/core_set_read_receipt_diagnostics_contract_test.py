@@ -111,6 +111,9 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
                 self.assertIn("transport-errors=0", capture)
                 self.assertIn("snapshot-stale stage=capture", capture)
                 self.assertIn("captureAge >= 0, captureAge <= 0.5", capture)
+                if name in ("Player", "Radar"):
+                    self.assertIn("captureCompletedMonotonicSeconds", capture)
+                    self.assertNotIn("captureStartedMonotonicSeconds", capture)
         preview = read("lara/views/app/CoreSetAimPreviewConsumer.swift")
         preview_capture = body(preview, "func capture(")
         self.assertIn("self.session.readFailureSequence != failureSequence", preview_capture)
@@ -119,7 +122,7 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertLess(material.index("CoreSetMaterialCollector.capture("),
                         material.index("let capturedAt = snapshot?.captureCompletedMonotonicSeconds"))
 
-    def test_player_capture_diagnostic_covers_roots_stability_budget_and_success(self) -> None:
+    def test_player_capture_diagnostic_covers_roots_stability_and_success(self) -> None:
         header = read("lara/overlay/CoreSetPlayerSnapshot.h")
         collector = read("lara/overlay/CoreSetPlayerSnapshot.mm")
         self.assertIn("+ (NSString *)lastCaptureDiagnostic", header)
@@ -133,7 +136,7 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
             "camera-candidate", "local-position", "actor-scan",
             "stability-roots", "stability-actor-membership", "stability-player-actors",
             "stability-count-actors", "stability-grenades", "stability-bones",
-            "stability-battle-inputs", "identity-final", "capture-budget-exceeded-final", "ready",
+            "stability-battle-inputs", "identity-final", "ready",
         )
         positions = []
         for stage in stages:
@@ -143,11 +146,10 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertIn("static thread_local const char *CSLastCaptureDiagnostic", collector)
         self.assertIn("snapshot.captureStartedMonotonicSeconds = captureStartedAt", collector)
-        inner_loop = collector.index("for (int32_t index = 0; index < batch; ++index)")
-        inner_budget = collector.index("(index & 15) == 0 && captureBudgetExceeded()", inner_loop)
-        inner_actor = collector.index("uint64_t actor = pointers[(size_t)index]", inner_loop)
-        self.assertLess(inner_loop, inner_budget)
-        self.assertLess(inner_budget, inner_actor)
+        self.assertIn("snapshot.captureCompletedMonotonicSeconds = CACurrentMediaTime()", collector)
+        self.assertIn("freshnessBasis=completion", collector)
+        self.assertNotIn("captureBudgetExceeded", collector)
+        self.assertNotIn("capture-budget-exceeded", collector)
         self.assertLess(collector.index('CSLastCaptureDiagnostic = "request-validation"'),
                         collector.index('CSLastCaptureDiagnostic = "ready"'))
 
@@ -156,7 +158,8 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         collector = read("lara/overlay/CoreSetPlayerSnapshot.mm")
         apply = body(player, "func apply(")
         self.assertLess(apply.index("armCaptureLoop()"), apply.index("capture()"))
-        self.assertIn("player-loop contract=core17-continuous-retry-v1", player)
+        self.assertIn("player-loop contract=core17-continuous-retry-v2", player)
+        self.assertIn("basis=completed", player)
         loop = body(player, "private func armCaptureLoop()")
         self.assertIn("withTimeInterval: 0.15, repeats: true", loop)
         retry = body(player, "private func retryCapture(")
@@ -199,7 +202,8 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
                 self.assertIn("recordInvalidation && pendingApply == nil && pendingStop == nil", clear)
                 self.assertIn("refresh?.invalidate(); refresh = nil", clear)
                 receipt = body(source, "func consumed(")
-                self.assertIn("expectedCapturedAt.map", receipt)
+                expected = "expectedCapturedAt.map" if name == "Material" else "expectedCompletedAt.map"
+                self.assertIn(expected, receipt)
                 self.assertIn("CACurrentMediaTime() - $0 <= 0.5", receipt)
                 if name == "Player":
                     self.assertIn("recordInvalidation: false", body(source, "private func retryCapture("))

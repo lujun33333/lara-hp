@@ -23,7 +23,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private var expectedSessionGeneration: UInt64?
     private var expectedProcessID: Int32?
     private var expectedImageBase: UInt64?
-    private var expectedCapturedAt: Double?
+    private var expectedCompletedAt: Double?
     private var lastCaptureFailure: String?
     private var captureFailureStartedAt: Double?
     private var captureLaneClearedForFailure = false
@@ -41,7 +41,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
         session.diagnosticLabel = "player"
-        NSLog("Core-SET: player-loop contract=core17-continuous-retry-v1 interval=0.15 freshness=0.5")
+        NSLog("Core-SET: player-loop contract=core17-continuous-retry-v2 interval=0.15 freshness=0.5 basis=completed")
         probe = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
@@ -180,7 +180,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             awaitingReceipt = false; awaitingReceiptSince = nil
             expectedSnapshot = nil; expectedGeneration = nil
             expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
-            expectedCapturedAt = nil
+            expectedCompletedAt = nil
             retryCapture("player-renderer-receipt-timeout", token: token)
             return
         }
@@ -225,7 +225,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                     if self.pendingApply != nil { self.capture() }
                     return
                 }
-                let captureAge = snapshot.map { CACurrentMediaTime() - $0.captureStartedMonotonicSeconds } ?? .nan
+                let captureAge = snapshot.map { CACurrentMediaTime() - $0.captureCompletedMonotonicSeconds } ?? .nan
                 let failureReason = snapshot != nil && !(0...0.5).contains(captureAge)
                     ? String(format: "snapshot-stale stage=capture ageSeconds=%.3f limit=0.5", captureAge)
                     : captureFailure
@@ -271,7 +271,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.expectedSessionGeneration = snapshot.sessionGeneration
                 self.expectedProcessID = snapshot.processID
                 self.expectedImageBase = snapshot.imageBase
-                self.expectedCapturedAt = snapshot.captureStartedMonotonicSeconds
+                self.expectedCompletedAt = snapshot.captureCompletedMonotonicSeconds
                 self.expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
                     " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog rayGeometry=reference-top-native-scale headAnchor=known-requested-bone-or-root-plus90"
                 self.awaitingReceipt = true
@@ -548,12 +548,12 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             awaitingReceiptSince = nil
             let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
                 session.processID == expectedProcessID && session.imageBase == expectedImageBase
-            let fresh = expectedCapturedAt.map {
+            let fresh = expectedCompletedAt.map {
                 CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
             } ?? false
             expectedSnapshot = nil; expectedGeneration = nil
             expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
-            expectedCapturedAt = nil
+            expectedCompletedAt = nil
             guard identityMatches && fresh else {
                 let reason = identityMatches ? "snapshot-stale stage=receipt" : "player-receipt-identity-lost"
                 NSLog("Core-SET: target-read lane=player stage=receipt confirmed=0 reason=%@", reason)
@@ -578,13 +578,13 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             awaitingReceiptSince = nil
             let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
                 session.processID == expectedProcessID && session.imageBase == expectedImageBase
-            let fresh = expectedCapturedAt.map {
+            let fresh = expectedCompletedAt.map {
                 CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
             } ?? false
             if !identityMatches || !fresh {
                 expectedSnapshot = nil; expectedGeneration = nil
                 expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
-                expectedCapturedAt = nil
+                expectedCompletedAt = nil
                 retryCapture(!identityMatches ? "player-receipt-identity-lost" :
                     "snapshot-stale stage=receipt", token: receipt.requestToken)
             } else if !receipt.acceptedByLocalRenderer {

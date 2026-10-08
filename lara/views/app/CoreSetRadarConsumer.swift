@@ -23,7 +23,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
     private var expectedSessionGeneration: UInt64?
     private var expectedProcessID: Int32?
     private var expectedImageBase: UInt64?
-    private var expectedCapturedAt: Double?
+    private var expectedCompletedAt: Double?
     private var lastCaptureFailure: String?
     private var expectedReadSemanticDiagnostic: String?
     private var lastSemanticLogAt: Double = 0
@@ -132,7 +132,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                     if self.pendingApply != nil { self.capture() }
                     return
                 }
-                let captureAge = snapshot.map { CACurrentMediaTime() - $0.captureStartedMonotonicSeconds } ?? .nan
+                let captureAge = snapshot.map { CACurrentMediaTime() - $0.captureCompletedMonotonicSeconds } ?? .nan
                 let failureReason = snapshot != nil && !(0...0.5).contains(captureAge)
                     ? String(format: "snapshot-stale stage=capture ageSeconds=%.3f limit=0.5", captureAge)
                     : captureFailure
@@ -169,7 +169,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                     revision: expectedRevision, canvas: canvas,
                     snapshotID: id, sessionGeneration: snapshot.sessionGeneration,
                     processID: snapshot.processID, imageBase: snapshot.imageBase,
-                    capturedAt: snapshot.captureStartedMonotonicSeconds)
+                    capturedAt: snapshot.captureCompletedMonotonicSeconds)
             }
         }
     }
@@ -197,7 +197,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
         expectedSessionGeneration = sessionGeneration
         expectedProcessID = processID
         expectedImageBase = imageBase
-        expectedCapturedAt = capturedAt
+        expectedCompletedAt = capturedAt
     }
 
     private func publish(_ commands: [CoreSetRenderCommand], lane: CoreSetRenderLane,
@@ -339,14 +339,14 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
            receipt.hostGeneration == expectedGeneration {
             let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
                 session.processID == expectedProcessID && session.imageBase == expectedImageBase
-            let fresh = expectedCapturedAt.map {
+            let fresh = expectedCompletedAt.map {
                 CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
             } ?? false
             guard identityMatches && fresh else {
                 pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
                 confirmedLanes.removeAll()
                 expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
-                expectedCapturedAt = nil
+                expectedCompletedAt = nil
                 let reason = identityMatches ? "snapshot-stale stage=receipt" : "radar-receipt-identity-lost"
                 NSLog("Core-SET: target-read lane=radar stage=receipt confirmed=0 reason=%@", reason)
                 clearStaleLanes(token: pending.0, reason: reason, recordInvalidation: false)
@@ -357,7 +357,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                 pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
                 confirmedLanes.removeAll()
                 expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
-                expectedCapturedAt = nil
+                expectedCompletedAt = nil
                 clearStaleLanes(token: pending.0, recordInvalidation: false)
                 pending.1(pending.0, .failed(reason: "雷达或预警帧未被本地渲染器消费"))
                 return
@@ -368,7 +368,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                 pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
                 confirmedLanes.removeAll()
                 expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
-                expectedCapturedAt = nil
+                expectedCompletedAt = nil
                 pending.1(pending.0, .applied(observed: settings))
                 refresh?.invalidate(); refresh = nil
                 if settings.enabled == true || settings.warningEnabled == true {
@@ -382,7 +382,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
            receipt.hostGeneration == expectedGeneration {
             let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
                 session.processID == expectedProcessID && session.imageBase == expectedImageBase
-            let fresh = expectedCapturedAt.map {
+            let fresh = expectedCompletedAt.map {
                 CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
             } ?? false
             if !receipt.acceptedByLocalRenderer || !identityMatches || !fresh {
