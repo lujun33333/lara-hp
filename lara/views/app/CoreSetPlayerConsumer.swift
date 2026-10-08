@@ -7,6 +7,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     let capability = CoreSetCapability.playerRendering
     private weak var coordinator: CoreSetRuntimeCoordinator?
     private let session = CoreSetReadSession()
+    private let grenadeMotion = CoreSetGrenadeMotionTracker()
     private let worker = DispatchQueue(label: "coreset.player.read", qos: .userInitiated)
     private var probe: Timer?
     private var refresh: Timer?
@@ -99,6 +100,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         refresh?.invalidate(); refresh = nil
         revision += 1
         settings = request.desired
+        if settings.grenadeWarning != true { _ = grenadeMotion.clear() }
         activeToken = request.token
         pendingApply = (request.token, completion)
         capture()
@@ -166,6 +168,10 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                     return
                 }
                 self.lastCaptureFailure = nil
+                if includeGrenadeWarning {
+                    self.grenadeMotion.decorate(snapshot, canvasSize: canvas.size,
+                                                 nativeScale: Double(UIScreen.main.nativeScale))
+                } else { _ = self.grenadeMotion.clear() }
                 let id = UUID(uuidString: snapshot.snapshotID.uuidString) ?? UUID()
                 guard let commands = self.render(snapshot, on: canvas.size) else {
                     self.clearStaleLane(token: token)
@@ -193,13 +199,14 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.expectedImageBase = snapshot.imageBase
                 self.expectedCapturedAt = snapshot.captureCompletedMonotonicSeconds
                 self.expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
-                    " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog rayGeometry=reference-top-native-scale headAnchor=root-plus90-fallback"
+                    " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog rayGeometry=reference-top-native-scale headAnchor=known-requested-bone-or-root-plus90"
             }
         }
     }
 
     private func clearStaleLane(token: CoreSetRequestToken, reason: String = "player-frame-invalidated",
                                 recordInvalidation: Bool = true) {
+        _ = grenadeMotion.clear()
         guard let canvas = coordinator?.playerCanvas, revision < UInt64.max - 1 else { return }
         refresh?.invalidate(); refresh = nil
         revision += 1
@@ -234,6 +241,36 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                     rect: CGRect(x: point.x - 55, y: point.y - 10, width: 110, height: 20),
                     endpoint: .zero, color: .systemOrange, lineWidth: 0,
                     filled: false, text: text, fontSize: 14))
+                for segment in mark.predictionSegments {
+                    let start = segment.start, end = segment.end
+                    guard [start.x, start.y, end.x, end.y].allSatisfy({ $0.isFinite }),
+                          segment.lineWidth.isFinite, segment.shadowLineWidth.isFinite,
+                          segment.lineWidth > 0, segment.shadowLineWidth > 0 else { return nil }
+                    result.append(CoreSetRenderCommand(kind: .line,
+                        rect: CGRect(origin: start, size: .zero), endpoint: end,
+                        color: UIColor(red: 12 / 255, green: 12 / 255, blue: 16 / 255, alpha: 135 / 255),
+                        lineWidth: CGFloat(segment.shadowLineWidth), filled: false, text: nil, fontSize: 12))
+                    result.append(CoreSetRenderCommand(kind: .line,
+                        rect: CGRect(origin: start, size: .zero), endpoint: end,
+                        color: segment.color, lineWidth: CGFloat(segment.lineWidth), filled: false,
+                        text: nil, fontSize: 12))
+                }
+                if mark.predictionEndpointPresent {
+                    let end = mark.predictionEndpoint, scale = Double(UIScreen.main.nativeScale)
+                    guard end.x.isFinite, end.y.isFinite, scale.isFinite, scale > 0 else { return nil }
+                    let filledRadius = CGFloat(max(scale * 3.5, 3) / scale)
+                    let ringRadius = CGFloat(max(scale * 6, 5) / scale)
+                    result.append(CoreSetRenderCommand(kind: .ellipse,
+                        rect: CGRect(x: end.x - filledRadius, y: end.y - filledRadius,
+                                     width: filledRadius * 2, height: filledRadius * 2), endpoint: .zero,
+                        color: UIColor(red: 1, green: 205 / 255, blue: 92 / 255, alpha: 230 / 255),
+                        lineWidth: 0, filled: true, text: nil, fontSize: 12))
+                    result.append(CoreSetRenderCommand(kind: .ellipse,
+                        rect: CGRect(x: end.x - ringRadius, y: end.y - ringRadius,
+                                     width: ringRadius * 2, height: ringRadius * 2), endpoint: .zero,
+                        color: UIColor(red: 1, green: 120 / 255, blue: 72 / 255, alpha: 180 / 255),
+                        lineWidth: CGFloat(max(scale * 1.3, 1) / scale), filled: false, text: nil, fontSize: 12))
+                }
                 if result.count > 8000 { return nil }
             }
         }
@@ -516,8 +553,9 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         refresh?.invalidate(); refresh = nil
         activeToken = nil; pendingApply = nil
         expectedReadSemanticDiagnostic = nil
+        let motionClean = grenadeMotion.clear()
         CoreSetWeaponImageCatalog.stop()
         let cleanup = worker.sync { session.disconnect() } // Drain queued connects/captures first.
-        return cleanup.taskPortReleased && cleanup.generationAdvanced
+        return motionClean && cleanup.taskPortReleased && cleanup.generationAdvanced
     }
 }

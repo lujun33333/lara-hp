@@ -6106,15 +6106,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-106"
+      "local_downstream_requirement": "v17-106",
+      "component_evidence_key": "action-cycle/v17-106",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-107",
@@ -6174,15 +6187,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-107"
+      "local_downstream_requirement": "v17-107",
+      "component_evidence_key": "action-cycle/v17-107",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "world_point",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-108",
@@ -6232,15 +6259,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-108"
+      "local_downstream_requirement": "v17-108",
+      "component_evidence_key": "action-cycle/v17-108",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-109",
@@ -6280,15 +6321,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-109"
+      "local_downstream_requirement": "v17-109",
+      "component_evidence_key": "action-cycle/v17-109",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-110",
@@ -6338,15 +6392,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-110"
+      "local_downstream_requirement": "v17-110",
+      "component_evidence_key": "action-cycle/v17-110",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-111",
@@ -6396,15 +6464,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-111"
+      "local_downstream_requirement": "v17-111",
+      "component_evidence_key": "action-cycle/v17-111",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-112",
@@ -6454,15 +6536,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-112"
+      "local_downstream_requirement": "v17-112",
+      "component_evidence_key": "action-cycle/v17-112",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-113",
@@ -6501,15 +6597,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-113"
+      "local_downstream_requirement": "v17-113",
+      "component_evidence_key": "action-cycle/v17-113",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-114",
@@ -6559,15 +6669,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-114"
+      "local_downstream_requirement": "v17-114",
+      "component_evidence_key": "action-cycle/v17-114",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "raw_actor_gate",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-115",
@@ -6617,15 +6741,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-115"
+      "local_downstream_requirement": "v17-115",
+      "component_evidence_key": "action-cycle/v17-115",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "raw_actor_gate",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-116",
@@ -6685,15 +6823,30 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-116"
+      "local_downstream_requirement": "v17-116",
+      "component_evidence_key": "action-cycle/v17-116",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "candidate_motion",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-117",
@@ -6743,15 +6896,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-117"
+      "local_downstream_requirement": "v17-117",
+      "component_evidence_key": "action-cycle/v17-117",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "raw_actor_gate",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-118",
@@ -6811,15 +6978,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-118"
+      "local_downstream_requirement": "v17-118",
+      "component_evidence_key": "action-cycle/v17-118",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-119",
@@ -6869,15 +7049,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-119"
+      "local_downstream_requirement": "v17-119",
+      "component_evidence_key": "action-cycle/v17-119",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-120",
@@ -6927,15 +7120,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-120"
+      "local_downstream_requirement": "v17-120",
+      "component_evidence_key": "action-cycle/v17-120",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "takeover",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-121",
@@ -7019,15 +7226,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-121"
+      "local_downstream_requirement": "v17-121",
+      "component_evidence_key": "action-cycle/v17-121",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-122",
@@ -7111,15 +7331,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-122"
+      "local_downstream_requirement": "v17-122",
+      "component_evidence_key": "action-cycle/v17-122",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-123",
@@ -7203,15 +7436,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-123"
+      "local_downstream_requirement": "v17-123",
+      "component_evidence_key": "action-cycle/v17-123",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-124",
@@ -7295,15 +7541,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-124"
+      "local_downstream_requirement": "v17-124",
+      "component_evidence_key": "action-cycle/v17-124",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-125",
@@ -7353,15 +7612,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-125"
+      "local_downstream_requirement": "v17-125",
+      "component_evidence_key": "action-cycle/v17-125",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-126",
@@ -7411,15 +7683,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-126"
+      "local_downstream_requirement": "v17-126",
+      "component_evidence_key": "action-cycle/v17-126",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "candidate_motion",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-127",
@@ -7479,15 +7765,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-127"
+      "local_downstream_requirement": "v17-127",
+      "component_evidence_key": "action-cycle/v17-127",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "candidate_motion",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-128",
@@ -7547,15 +7847,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-128"
+      "local_downstream_requirement": "v17-128",
+      "component_evidence_key": "action-cycle/v17-128",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "candidate_motion",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-129",
@@ -7605,15 +7919,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-129"
+      "local_downstream_requirement": "v17-129",
+      "component_evidence_key": "action-cycle/v17-129",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "takeover",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-130",
@@ -7652,15 +7980,29 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "worker c1a04: capture pid/generation/controller/publishedKey/trigger + all c2e24 predecessors + slot65/66 + c5ad8 request/checkedWrite result",
         "trace c4af8/c571c state identity and same-frame input then stop barrier; compare user-input before/after, never speculative +828 clear"
       ],
-      "local_downstream_requirement": "v17-130"
+      "local_downstream_requirement": "v17-130",
+      "component_evidence_key": "action-cycle/v17-130",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "takeover",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ]
     },
     {
       "id": "v17-131",
@@ -7720,15 +8062,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "trace c571c input historical ControlRotation from c4554 and output route",
         "worker stop/fire changes + slot65/66 + checked-write/independent readback + target input lifecycle"
       ],
-      "local_downstream_requirement": "v17-131"
+      "local_downstream_requirement": "v17-131",
+      "component_evidence_key": "action-cycle/v17-131",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "recoil_raw_state",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ]
     },
     {
       "id": "v17-132",
@@ -7767,15 +8122,27 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "trace c571c input historical ControlRotation from c4554 and output route",
         "worker stop/fire changes + slot65/66 + checked-write/independent readback + target input lifecycle"
       ],
-      "local_downstream_requirement": "v17-132"
+      "local_downstream_requirement": "v17-132",
+      "component_evidence_key": "action-cycle/v17-132",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ]
     },
     {
       "id": "v17-133",
@@ -7825,15 +8192,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "trace c571c input historical ControlRotation from c4554 and output route",
         "worker stop/fire changes + slot65/66 + checked-write/independent readback + target input lifecycle"
       ],
-      "local_downstream_requirement": "v17-133"
+      "local_downstream_requirement": "v17-133",
+      "component_evidence_key": "action-cycle/v17-133",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "recoil_raw_state",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ]
     },
     {
       "id": "v17-134",
@@ -7872,15 +8252,28 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "trace c571c input historical ControlRotation from c4554 and output route",
         "worker stop/fire changes + slot65/66 + checked-write/independent readback + target input lifecycle"
       ],
-      "local_downstream_requirement": "v17-134"
+      "local_downstream_requirement": "v17-134",
+      "component_evidence_key": "action-cycle/v17-134",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "recoil_raw_state",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ]
     },
     {
       "id": "v17-135",
@@ -7930,15 +8323,27 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "trace c571c input historical ControlRotation from c4554 and output route",
         "worker stop/fire changes + slot65/66 + checked-write/independent readback + target input lifecycle"
       ],
-      "local_downstream_requirement": "v17-135"
+      "local_downstream_requirement": "v17-135",
+      "component_evidence_key": "action-cycle/v17-135",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ]
     },
     {
       "id": "v17-136",
@@ -7977,15 +8382,34 @@
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false,
       "unresolved_stages": [
-        "full producer/authority CFG where not captured",
-        "original start/update/stop and restore observable",
+        "remaining live request/input authority beyond closed local component parity",
+        "original runtime start/update/stop and independent restoration observable",
         "reference/target device effect"
       ],
       "next_probes": [
         "trace c571c input historical ControlRotation from c4554 and output route",
         "worker stop/fire changes + slot65/66 + checked-write/independent readback + target input lifecycle"
       ],
-      "local_downstream_requirement": "v17-136"
+      "local_downstream_requirement": "v17-136",
+      "component_evidence_key": "action-cycle/v17-136",
+      "closed_reference_components": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ]
     }
-  ]
+  ],
+  "action_component_overlay": {
+    "fixture": "tests/fixtures/core_set_v17_action_cycle_evidence.json",
+    "mapped_action_points": 31,
+    "shared_reference_component_classes": 20,
+    "original_effect_points": 0,
+    "scope": "reference component parity only; not a point-specific device/runtime receipt"
+  }
 }

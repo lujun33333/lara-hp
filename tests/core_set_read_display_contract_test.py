@@ -106,7 +106,7 @@ class ReadDisplayContracts(unittest.TestCase):
             self.assertIn(checked, selection)
 
     def test_unproven_fields_stay_diagnostic_not_read_offsets(self) -> None:
-        for status in ("grenadeTimer=target-server-clock-clamped", "grenadeRadius=unproven", "grenadeAnimation=unproven",
+        for status in ("grenadeTimer=target-server-clock-clamped", "grenadeRadius=unproven", "grenadeAnimation=local-prediction-partial",
                        "warningFallbackOwner=actor-replicated-movement-rotation-yaw", "informationLayout=local-subset",
                        "countScope=positive-health-or-last-breath-enemy-draw-range", "countParity=partial"):
             self.assertIn(status, self.collector)
@@ -154,6 +154,62 @@ class ReadDisplayContracts(unittest.TestCase):
         render = body(self.player, "private func render(")
         self.assertIn("mark.countdownSeconds?.doubleValue", render)
         self.assertIn("timer.isFinite, timer > 0, timer <= 10", render)
+
+    def test_bone_head_is_known_profile_requested_capture_and_end_reread(self) -> None:
+        head = body(self.collector, "static bool CSProjectBoneHead(")
+        self.assertIn("CoreSet::referenceBoneHeadIndex", head)
+        self.assertIn("sample == state.samples.end()", head)
+        self.assertIn("CoreSet::transformPoint", head)
+        self.assertIn("point->y <= size.height", head)
+        bones = body(self.collector, "static bool CSReadBoneState(")
+        for gate in ("state->registered & 4", "state->flags", "state->callback != base + CSPositionCallbackRVA",
+                     "CoreSet::decodePositionBlock", "array.count > 256", "state->edges[edge] >= array.count"):
+            self.assertIn(gate, bones)
+        for stable in ("left.registered != right.registered", "left.flags != right.flags",
+                       "left.callback != right.callback", "left.key != right.key", "CSBoneStatesEqual(bone.state, after)"):
+            self.assertIn(stable, self.collector)
+        self.assertIn("mark.head = top; mark.headBoneIndex = @(headIndex)", self.collector)
+        self.assertIn("headScope=requested-bones-only headParity=partial", self.collector)
+
+    def test_local_grenade_motion_is_bounded_and_only_after_current_snapshot_gates(self) -> None:
+        tracker = read("lara/overlay/CoreSetGrenadeMotion.h")
+        for gate in ("maximumEntries = 256", "now <= frameTime_", "now <= entry.lastSeen",
+                     "!(context == context_)", "now - entry.firstSeen > 2", "interval >= 0.004 && interval <= 1",
+                     "speed >= 30000", "now - entry.sampleTime > 0.35", "speed <= 25", "step > 28"):
+            self.assertIn(gate, tracker)
+        decorate = body(self.collector, "- (void)decorateSnapshot:")
+        for gate in ("NSThread.isMainThread", "if (!mark.countdownSeconds) continue", "projected >= 64",
+                     "snapshot.sessionGeneration", "snapshot.imageBase", "snapshot.processID",
+                     "mark.motionType", "mark.motionNameIndex", "mark.motionExplosionRaw",
+                     "CoreSet::referenceGrenadePrediction", "motionCircle=screen-pixels-not-blast-radius"):
+            self.assertIn(gate, decorate)
+        for target_read in ("CSRead", "session readAt", "CSPosition", "CSReadValue"):
+            self.assertNotIn(target_read, decorate)
+        capture = body(self.player, "private func capture(")
+        self.assertLess(capture.index("snapshot.sessionGeneration == self.session.generation"),
+                        capture.index("self.grenadeMotion.decorate"))
+        self.assertLess(capture.index("self.activeToken == token, self.revision == expectedRevision"),
+                        capture.index("self.grenadeMotion.decorate"))
+        self.assertIn("grenadeMotion.clear()", body(self.player, "private func clearStaleLane("))
+        shutdown = body(self.player, "func shutdownReadSession()")
+        self.assertIn("let motionClean = grenadeMotion.clear()", shutdown)
+        self.assertIn("motionClean && cleanup.taskPortReleased && cleanup.generationAdvanced", shutdown)
+        render = body(self.player, "private func render(")
+        self.assertIn("for segment in mark.predictionSegments", render)
+        self.assertIn("if mark.predictionEndpointPresent", render)
+
+    def test_sync_opened_is_typed_end_reread_observation_not_reference_filter(self) -> None:
+        for gate in ("CSMInteractiveTreasureBoxClassSlot = 0x11b81f80", "actor + 0x5fd, &openedSync",
+                     "if (typed)", "openedSync > 1", "openedSyncAfter != item.openedSync",
+                     "openedClassAfter != openedClass", "openedProxyDisagree=%lu"):
+            self.assertIn(gate, self.material_collector)
+        self.assertIn("Not substituted for Core's Children.Num==1 filter", read("lara/overlay/CoreSetMaterialSnapshot.h"))
+        render = body(self.material, "private func render(")
+        self.assertIn("mark.escapeBoxChildrenCount?.intValue == 1", render)
+        self.assertNotIn("interactiveTreasureBoxSyncOpened", render)
+        for uncertain in ("networkFreshness=unproven", "informationGap=native-font-icons-and-anchors",
+                          "grenadeRadiusGap=no-verified-elite-blast-field"):
+            self.assertIn(uncertain, self.collector)
 
     def test_material_scope_full_capture_clock_and_no_nil_percent_fabrication(self) -> None:
         render = body(self.material, "private func render(")

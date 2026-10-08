@@ -6,6 +6,7 @@ executes it. Negative controls mutate strings/dicts only, not repository files.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -139,6 +140,81 @@ class HomeSchedulerContract(unittest.TestCase):
         self.assertIn("not measured", matrix["contracts"]["frame_rate"]["scope"])
         self.assertFalse(matrix["missing_observation_producers"]["v17-009"]["producer_available"])
         self.assertFalse(matrix["missing_observation_producers"]["v17-010"]["producer_available"])
+        current = matrix["reference"]["home_current_caller_probe"]
+        self.assertEqual(current["points"], [f"v17-{point:03}" for point in (0, 1, 2, 3, 5, 6, 8, 9, 10)])
+        self.assertFalse(current["original_runtime_receipt_verified"])
+        self.assertFalse(current["device_effect_verified"])
+        for point in current["points"]:
+            requirement = (matrix["downstream_requirements"] | matrix["missing_observation_producers"])[point]
+            self.assertTrue(requirement["current_caller_evidence"].startswith("home_current_caller_probe:"))
+
+    def test_current_callers_are_source_bound_not_an_external_library_claim(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        from core_set_v17_home_producer_probe import probe_current_repository
+        evidence = probe_current_repository(ROOT)
+        self.assertEqual({point["id"] for point in evidence["points"]},
+                         {f"v17-{point:03}" for point in (0, 1, 2, 3, 5, 6, 8, 9, 10)})
+        self.assertTrue(all(not point["producer_bound"] and not point["original_runtime_receipt_verified"]
+                            for point in evidence["points"]))
+        for source in evidence["source_manifest"]:
+            current = (ROOT / source["source"]).read_text(encoding="utf-8")
+            self.assertEqual(source["sha256_utf8_text"], hashlib.sha256(current.encode("utf-8")).hexdigest())
+        for sites in evidence["caller_evidence"].values():
+            for site in sites:
+                lines = (ROOT / site["source"]).read_text(encoding="utf-8").splitlines()
+                for line in site["lines"]:
+                    self.assertIn(site["anchor"], lines[line - 1])
+        self.assertEqual(evidence["provider_scan"]["conformers"], [])
+        self.assertEqual(evidence["provider_scan"]["binding_calls"], [])
+        self.assertEqual(evidence["provider_scan"]["home_consumer_bindings"], [])
+        self.assertIn("NOT proof of absent internal functionality", evidence["external_partial"]["limit"])
+
+    def test_current_quantities_remain_distinct_from_original_home_fields(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        from core_set_v17_home_producer_probe import probe_current_repository
+        evidence = probe_current_repository(ROOT)
+        points = {point["id"]: point for point in evidence["points"]}
+        self.assertIn("20s stagnant counter", points["v17-002"]["missing_same_meaning_interface"])
+        self.assertIn("609a8 tuple", points["v17-003"]["missing_same_meaning_interface"])
+        self.assertIn("native-ready", points["v17-005"]["current_candidate"])
+        self.assertIn("hasOffsets", points["v17-006"]["current_candidate"])
+        self.assertIn("running is not stage", points["v17-008"]["missing_same_meaning_interface"])
+        self.assertIn("PAGE counters", points["v17-009"]["missing_same_meaning_interface"])
+        self.assertIn("same units", points["v17-010"]["missing_same_meaning_interface"])
+        self.assertIn("decompressed length", points["v17-010"]["current_candidate"])
+        self.assertIn("system OTA switch", points["v17-010"]["current_candidate"])
+        self.assertEqual(points["v17-010"]["caller_evidence_keys"],
+                         ["range_fetch", "kernel_cache_call", "local_copy", "ota_switch", "observation_boundary"])
+
+    def test_source_probe_refuses_changed_call_chain_and_counter_substitution(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        from core_set_v17_home_producer_probe import CURRENT_SOURCES, current_source_evidence
+        sources = {owner: (ROOT / path).read_text(encoding="utf-8") for owner, path in CURRENT_SOURCES.items()}
+        for owner, old, new in (
+            ("coordinator", "let loaded = fetched && dlkcache()", "let loaded = dlkcache()"),
+            ("telemetry", "completedPages: nil, totalPages: nil", "completedPages: UInt64(progress), totalPages: 100"),
+            ("telemetry", "downloadedBytes: nil, totalBytes: nil", "downloadedBytes: copiedBytes, totalBytes: copiedTotal"),
+            ("partial", "[zip getFileForPath:entry error:&error]", "[zip fakeProgress]"),
+            ("ota", "uint64_t remaining = outData.length;", "uint64_t remaining = firmwareBytes;")):
+            mutated = sources | {owner: sources[owner].replace(old, new)}
+            with self.assertRaises(ValueError, msg=owner + "/" + old):
+                current_source_evidence(mutated, {}, False)
+
+    def test_new_provider_candidate_never_automatically_claims_original_effect(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        from core_set_v17_home_producer_probe import CURRENT_SOURCES, current_source_evidence
+        sources = {owner: (ROOT / path).read_text(encoding="utf-8") for owner, path in CURRENT_SOURCES.items()}
+        candidate = """final class Candidate: NSObject, CoreSetHomeReferenceObservationProvider {
+            func bindHomeReferenceObservationProvider(_ p: Provider) {}
+            func start() { coordinator.bindHomeReferenceObservationProvider(self)
+                menu.bindGameConsumer(self, to: \\.home) }
+        }"""
+        evidence = current_source_evidence(sources, {"candidate.swift": candidate}, False)
+        scan = evidence["provider_scan"]
+        self.assertEqual([hit["class"] for hit in scan["conformers"]], ["Candidate"])
+        self.assertEqual(len(scan["binding_calls"]), 1)
+        self.assertEqual(len(scan["home_consumer_bindings"]), 1)
+        self.assertTrue(all(not point["producer_bound"] for point in evidence["points"]))
 
 
 def replay(path):
@@ -166,6 +242,20 @@ def replay(path):
             assert word["instruction"] == "bl #" + edge["stub"]
             assert core.raw(int(site["address"], 16), 4).hex() == word["bytes"]
     assert evidence["functions"]["firmware_workflow_block"]["entry"] == "0x10000f8f0"
+    lifecycle = evidence["action_lifecycle"]
+    assert lifecycle["v17-002"]["watchdog_block"] == "0x100006938"
+    assert core.proof_window(0x1000050d8, 4)["instructions"][0]["instruction"] == "add x16, x16, #0x938"
+    assert core.proof_window(0x100005184, 4)["instructions"][0]["instruction"] == "add x16, x16, #0x3a4"
+    assert core.bindings[0x100b8cd30] == "_bzero"
+    assert core.bindings[0x100b8d0c8] == "_memcpy"
+    assert core.proof_window(0x10000696c, 4)["instructions"][0]["instruction"] == "ldapr x0, [x8]"
+    assert core.proof_window(0x100006974, 4)["instructions"][0]["instruction"] == "cmp x0, x8"
+    assert core.proof_window(0x100006978, 4)["instructions"][0]["instruction"] == "b.ne #0x100006ac4"
+    assert core.proof_window(0x100006994, 4)["instructions"][0]["instruction"] == "mov x8, #0x406e000000000000"
+    assert core.proof_window(0x1000069f4, 4)["instructions"][0]["instruction"] == "fmov d1, #20.00000000"
+    for edge in lifecycle["v17-003"]["typed_edges"]:
+        assert core.proof_window(int(edge["site"], 16), 4)["instructions"][0]["instruction"] == "bl #" + edge["callee"]
+        assert edge["callee"] in {function["entry"] for function in evidence["functions"].values()}
     assert "digest only" in evidence["progress_sources"]["v17-010"]["next_capture"]
     assert evidence["status_semantics"]["v17-004"]["strings"] == ["未初始化", "初始化中", "初始化成功", "初始化失败", "初始化超时"]
     assert evidence["status_semantics"]["v17-005"]["strings"][:4] == ["正在联网适配", "环境已就绪", "环境适配失败", "等待授权后适配"]

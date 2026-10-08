@@ -112,6 +112,7 @@ class CompensationContracts(unittest.TestCase):
         evidence = json.loads((ROOT / "tests/fixtures/core_set_v17_action_cycle_evidence.json").read_text(encoding="utf-8"))
         self.assertEqual(result, evidence["compensation_evidence"])
         self.assertIn("only c2f4c", result["closed_edges"]["single_worker_sink"])
+        self.assertIn("not invocation-count or thread-exclusion proof", result["closed_edges"]["single_worker_sink"])
         self.assertIn("no inverse target write", result["closed_edges"]["stop_post_state_local"])
         print("PASS: local compensation/post/feedback byte windows and existing direct caller scan")
 

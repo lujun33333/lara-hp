@@ -8,6 +8,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) CGPoint end;
 @end
 
+@interface CoreSetGrenadePredictionSegment : CoreSetBoneSegment
+@property(nonatomic, readonly) UIColor *color;
+@property(nonatomic, readonly) double shadowLineWidth;
+@property(nonatomic, readonly) double lineWidth;
+@end
+
 typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
     CoreSetWarningYawSourceNone = 0,
     CoreSetWarningYawSourceServerControlRotation = 1,
@@ -28,6 +34,9 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) BOOL bot;
 @property(nonatomic, readonly) CGPoint center;
 @property(nonatomic, readonly) CGPoint head;
+// Present only when the already requested bone capture supplies a known
+// reference profile and a projected, end-reread top anchor. Otherwise root+90.
+@property(nonatomic, readonly, nullable) NSNumber *headBoneIndex;
 @property(nonatomic, readonly) CGPoint feet;
 @property(nonatomic, readonly) double distanceUnitsDividedBy100;
 @property(nonatomic, readonly) NSArray<CoreSetBoneSegment *> *boneSegments;
@@ -48,6 +57,10 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) double distanceUnitsDividedBy100;
 // Seconds (0,10], only for a typed EliteProjectile and verified target clock.
 @property(nonatomic, readonly, nullable) NSNumber *countdownSeconds;
+// Local display prediction, never a collision result or a world blast radius.
+@property(nonatomic, readonly) NSArray<CoreSetGrenadePredictionSegment *> *predictionSegments;
+@property(nonatomic, readonly) BOOL predictionEndpointPresent;
+@property(nonatomic, readonly) CGPoint predictionEndpoint;
 @end
 
 @interface CoreSetPlayerSnapshot : NSObject
@@ -74,6 +87,13 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) double captureCompletedMonotonicSeconds;
 // Counts of already-read fields, never raw names/addresses or a parity claim.
 @property(nonatomic, copy, readonly) NSString *readSemanticDiagnostic;
+@end
+
+// Main-thread, bounded local history. No target reads or function calls.
+@interface CoreSetGrenadeMotionTracker : NSObject
+- (void)decorateSnapshot:(CoreSetPlayerSnapshot *)snapshot canvasSize:(CGSize)canvasSize
+             nativeScale:(double)nativeScale NS_SWIFT_NAME(decorate(_:canvasSize:nativeScale:));
+- (BOOL)clear;
 @end
 
 @interface CoreSetPlayerCollector : NSObject

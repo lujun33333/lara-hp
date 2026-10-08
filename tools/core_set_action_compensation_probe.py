@@ -179,7 +179,7 @@ def static_edges(core):
                 "geometry_full": "full c4af8 finite-input composition: Core-local camera/target/relative velocity, clamped half-Z prediction, wrapped angles, deadzone, history and two-axis compensation",
                 "prior_aim_feedback": "c3098..c30d0 stores s13 at Core BSS c51ad4 only for slot66 path, first-axis accepted flag, current Aim active and Recoil enabled; c2cc8 consumes that prior component, not merged recoil",
                 "recoil_caller_merge": "c2d34..c2dac finite s11+raw combined constrained to +/-1.5*strength",
-                "single_worker_sink": "whole-text direct call scan: c4af8/c416c/c571c each has one worker call site; c5ad8 only c2f4c, which sums Aim/Recoil then emits one two-axis draft; this is not game-thread exclusion",
+                "single_worker_sink": "whole-text direct call scan: c4af8/c416c/c571c each has one worker call site; c5ad8 only c2f4c, a shared numerical-merge/draft call site; not invocation-count or thread-exclusion proof",
                 "stop_post_state_local": "c3168/c2438 clear only local raw/post histories; no inverse target write or target restore receipt at these sites"},
             "remaining_edges": ["reference components are not verified current-device actions",
                                 "local ownerToken/binding/prior-feedback cannot establish a live request lease",

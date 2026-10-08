@@ -6,6 +6,8 @@
 #import "CoreSetReadDisplaySemantics.h"
 #import "CoreSetGrenadeClock.h"
 #import "CoreSetPlayerCount.h"
+#import "CoreSetBoneHead.h"
+#import "CoreSetGrenadeMotion.h"
 #import <QuartzCore/QuartzCore.h>
 #import <algorithm>
 #import <array>
@@ -216,28 +218,51 @@ static const uint8_t *CSBoneProfile(int32_t count) {
 struct CSBoneSample { uint8_t index; std::array<uint8_t, 0x2c> bytes; };
 struct CSBoneState {
     uint64_t mesh = 0;
+    uint64_t callback = 0;
+    uint32_t flags = 0, key = 0;
+    uint8_t registered = 0;
+    uint8_t status = 0; // 1 missing mesh, 2 unregistered, 3 invalid array, 4 bounds, 5 unknown decoder, 6 plain, 7 XOR.
     struct { uint64_t data; int32_t count; int32_t capacity; } array = {0};
     std::array<uint8_t, 0x2c> component = {};
     std::vector<CSBoneSample> samples;
     const uint8_t *edges = nullptr;
 };
 
-static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation,
+static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation, uint64_t base,
                             uint64_t actor, CSBoneState *state, bool *present) {
     *present = false;
     if (!CSReadValue(session, generation, actor + 0x658, &state->mesh)) return false;
-    if (!state->mesh) return true;
+    if (!state->mesh) { state->status = 1; return true; }
     if (state->mesh < 0x100000000ULL || state->mesh > 0x8000000000ULL - 0x850) return false;
+    // Native GetBoneTransform a3c4124 requires a registered component. Its
+    // a3c4150..a3c41a0 uses the same verified read-only decoder as CSPosition.
+    if (!CSReadValue(session, generation, state->mesh + 0xe0, &state->registered)) return false;
+    if (!(state->registered & 4)) { state->status = 2; return true; }
     if (!CSRead(session, generation, state->mesh + 0x838, &state->array, sizeof(state->array))) return false;
     const auto &array = state->array;
     if (array.count < 0 || array.count > 256 || array.capacity < array.count ||
-        array.capacity > 256 || (array.count && !array.data)) return true;
-    if (array.count < 6) return true;
-    if (array.data < 0x100000000ULL || array.data > 0x8000000000ULL - 256 * 0x30) return true;
+        array.capacity > 256 || (array.count && !array.data)) { state->status = 3; return true; }
+    if (array.count < 6) { state->status = 3; return true; }
+    if (array.data < 0x100000000ULL || array.data > 0x8000000000ULL - 256 * 0x30) { state->status = 3; return true; }
     state->edges = CSBoneProfile(array.count);
-    for (unsigned edge = 0; edge < 28; ++edge) if (state->edges[edge] >= array.count) return true;
-    if (!CSRead(session, generation, state->mesh + 0x1f0,
-                state->component.data(), state->component.size())) return false;
+    for (unsigned edge = 0; edge < 28; ++edge)
+        if (state->edges[edge] >= array.count) { state->status = 4; return true; }
+    if (!CSReadValue(session, generation, state->mesh + 0x25c, &state->flags)) return false;
+    state->status = 6;
+    if ((state->flags & ((1u << 20) | (1u << 22))) == ((1u << 20) | (1u << 22))) {
+        if (!CSReadValue(session, generation, base + CSPositionCallbackSlot, &state->callback)) return false;
+        if (state->callback) {
+            if (state->callback != base + CSPositionCallbackRVA) { state->status = 5; return true; }
+            uint8_t block[0x30] = {};
+            if (!CSRead(session, generation, state->mesh + 0x1f0, block, sizeof(block)) ||
+                !CSReadValue(session, generation, base + CSPositionXORKeySlot, &state->key)) return false;
+            CoreSet::decodePositionBlock(block, state->key);
+            std::memcpy(state->component.data(), block, state->component.size());
+            state->status = 7;
+        }
+    }
+    if (state->status == 6 && !CSRead(session, generation, state->mesh + 0x1f0,
+                                     state->component.data(), state->component.size())) return false;
     for (unsigned edge = 0; edge < 28; ++edge) {
         uint8_t index = state->edges[edge];
         if (std::any_of(state->samples.begin(), state->samples.end(),
@@ -252,7 +277,9 @@ static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation,
 }
 
 static bool CSBoneStatesEqual(const CSBoneState &left, const CSBoneState &right) {
-    if (left.mesh != right.mesh || std::memcmp(&left.array, &right.array, sizeof(left.array)) != 0 ||
+    if (left.mesh != right.mesh || left.registered != right.registered || left.flags != right.flags ||
+        left.callback != right.callback || left.key != right.key || left.status != right.status ||
+        std::memcmp(&left.array, &right.array, sizeof(left.array)) != 0 ||
         left.component != right.component || left.samples.size() != right.samples.size()) return false;
     for (size_t index = 0; index < left.samples.size(); ++index)
         if (left.samples[index].index != right.samples[index].index ||
@@ -265,6 +292,13 @@ static bool CSBoneStatesEqual(const CSBoneState &left, const CSBoneState &right)
 @property(nonatomic) CGPoint end;
 @end
 @implementation CoreSetBoneSegment @end
+
+@interface CoreSetGrenadePredictionSegment ()
+@property(nonatomic) UIColor *color;
+@property(nonatomic) double shadowLineWidth;
+@property(nonatomic) double lineWidth;
+@end
+@implementation CoreSetGrenadePredictionSegment @end
 
 static NSArray<CoreSetBoneSegment *> *CSProjectBones(const CSBoneState &state,
                                                      CSCamera camera, CGSize size) {
@@ -288,6 +322,22 @@ static NSArray<CoreSetBoneSegment *> *CSProjectBones(const CSBoneState &state,
     return segments;
 }
 
+static bool CSProjectBoneHead(const CSBoneState &state, CSCamera camera, CGSize size,
+                              CGPoint *point, uint8_t *index) {
+    *point = CGPointZero;
+    if (!CoreSet::referenceBoneHeadIndex(state.array.count, index)) return false;
+    const auto sample = std::find_if(state.samples.begin(), state.samples.end(),
+        [index](const CSBoneSample &entry) { return entry.index == *index; });
+    if (sample == state.samples.end()) return false;
+    CoreSet::Transform component = {}, bone = {};
+    std::memcpy(&component, state.component.data(), state.component.size());
+    std::memcpy(&bone, sample->bytes.data(), sample->bytes.size());
+    CSVector world = {};
+    return CoreSet::transformPoint(component, bone.translation, &world) &&
+        CSProject(camera, world, size, point) && point->x >= 0 && point->x <= size.width &&
+        point->y >= 0 && point->y <= size.height;
+}
+
 @interface CoreSetPlayerMark ()
 @property(nonatomic) uint64_t actorAddress;
 @property(nonatomic) uint8_t healthStatusCode;
@@ -300,6 +350,7 @@ static NSArray<CoreSetBoneSegment *> *CSProjectBones(const CSBoneState &state,
 @property(nonatomic) BOOL bot;
 @property(nonatomic) CGPoint center;
 @property(nonatomic) CGPoint head;
+@property(nonatomic) NSNumber *headBoneIndex;
 @property(nonatomic) CGPoint feet;
 @property(nonatomic) double distanceUnitsDividedBy100;
 @property(nonatomic) NSArray<CoreSetBoneSegment *> *boneSegments;
@@ -316,10 +367,19 @@ static NSArray<CoreSetBoneSegment *> *CSProjectBones(const CSBoneState &state,
 @property(nonatomic) CGPoint point;
 @property(nonatomic) double distanceUnitsDividedBy100;
 @property(nonatomic) NSNumber *countdownSeconds;
+@property(nonatomic) NSArray<CoreSetGrenadePredictionSegment *> *predictionSegments;
+@property(nonatomic) BOOL predictionEndpointPresent;
+@property(nonatomic) CGPoint predictionEndpoint;
+@property(nonatomic) CSVector motionPosition;
+@property(nonatomic) uint64_t motionActor;
+@property(nonatomic) uint64_t motionType;
+@property(nonatomic) uint32_t motionNameIndex;
+@property(nonatomic) uint32_t motionExplosionRaw;
 @end
 @implementation CoreSetGrenadeMark @end
 
 @interface CoreSetPlayerSnapshot ()
+@property(nonatomic) CSCamera motionCamera;
 @property(nonatomic) uint64_t sessionGeneration;
 @property(nonatomic) int32_t processID;
 @property(nonatomic) uint64_t imageBase;
@@ -342,6 +402,75 @@ static NSArray<CoreSetBoneSegment *> *CSProjectBones(const CSBoneState &state,
 @property(nonatomic, copy) NSString *readSemanticDiagnostic;
 @end
 @implementation CoreSetPlayerSnapshot @end
+
+@implementation CoreSetGrenadeMotionTracker {
+    CoreSet::GrenadeMotionTracker _history;
+}
+- (BOOL)clear {
+    NSAssert(NSThread.isMainThread, @"motion history is main-thread confined");
+    _history.clear();
+    return _history.size() == 0;
+}
+- (void)decorateSnapshot:(CoreSetPlayerSnapshot *)snapshot canvasSize:(CGSize)size nativeScale:(double)scale {
+    NSAssert(NSThread.isMainThread, @"motion history is main-thread confined");
+    for (CoreSetGrenadeMark *mark in snapshot.grenadeMarks) {
+        mark.predictionSegments = @[]; mark.predictionEndpointPresent = NO; mark.predictionEndpoint = CGPointZero;
+    }
+    const CoreSet::GrenadeMotionContext context = {snapshot.sessionGeneration, snapshot.imageBase, snapshot.processID};
+    NSUInteger status[8] = {}, projected = 0, segmentCount = 0, endpoints = 0, budgetSkipped = 0;
+    if (!std::isfinite(scale) || scale <= 0 || scale > 8 || !std::isfinite(size.width) ||
+        !std::isfinite(size.height) || size.width <= 0 || size.height <= 0 ||
+        !_history.beginFrame(context, snapshot.captureCompletedMonotonicSeconds)) {
+        _history.clear(); status[3] = 1;
+    } else {
+        for (CoreSetGrenadeMark *mark in snapshot.grenadeMarks) {
+            if (!mark.countdownSeconds) continue; // Only typed, valid-lifecycle, end-reread clock candidates.
+            const CoreSet::GrenadeMotionIdentity identity = {mark.motionActor, mark.motionType,
+                mark.motionNameIndex, mark.motionExplosionRaw};
+            const auto motion = _history.sample(context, identity, mark.motionPosition,
+                                                 snapshot.captureCompletedMonotonicSeconds);
+            ++status[unsigned(motion.status)];
+            if (motion.status != CoreSet::GrenadeMotionStatus::ready) continue;
+            if (projected >= 64) { ++budgetSkipped; continue; }
+            const float remaining = mark.countdownSeconds.floatValue;
+            CGPoint previous = mark.point;
+            bool previousValid = true, anySegment = false;
+            NSMutableArray<CoreSetGrenadePredictionSegment *> *segments = [NSMutableArray arrayWithCapacity:28];
+            for (unsigned step = 1; step <= 28; ++step) {
+                CSVector world = {};
+                CGPoint point = CGPointZero;
+                const bool valid = CoreSet::referenceGrenadePrediction(mark.motionPosition, motion.velocity,
+                    remaining, step, &world) && CSProject(snapshot.motionCamera, world, size, &point) &&
+                    point.x > 0 && point.x < size.width && point.y > 0 && point.y < size.height;
+                if (valid && previousValid) {
+                    const float fraction = float(step) / 28.0f;
+                    const unsigned green = unsigned(std::fma(fraction, 95.0f, 105.0f));
+                    const unsigned alpha = unsigned(std::fma(fraction, -115.0f, 235.0f));
+                    CoreSetGrenadePredictionSegment *segment = [CoreSetGrenadePredictionSegment new];
+                    segment.start = previous; segment.end = point;
+                    segment.color = [UIColor colorWithRed:1 green:green / 255.0 blue:72 / 255.0 alpha:alpha / 255.0];
+                    segment.shadowLineWidth = std::max(scale * 4.2, 3.5) / scale;
+                    segment.lineWidth = std::max(scale * 2.2, 1.8) / scale;
+                    [segments addObject:segment]; anySegment = true;
+                }
+                previousValid = valid;
+                if (valid) previous = point;
+            }
+            mark.predictionSegments = [segments copy];
+            if (anySegment) { ++projected; segmentCount += segments.count; }
+            if (anySegment && previousValid) {
+                mark.predictionEndpointPresent = YES; mark.predictionEndpoint = previous; ++endpoints;
+            }
+        }
+    }
+    snapshot.readSemanticDiagnostic = [snapshot.readSemanticDiagnostic stringByAppendingFormat:
+        @" grenadeMotion=reference-local-prediction motionTime=local-monotonic motionEntries=%lu motionWarm=%lu motionReady=%lu motionContextRejected=%lu motionClockRejected=%lu motionSpeedRejected=%lu motionStale=%lu motionExpired=%lu motionCapacityRejected=%lu motionProjected=%lu motionSegments=%lu motionEndpoints=%lu motionBudgetSkipped=%lu motionCircle=screen-pixels-not-blast-radius",
+        (unsigned long)_history.size(), (unsigned long)status[0], (unsigned long)status[1], (unsigned long)status[2],
+        (unsigned long)status[3], (unsigned long)status[4], (unsigned long)status[5], (unsigned long)status[6],
+        (unsigned long)status[7], (unsigned long)projected, (unsigned long)segmentCount, (unsigned long)endpoints,
+        (unsigned long)budgetSkipped];
+}
+@end
 
 BOOL CoreSetRadarPoint(CGPoint cameraMinusActor, double cameraYawDegrees,
                        double radius, double detectionDistance, CGPoint center, CGPoint *output) {
@@ -548,6 +677,9 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     bool grenadeClockRead = false;
     NSUInteger warningPrimaryValid = 0, warningPrimaryInvalid = 0;
     NSUInteger warningFallbackRead = 0, warningFallbackValid = 0, warningUnavailable = 0;
+    NSUInteger boneRequested = 0, bonePresent = 0, bonePlain = 0, boneDecoded = 0;
+    NSUInteger boneUnavailable[6] = {};
+    NSUInteger boneHeadKnownProfile = 0, boneHeadProjected = 0, boneHeadUnknownProfile = 0;
     NSUInteger nameRequested = 0, namePresent = 0, weaponRequested = 0, weaponKnown = 0;
     uint64_t pointers[512];
     std::vector<uint64_t> observedPointers;
@@ -644,6 +776,10 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                             if (grenadeMarks.count >= 256) return nil;
                             CoreSetGrenadeMark *mark = [CoreSetGrenadeMark new];
                             mark.point = point; mark.distanceUnitsDividedBy100 = distance;
+                            mark.predictionSegments = @[];
+                            mark.motionPosition = grenadePosition; mark.motionActor = actor;
+                            mark.motionType = grenadeClass; mark.motionNameIndex = nameIndex;
+                            mark.motionExplosionRaw = explosionRaw;
                             if (timerObserved && !grenadeClockRead) {
                                 if (!CSReadGrenadeClock(session, generation, base, world, level, gameStateClass, &grenadeClock)) return nil;
                                 grenadeClockRead = true;
@@ -771,11 +907,23 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                 if (observedBones.size() >= CSMaxBoneActors) return nil;
                 CSBoneState bones;
                 bool present = false;
-                if (!CSReadBoneState(session, generation, actor, &bones, &present)) return nil;
+                ++boneRequested;
+                if (!CSReadBoneState(session, generation, base, actor, &bones, &present)) return nil;
                 if (present) {
+                    ++bonePresent;
+                    if (bones.status == 7) ++boneDecoded; else ++bonePlain;
                     mark.boneSegments = CSProjectBones(bones, camera, size);
+                    uint8_t headIndex = 0;
+                    if (CoreSet::referenceBoneHeadIndex(bones.array.count, &headIndex)) {
+                        ++boneHeadKnownProfile;
+                        CGPoint top = CGPointZero;
+                        if (CSProjectBoneHead(bones, camera, size, &top, &headIndex)) {
+                            mark.head = top; mark.headBoneIndex = @(headIndex);
+                            ++boneHeadProjected;
+                        }
+                    } else ++boneHeadUnknownProfile;
                     observedBones.push_back({actor, std::move(bones)});
-                }
+                } else if (bones.status < 6) ++boneUnavailable[bones.status];
             }
             if (marks.count >= CSMaxRenderedMarks) return nil;
             [marks addObject:mark];
@@ -932,7 +1080,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     for (const ObservedBone &bone : observedBones) {
         CSBoneState after;
         bool present = false;
-        if (!CSReadBoneState(session, generation, bone.actor, &after, &present) ||
+        if (!CSReadBoneState(session, generation, base, bone.actor, &after, &present) ||
             !present || !CSBoneStatesEqual(bone.state, after)) return nil;
     }
     if (includeBattleInputs) {
@@ -949,6 +1097,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     snapshot.sessionGeneration = generation; snapshot.processID = pid;
     snapshot.imageBase = base; snapshot.snapshotID = [NSUUID UUID];
     snapshot.cameraYawDegrees = camera.rotation.y;
+    snapshot.motionCamera = camera;
     snapshot.cameraPitchDegrees = camera.rotation.x;
     snapshot.cameraFieldOfViewDegrees = camera.fov;
     snapshot.battleInputsPresent = includeBattleInputs;
@@ -969,10 +1118,13 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         @"candidateCounts=capture-pass displayFields=end-reread actors=%d marks=%lu players=%lu bots=%lu zeroHealthLastBreath=%lu countScope=positive-health-or-last-breath-enemy-draw-range countParity=partial "
          "grenadeRequested=%d grenadeCandidates=%lu grenadePosition=%lu grenadeOnscreen=%lu "
          "grenadeClassKnown=%d gameStateClassKnown=%d grenadeTyped=%lu grenadeCountdowns=%lu grenadeLifecycleSuppressed=%lu grenadeActorWorldMismatch=%lu grenadeClockKnown=%d grenadeClockStatus=%u "
-         "grenadeTimer=target-server-clock-clamped grenadeRadius=unproven grenadeAnimation=unproven "
+         "grenadeTimer=target-server-clock-clamped grenadeRadius=unproven grenadeAnimation=local-prediction-partial "
          "warningRequested=%d warningPrimaryValid=%lu warningPrimaryInvalid=%lu warningFallbackRead=%lu warningFallbackValid=%lu "
          "warningUnavailable=%lu warningFallbackOwner=actor-replicated-movement-rotation-yaw "
-         "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationLayout=local-subset",
+         "boneRequested=%lu bonePresent=%lu bonePlain=%lu boneDecoded=%lu boneMissing=%lu boneUnregistered=%lu boneArrayInvalid=%lu boneBounds=%lu boneDecoderUnknown=%lu "
+         "boneHeadKnownProfile=%lu boneHeadProjected=%lu boneHeadUnknownProfile=%lu headScope=requested-bones-only headParity=partial "
+         "networkFreshness=unproven captureStability=end-reread grenadeAnimationScope=local-position-history grenadeRadiusGap=no-verified-elite-blast-field "
+         "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationLayout=local-subset informationGap=native-font-icons-and-anchors",
         array.count, (unsigned long)marks.count, (unsigned long)observedPlayerCount,
         (unsigned long)observedBotCount, (unsigned long)observedZeroHealthLastBreath,
         includeGrenadeWarning, (unsigned long)grenadeCandidates,
@@ -983,6 +1135,10 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         grenadeClock.present, unsigned(grenadeClock.status),
         includeWarningYaw, (unsigned long)warningPrimaryValid, (unsigned long)warningPrimaryInvalid,
         (unsigned long)warningFallbackRead, (unsigned long)warningFallbackValid, (unsigned long)warningUnavailable,
+        (unsigned long)boneRequested, (unsigned long)bonePresent, (unsigned long)bonePlain, (unsigned long)boneDecoded,
+        (unsigned long)boneUnavailable[1], (unsigned long)boneUnavailable[2], (unsigned long)boneUnavailable[3],
+        (unsigned long)boneUnavailable[4], (unsigned long)boneUnavailable[5],
+        (unsigned long)boneHeadKnownProfile, (unsigned long)boneHeadProjected, (unsigned long)boneHeadUnknownProfile,
         (unsigned long)nameRequested, (unsigned long)namePresent,
         (unsigned long)weaponRequested, (unsigned long)weaponKnown];
     return snapshot;

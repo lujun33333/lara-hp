@@ -277,18 +277,15 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
             closed.extend(["geometry_full", "prediction_distance_gain", "angular_motion_projection", "residual_filter", "compensation_curve"])
         if number >= 131:
             closed.extend(["post_state_two_axis", "recoil_caller_merge", "prior_aim_feedback", "stop_post_state_local"])
-        edge = ("c4af8/c571c prior-state/history/delta-time → same-cycle two-axis increment" if number >= 126 else
-                "candidate worldpoint/filter/sticky state → original selector/result observable")
+        edge = "current eligible-candidate evidence and selector observable, distinct from closed reference component parity"
         if number == 114:
             edge = "Core pawn-state bit19 producer/owner → build15915 PawnStateRepSyncData+1700 storage/knocked semantics"
         if number in (120, 129, 130):
-            edge = "c416c separate recoil/post-state consumer and takeover feedback → same-cycle input owner/readback"
+            edge = "same-cycle input lease and independent observation of user-input arbitration"
         if number == 107:
             edge = "bone58 validity + anchor1e0/1ec actual producers → build15915 world bone owner/lifetime"
         if number == 116:
             edge = "sticky rank/publish → source record invalidation, target identity lease and live selector observable"
-        if number >= 131:
-            edge = "c571c caller binding/prior-aim lifetime + c416c horizontal/post-state + numeric merge → current two-axis action"
         points.append({"id": point["id"], "title": point["title"],
                        "evidence_key": "action-cycle/" + point["id"],
                        "prior_native_evidence_key": point["reference_evidence_key"],
@@ -302,10 +299,18 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
                        # edges still include the unresolved live owner lifetime.
                        "next_exact_edges": ([edge] if number < 126 else []) + common_edges,
                        "original_runtime_receipt_verified": False, "one_to_one_complete": False})
+    component_keys = set(selection_edges["closed_edges"]) | set(compensation_edges["closed_edges"])
+    closure_counts = {
+        "mapped_points": len(points), "original_effect_points": 0,
+        "shared_reference_component_classes": len(component_keys),
+        "per_point_unresolved_requirement_entries": sum(len(point["next_exact_edges"]) for point in points),
+        "unique_unresolved_requirements": len({edge for point in points for edge in point["next_exact_edges"]}),
+        "scope": "shared reference component keys, NOT point-specific original effect or runtime receipt closure"}
     return {"schema_version": 3, "reference_ipa_sha256": IPA_SHA,
             "reference_image_sha256": IMAGE_SHA, "reference_uuid": native_map["reference_uuid"],
             "scope": "static bytes + offline pure-CFG parity contracts; no target writer authority or original device action receipt",
             "point_count": len(points), "one_to_one_complete_count": 0,
+            "closure_counts": closure_counts,
             "reference_windows": [core.proof_window(va, size) for va, size in anchors],
             "reference_tables": tables, "target_static_evidence": target,
             "selection_route_history_evidence": selection_edges,

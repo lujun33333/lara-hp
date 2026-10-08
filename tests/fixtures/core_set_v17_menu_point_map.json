@@ -29,6 +29,16 @@
       "scope": "diagnostic-only; no action consumer or progress provider attached",
       "original_runtime_receipt_verified": false
     },
+    "home_current_caller_probe": {
+      "tool": "tools/core_set_v17_home_producer_probe.py",
+      "entry": "--current-sources; probe_current_repository/current_source_evidence",
+      "source_contract": "tests/core_set_home_scheduler_contract_test.py",
+      "points": ["v17-000", "v17-001", "v17-002", "v17-003", "v17-005", "v17-006", "v17-008", "v17-009", "v17-010"],
+      "evidence": "current UTF8 source hashes + exact caller line/anchor + all lara Swift provider binding candidates; reference30 roots/244 words replay separately",
+      "scope": "current source callers only; no same-meaning producer bound, no claim about opaque external Partial archive internals",
+      "original_runtime_receipt_verified": false,
+      "device_effect_verified": false
+    },
     "local_observation_receipts": {
       "source_contract": "tests/core_set_local_observation_receipt_contract_test.py",
       "cadence_math_contract": "tests/core_set_presentation_cadence_test.cpp",
@@ -3623,25 +3633,29 @@
     "v17-000": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetHomeSettings, capability=homeSettings>",
       "state_field": "home.desired.runMode",
-      "evidence_required": "取证安全/效率对应的非菜单资源或调度策略、原包枚举转换、切换副作用和停止恢复；新增homeSettings同义runMode字段消费者。",
+      "current_caller_evidence": "home_current_caller_probe: home_state/home_refusal; no current home consumer binding",
+      "evidence_required": "取证C+12c int32 0/1对应的非菜单资源或调度策略、切换副作用和停止恢复；当前只有可选state和拒绝入口，新增homeSettings同义runMode字段消费者。",
       "receipt_required": "真实观察结果必须匹配本次请求身份；有副作用的切换与停止须独立恢复回执。"
     },
     "v17-001": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetHomeSettings, capability=homeSettings>",
       "state_field": "home.desired.coverMode",
-      "evidence_required": "取证全局/局内/关闭对应的遮挡读取、过滤顺序、作用域和关闭清理；新增homeSettings同义coverMode字段消费者。",
+      "current_caller_evidence": "home_current_caller_probe: home_state/home_refusal; no current home consumer binding",
+      "evidence_required": "取证C+2f bool/C+130 int32的全局/局内/关闭对应遮挡读取、过滤顺序、作用域和关闭清理；off保留原mode，新增homeSettings同义coverMode字段消费者。",
       "receipt_required": "真实观察结果必须匹配本次请求身份；有副作用的切换与停止须独立恢复回执。"
     },
     "v17-002": {
       "interface": "CoreSetFeatureConsumer<State=待定义动作请求/结果, capability=kernelAction>",
       "state_field": "not_defined:kernelAction",
-      "evidence_required": "提供kernelAction的菜单动作请求/结果类型、授权初始化入口、请求身份及阶段/失败/停止回执；不能把现有DarkSword状态观察当按键已执行。",
+      "current_caller_evidence": "home_current_caller_probe: kernel_call; laramgr.run -> ds_run returns Bool with global fraction, not matching original token lifecycle",
+      "evidence_required": "4f00门禁→63a4任务→6938 watchdog：acquire原token匹配block+38，240秒总超时/20秒页计数停滞；提供同义动作请求、原任务owner、完成/失败/取消/清理回执。当前DarkSword Bool/fraction或Coordinator180秒offset超时不等同，不能把状态观察当按键已执行。",
       "receipt_required": "真实观察结果必须匹配本次请求身份；有副作用的切换与停止须独立恢复回执。"
     },
     "v17-003": {
       "interface": "CoreSetFeatureConsumer<State=待定义动作请求/结果, capability=informationAction>",
       "state_field": "not_defined:informationAction",
-      "evidence_required": "提供informationAction的菜单动作请求/结果类型、目标身份读取入口及请求匹配的结果/失败回执；不能把被动targetReadReady当按键动作回执。",
+      "current_caller_evidence": "home_current_caller_probe: kernel_cache_call; fetchkcache -> fetched&&dlkcache parses this device's kernel, not original named-information action",
+      "evidence_required": "538c Host门禁/信息status1→非空命名输入→609a8六字段tuple→6cc8读取0x288信息→60358校验→648ac发布status2；失败清tuple/cache并6274(3)。提供同义命名输入/owner及请求匹配的失败、取消、清理回执，不能把hasOffsets/被动targetReadReady当动作回执。",
       "receipt_required": "真实观察结果必须匹配本次请求身份；有副作用的切换与停止须独立恢复回执。"
     },
     "v17-106": {
@@ -3835,26 +3849,31 @@
     "v17-005": {
       "field": "homeSnapshot.environment",
       "producer_available": false,
+      "current_caller_evidence": "home_current_caller_probe: kernel_call/range_fetch/observation_boundary; dsready/Partial final Bool do not own QXA107 environment state; provider scan unbound",
       "requirement": "原4010+2e4字段由5f14系统支持分类与QXA107 phase/inFlight/ready合成，不能用nativeReady替代。固定CoreSetHomeReferenceObservationProvider接口；下一包记录同请求/observer epoch/sequence/host generation及原始环境状态，文本UTF8最多63字节。"
     },
     "v17-006": {
       "field": "homeSnapshot.information",
       "producer_available": false,
+      "current_caller_evidence": "home_current_caller_probe: kernel_cache_call/observation_boundary; current-device hasOffsets Bool is not 538c named-information status",
       "requirement": "原4010→4e00将global0x100c56da0状态与可选信息消息格式化到+464，生命周期属于538c；目标只读身份不是此字段。provider接口保留真实request/generation/状态转换/失败/停止，文本UTF8最多191字节。"
     },
     "v17-008": {
       "field": "homeSnapshot.stage",
       "producer_available": false,
+      "current_caller_evidence": "home_current_caller_probe: kernel_call/observation_boundary; darksword.h exposes free-form log and double fraction, no same-meaning stage snapshot publisher",
       "requirement": "原4010→5c6a8持锁复制global0x100c2c3b8的0x168快照，读取+78阶段缓冲到home+144；running bool不是阶段。provider需真实阶段文本及同请求/epoch/sequence/host generation，文本UTF8最多127字节；无绑定时保持unavailable。"
     },
     "v17-009": {
       "field": "homeSnapshot.completedPages/totalPages",
       "producer_available": false,
+      "current_caller_evidence": "home_current_caller_probe: kernel_call/observation_boundary; ds_progress_callback_t(double) is not original UInt64 page pair/request snapshot",
       "requirement": "原链4010→4e2e4→2fd1c，页面phase=0x100c20284、UInt64计数=288/290；需要同一运行请求/producer epoch/sequence/阶段/完成失败与停止回执的真实provider。recordHomeProducerProbeEvent已提供只读诊断接口，但不显示未绑定provider的计数，不用DarkSword fraction替代。"
     },
     "v17-010": {
       "field": "homeSnapshot.downloadedBytes/totalBytes/environmentStage",
       "producer_available": false,
+      "current_caller_evidence": "home_current_caller_probe: range_fetch/kernel_cache_call/local_copy/ota_switch/observation_boundary; archive size, decompressed member length, local-copy bytes and OTA disabled.plist write bytes are four different units/owners, none is original qm571 progress callback",
       "requirement": "原链4010→112d0→QXA107 qx327/qx307:；0x170 snapshot包含phase/inFlight/ready/errorCode及UInt64 bytes(+10/+18)。新增已回放qm571调用ff24→selector72c640→bfc0，进度block调用cac0/cbd4/d6dc，qm543有22个selector调用点，totalBytes仅generation相等时更新。下一包记录request/epoch/sequence、代次原始位、callback bytes及qm543状态/失败/取消；URL/path/client只记录presence/digest。需要真实同任务OTA provider，不以只读诊断或fetchkcache本地复制量替代。"
     }
   },

@@ -260,6 +260,82 @@ def analyze(core_path: Path, target_path: Path) -> dict:
     values = {index: struct.unpack_from("<Q", core, template + index * 8 - BASE)[0]
               for index in (38, 47, 49, 57, 63, 68)}
     assert values == {38: 0x1700, 47: 0x258, 49: 0x88C, 57: 0x190, 63: 0x2758, 68: 0x3BE0}
+    # Micro-CFG: history ready -> distance/dt gate -> local delta velocity ->
+    # range gate -> optional smoothing -> sample commit -> .35s/2s/25 gate.
+    # None of these sites reads target RepMovement.LinearVelocity.
+    remaining_core_sites = {
+        "motion_local_clock": (0x1000D9514, "bl", "#0x100123d2c"),
+        "motion_clock_double": (0x100123D34, "ldr", "d0, [x8, #0x10]"),
+        "motion_distance_gate": (0x1000D9B20, "fmov", "#0.75000000"),
+        "motion_interval": (0x1000D9B2C, "fsub", "d3, d8, d0"),
+        "motion_min_interval": (0x1000D9B34, "b.lt", "#0x1000d9c00"),
+        "motion_max_interval": (0x1000D9B38, "fmov", "#1.00000000"),
+        "motion_delta_divide": (0x1000D9B4C, "fdiv", "s3, s4, s0"),
+        "motion_speed_gate": (0x1000D9B80, "fcmp", "s2, s14"),
+        "motion_smoothing": (0x1000D9BA8, "fmla", "v0.2s, v3.2s, v2.2s"),
+        "motion_sample_commit": (0x1000D9BD8, "str", "d8, [x0, #0x38]"),
+        "motion_first_seen": (0x1000D9BF0, "stp", "d8, d8, [x0, #0x30]"),
+        "motion_latest_seen": (0x1000D9C04, "str", "d8, [x0, #0x40]"),
+        "motion_lifetime": (0x1000D9C34, "fmov", "#2.00000000"),
+        "motion_sample_age": (0x1000D9C48, "ldr", "d1, [x9, #0xf98]"),
+        "motion_min_speed": (0x1000D9C6C, "fmov", "#25.00000000"),
+        "prediction_gravity": (0x1000DDEF4, "mov", "w21, #-0x3c0b0000"),
+        "prediction_position_z": (0x1000DE094, "ldr", "s1, [x20, #0x28]"),
+        "prediction_velocity_z": (0x1000DE098, "ldr", "s2, [x20, #0x34]"),
+        "prediction_linear_z": (0x1000DE09C, "fmadd", "s1, s2, s0, s1"),
+        "prediction_quadratic_z": (0x1000DE0A8, "fmadd", "s1, s2, s0, s1"),
+        "bone_head_profile_first": (0x1000D8BA8, "ldr", "w27, [x8]"),
+        "bone_head_transform": (0x1000D9010, "bl", "#0x1000e3654"),
+        "bone_head_top_record": (0x1000D94E4, "str", "s1, [sp, #0x3cc]"),
+        "information_health_clamp": (0x1000DC108, "fcsel", "s12, s0, s1, mi"),
+        "information_native_background": (0x1000DC168, "bl", "#0x10013b28c"),
+        "information_health_renderer": (0x1000DC200, "bl", "#0x1000d3f70"),
+        "information_native_font_measure": (0x1000DC28C, "bl", "#0x100143400"),
+    }
+    remaining_target_sites = {
+        "bone_native_registered": (0x10A3C4124, "ldrb", "w8, [x0, #0xe0]"),
+        "bone_native_registration_gate": (0x10A3C4128, "tbnz", "#2"),
+        "bone_native_flags": (0x10A3C4150, "ldr", "w9, [x0, #0x25c]"),
+        "bone_native_plain_transform": (0x10A3C4158, "ldp", "[x21, #0x1f0]"),
+        "bone_native_decoder_branch": (0x10A3C4178, "tbz", "#0x16"),
+        "bone_native_decoder_dispatch": (0x10A3C41A0, "blr", "x8"),
+        "bone_array_count": (0x10A95EC68, "ldr", "w9, [x0, #0x840]"),
+        "bone_array_data": (0x10A95EC74, "ldr", "x9, [x0, #0x838]"),
+        "bone_array_stride": (0x10A95EC78, "mov", "w10, #0x30"),
+        "opened_class_slot": (0x10679CB4C, "ldr", "x0, [x8, #0xf80]"),
+        "opened_class_owner": (0x10679CBAC, "add", "x1, x1, #0xdf4"),
+        "opened_bool_setter": (0x10679CB40, "strb", "w8, [x0, #0x5fd]"),
+        "opened_onrep_dispatch": (0x10679C990, "bl", "#0x104081b74"),
+        "opened_onrep_byte": (0x104081C1C, "ldrb", "w8, [x19, #0x5fd]"),
+        "opened_onrep_old_compare": (0x104081C20, "cmp", "w8, w20"),
+        "opened_onrep_callback": (0x104081C2C, "bl", "#0x10679c8a4"),
+        "wrong_opened_owner": (0x106E727E8, "add", "x1, x1, #0x726"),
+        "wrong_opened_setter": (0x106E7277C, "strb", "w8, [x0, #0x68c]"),
+    }
+    remaining_observed = {}
+    for domain, binary, sites in (("core", core, remaining_core_sites), ("target", target, remaining_target_sites)):
+        for label, (va, mnemonic, operand) in sites.items():
+            instruction = next(decoder.disasm(binary[va - BASE:va - BASE + 4], va))
+            assert instruction.mnemonic == mnemonic and operand in instruction.op_str, (label, instruction.mnemonic, instruction.op_str)
+            remaining_observed[label] = {"binary": domain, "va": hex(va), "file_offset": hex(va - BASE),
+                                         "instruction": f"{instruction.mnemonic} {instruction.op_str}"}
+    motion_constants = {"min_interval": (0x100AC83D0, "d", 0.004), "max_speed": (0x100AC82D8, "f", 30000),
+                        "max_sample_age": (0x1008A5F98, "d", 0.35), "old_weight": (0x1008A3AB0, "f", 0.35),
+                        "new_weight": (0x1008A3AB4, "f", 0.65)}
+    for label, (va, kind, expected) in motion_constants.items():
+        actual = struct.unpack_from("<" + kind, core, va - BASE)[0]
+        assert abs(actual - expected) < 1e-7, (label, actual)
+    head_profiles = {}
+    for count, va in ((61, 0x100AC8698), (63, 0x100AC8708), (64, 0x100AC8778),
+                      (65, 0x100AC87E8), (66, 0x100AC87E8), (70, 0x100AC8858), (71, 0x100AC8858),
+                      (72, 0x100AC88C8), (73, 0x100AC8938), (95, 0x100AC89A8)):
+        index = struct.unpack_from("<i", core, va - BASE)[0]
+        assert index == (28 if count in (70, 71) else 6)
+        head_profiles[count] = {"table": hex(va), "head_index": index}
+    for va, expected in ((0x10CD16DF4, "InteractiveTreasureBox"), (0x10CE8C726, "STExtraLootTruckAISpawner")):
+        assert target[va - BASE:va - BASE + 120].decode("utf-16le").split("\0", 1)[0] == expected
+    assert property_at(target, 0x10F2CCD68) == ("GrenadeRadius", 0x628)
+    assert property_at(target, 0x1100510A0) == ("LastRepReplicatedMovementTime", 0x5D8)
     return {"core_sha256": CORE_SHA, "target_sha256": TARGET_SHA, "sites": observed,
             "strings": {hex(va): text for va, text in STRINGS.items()}, "warning_prefix": prefix,
             "target_properties": properties, "template_values": values,
@@ -267,11 +343,14 @@ def analyze(core_path: Path, target_path: Path) -> dict:
             "grenade_clock_lifecycle_sites": clock_observed,
             "health_status_enum": health_status,
             "ray_ui_selector_fixups": ui_selectors,
+            "remaining_semantic_sites": remaining_observed, "bone_head_profiles": head_profiles,
+            "motion_producer_micro_cfg": ["history-ready", "distance>.75 and .004<=dt<=1", "local-delta/dt",
+                "1<speed<30000", "new*.65+old*.35", "sample-commit", "first-age<=2 and sample-age<=.35 and speed>25"],
             "boundary": {"timer": "target_clock_owner_closed_reference_258_is_children_num", "radius": "local_circle_is_not_world_blast_radius",
                          "warning_fallback": "owner_rep_movement_rotation_yaw_closed_capture_stability_not_network_freshness",
                          "opened": "children_num_eq1_proxy_not_gameplay_state",
-                         "information": "graphical_layout_not_closed",
-                         "ray": "native_scale_points_conversion_closed_bone_head_and_device_pixels_not_verified",
+                         "information": "native_background_health_renderer_and_font_measure_not_local_text_layout",
+                         "ray": "known_requested_bone_head_closed_full_coverage_and_device_pixels_not_verified",
                          "count": "last_breath_zero_closed_other_zero_states_and_1700_flags_owner_not_closed",
                          "device": "not_verified"}}
 
@@ -288,4 +367,5 @@ if __name__ == "__main__":
     else:
         target_count = len(result['warning_fallback_lifecycle_sites']) + len(result['grenade_clock_lifecycle_sites'])
         print(f"PASS: hash-bound Core {len(result['sites'])} / target lifecycle {target_count} instructions / {len(result['strings'])} strings / {len(result['target_properties'])} properties")
-        print("LIMIT: fallback/clock owner statically closed; network freshness, blast radius, animation, information layout and device remain unverified")
+        print(f"PASS: remaining micro-CFG {len(result['remaining_semantic_sites'])} instructions / {len(result['bone_head_profiles'])} head profiles")
+        print("LIMIT: local animation is not target physics/blast radius; sync-opened is not children equivalence; network freshness, full information layout and device remain unverified")

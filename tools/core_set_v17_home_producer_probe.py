@@ -7,6 +7,7 @@ proof. Code after the first RET is exposed separately, never presumed reachable.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -31,6 +32,10 @@ ROOTS = {
     "environment_support": 0x100005F14, "information_status": 0x100004E00,
     "stage_snapshot": 0x10005C6A8, "host_snapshot": 0x100055834,
     "configuration_get": 0x1000122A4, "configuration_set": 0x100012E34,
+    "kernel_workflow_block": 0x1000063A4, "kernel_watchdog_block": 0x100006938,
+    "information_resolve": 0x1000609A8, "information_read": 0x100006CC8,
+    "information_validate": 0x100060358, "information_publish": 0x1000648AC,
+    "information_error": 0x100064B80,
 }
 PROOF_SITES = [0x100004278, 0x100004284, 0x1000042C0, 0x1000042D0,
                0x10004E328, 0x10002FD48, 0x10002FD58, 0x10002FD64,
@@ -44,10 +49,136 @@ PROOF_SITES = [0x100004278, 0x100004284, 0x1000042C0, 0x1000042D0,
                0x10000D6CC, 0x10000D6D4, 0x10000A1A4, 0x10000A1BC,
                0x100004204, 0x100004230, 0x100004244, 0x100004338,
                0x1000043BC, 0x100004414, 0x100004428, 0x10000444C,
-               0x100004E28, 0x10005C6D0]
+               0x100004E28, 0x10005C6D0,
+               0x100006964, 0x100006990, 0x1000069F0, 0x100006A00,
+               0x10000645C, 0x1000054BC, 0x100005554, 0x10000566C,
+               0x10000567C, 0x1000056B4, 0x1000050D4, 0x100005180]
 PAGES = {0x100C20280, 0x100C20281, 0x100C20284, 0x100C20288,
          0x100C20290, 0x100C20298, 0x100C202A0}
 CONFIG = {0x100C5839C, 0x100C5829F, 0x100C583A0}
+
+CURRENT_SOURCES = {
+    "coordinator": "lara/views/app/CoreSetRuntimeCoordinator.swift",
+    "state": "lara/views/app/CoreSetFeatureState.swift",
+    "menu": "lara/views/app/CoreSetMenuViewController.swift",
+    "telemetry": "lara/views/app/CoreSetHomeTelemetrySource.swift",
+    "manager": "lara/classes/laramgr.swift",
+    "dark_sword_api": "lara/kexploit/darksword.h",
+    "local_copy": "lara/funcs/fetchkcache.swift",
+    "offsets": "lara/kexploit/offsets.m",
+    "partial_api": "lara/kexploit/Partial.h",
+    "partial": "lara/kexploit/Partial.m",
+    "grab_api": "lara/headers/libgrabkernel2.h",
+    "settings": "lara/views/app/settings/SettingsView.swift",
+    "ota_view": "lara/views/tweaks/OTAView.swift",
+    "ota_api": "lara/kexploit/ota.h",
+    "ota": "lara/kexploit/ota.m",
+    "dependency_pin": "scripts/build_ipa_pe.sh",
+}
+
+
+def current_source_evidence(sources: dict[str, str], swift_sources: dict[str, str],
+                            dependency_present: bool) -> dict:
+    """Source-only caller evidence, not a native parity assertion or compiler.
+
+    Every required anchor must be present. Provider search is a bounded lexical
+    inventory of current Swift sources, not a claim about an absent external
+    archive's internal callbacks. A detected provider is never auto-promoted.
+    """
+    def site(owner, anchor):
+        source = sources[owner]
+        positions = [match.start() for match in re.finditer(re.escape(anchor), source)]
+        if not positions:
+            raise ValueError(f"current source anchor missing: {owner}/{anchor}")
+        return {"source": CURRENT_SOURCES[owner], "anchor": anchor,
+                "lines": [source.count("\n", 0, position) + 1 for position in positions]}
+
+    manifest = [{"source": CURRENT_SOURCES[owner],
+                 "sha256_utf8_text": hashlib.sha256(source.encode("utf-8")).hexdigest()}
+                for owner, source in sorted(sources.items())]
+    conformers, bind_calls, home_bindings = [], [], []
+    for path, source in sorted(swift_sources.items()):
+        # All matches retain their source location for manual resolution. The
+        # declaration itself is excluded, not merely its entire source file.
+        for match in re.finditer(r"\bclass\s+(\w+)\s*:[^{]*\bCoreSetHomeReferenceObservationProvider\b", source):
+            conformers.append({"source": path, "class": match[1], "line": source.count("\n", 0, match.start()) + 1})
+        for match in re.finditer(r"\bbindHomeReferenceObservationProvider\s*\(", source):
+            prefix = source[source.rfind("\n", 0, match.start()) + 1:match.start()]
+            if re.search(r"\bfunc\s*$", prefix):
+                continue
+            bind_calls.append({"source": path, "line": source.count("\n", 0, match.start()) + 1})
+        for match in re.finditer(r"bindGameConsumer\([^\n;]*to:\s*\\\.home\)", source):
+            home_bindings.append({"source": path, "line": source.count("\n", 0, match.start()) + 1})
+    evidence = {
+        "home_state": [site("state", "var runMode: CoreSetRunMode?"), site("state", "var coverMode: CoreSetCoverMode?")],
+        "home_refusal": [site("menu", "home.runMode：未提供同义"), site("menu", "home.coverMode：未提供")],
+        "kernel_call": [site("coordinator", "manager.run"), site("manager", "let result = ds_run()"),
+                        site("manager", "let success = result == 0 && ds_is_ready()"),
+                        site("dark_sword_api", "typedef void (*ds_progress_callback_t)(double progress);")],
+        "kernel_cache_call": [site("coordinator", "let fetched = fetchkcache()"), site("coordinator", "let loaded = fetched && dlkcache()"),
+                              site("settings", "let fetched = fetchkcache()"), site("settings", "if fetched {"),
+                              site("settings", "try fm.copyItem(at: url, to: dest)"), site("settings", "ok = dlkcache()"),
+                              site("offsets", "fileExistsAtPath:outpath"), site("offsets", "kc_fetch_kernelcache_by_range(outpath)"),
+                              site("offsets", "grab_kernelcache(outpath)"), site("offsets", "return resolvekernoffsets(outpath);")],
+        "range_fetch": [site("partial", "[Partial partialZipWithURL:url error:&error]"), site("partial", "[zip size]"),
+                        site("partial", "[zip getFileForPath:entry error:&error]"), site("partial", "成员解压后 %lu 字节"),
+                        site("partial_api", "- (unsigned long long)size;"), site("partial_api", "- (NSData *)getFileForPath:(NSString *)path error:(NSError **)error;"),
+                        site("grab_api", "bool grab_kernelcache(NSString *outPath);")],
+        "local_copy": [site("local_copy", "read(src, rawBuffer.baseAddress!, bufferSize)"), site("local_copy", "totalBytes += n")],
+        "ota_switch": [site("ota_view", "let ok = ota_set_disabled(disabled)"), site("ota_api", "bool ota_set_disabled(bool disabled);"),
+                       site("ota", "NSPropertyListXMLFormat_v1_0"), site("ota", "uint64_t remaining = outData.length;"),
+                       site("ota", "totalWritten += n;")],
+        "observation_boundary": [site("telemetry", "protocol CoreSetHomeReferenceObservationProvider: AnyObject"),
+                                 site("coordinator", "func bindHomeReferenceObservationProvider("),
+                                 site("telemetry", "completedPages: nil, totalPages: nil"),
+                                 site("telemetry", "downloadedBytes: nil, totalBytes: nil")],
+    }
+    common = "real owner/request identity, producer epoch, monotone sequence, actual host generation, fresh observation, start/update/failure/cancel/stop receipt; submission != completion"
+    points = {
+        "v17-000": ("configuration + refused menu", ["home_state", "home_refusal"],
+                    "C+12c int32 0/1 real non-menu resource/scheduler consumer and switch/restore observation"),
+        "v17-001": ("configuration + refused menu", ["home_state", "home_refusal"],
+                    "C+2f bool + C+130 int32; global/in-game/off occlusion owner, off preserves prior mode, actual reset/stop result"),
+        "v17-002": ("laramgr.run -> ds_run Bool + global fraction callback", ["kernel_call"],
+                    "4f00 gates and native token; 63a4 workflow; 6938 matching-token watchdog 240s timeout/20s stagnant counter; completed/failure cleanup parity"),
+        "v17-003": ("current-device kernelcache/offset parsing", ["kernel_cache_call"],
+                    "538c host gate; nonempty named input -> 609a8 tuple -> 6cc8 0x288 information -> 60358 validation -> 648ac publish; info status1/2/3 and rollback"),
+        "v17-005": ("native-ready + Partial final Bool; not original environment", ["kernel_call", "range_fetch", "observation_boundary"],
+                    "5f14 same support classification + QXA107 phase/inFlight/ready composite environment, UTF8<=63 bytes"),
+        "v17-006": ("hasOffsets Bool; not original named-information lifecycle", ["kernel_cache_call", "observation_boundary"],
+                    "4e00/538c status1/2/3 + optional message, validated named-information owner, UTF8<=191 bytes"),
+        "v17-008": ("dsrunning/free-form log; no original typed stage publisher", ["kernel_call", "observation_boundary"],
+                    "5c6a8 lock-protected 0x168 snapshot stage buffer+0x78, UTF8<=127 bytes; running is not stage"),
+        "v17-009": ("DarkSword double fraction; no same-request page pair", ["kernel_call", "observation_boundary"],
+                    "2fd1c independent acquire fields executing/cancel/phase and UInt64 completed/total PAGE counters; coherent request/phase/completion/stop proof"),
+        "v17-010": ("Partial final decompressed length / local-copy bytes / system OTA switch", ["range_fetch", "kernel_cache_call", "local_copy", "ota_switch", "observation_boundary"],
+                    "qm571 transferred-byte callback and asset total in same units -> qm543 snapshot, native generation/sentinel; cancel increments generation; URL/path/client presence or digest only"),
+    }
+    return {"evidence_grade": "current source lexical/caller contract; no external archive, runtime or native effect proof",
+            "source_manifest": manifest, "caller_evidence": evidence,
+            "provider_scan": {"scope": "lara/**/*.swift", "files": len(swift_sources),
+                              "manifest_sha256": hashlib.sha256(json.dumps(
+                                  [(path, hashlib.sha256(source.encode('utf-8')).hexdigest())
+                                   for path, source in sorted(swift_sources.items())], separators=(",", ":")).encode()).hexdigest(),
+                              "conformers": conformers, "binding_calls": bind_calls, "home_consumer_bindings": home_bindings,
+                              "limit": "lexical candidates only; new candidate requires semantic audit, never auto-ready"},
+            "external_partial": {"present": dependency_present,
+                                 "pin": site("dependency_pin", "GRABKERNEL_COMMIT=e015c73aee6c2d3f6b0aad3fa629fe4c0429b7a6"),
+                                 "archive_sha256_pin": site("dependency_pin", "GRAB_PARTIAL_SHA256=83aea6edd5d538bf72a91ec8feb4847eb2ae99612e56fd9aa61ee9dfccca3241"),
+                                 "limit": "declared ABI has no progress/request/generation callback; absent checkout is NOT proof of absent internal functionality"},
+            "points": [{"id": point, "reference_evidence_key": "native-v17/" + point,
+                        "current_candidate": candidate, "caller_evidence_keys": keys,
+                        "missing_same_meaning_interface": requirement, "receipt_constraints": common,
+                        "producer_bound": False, "original_runtime_receipt_verified": False}
+                       for point, (candidate, keys, requirement) in points.items()]}
+
+
+def probe_current_repository(root: Path) -> dict:
+    sources = {owner: (root / path).read_text(encoding="utf-8") for owner, path in CURRENT_SOURCES.items()}
+    swift_sources = {path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+                     for path in (root / "lara").rglob("*.swift")}
+    return current_source_evidence(sources, swift_sources,
+        (root / "build/deps/libgrabkernel2/_external/lib/ios/libpartial.a").is_file())
 
 
 def pointer(value: int) -> int:
@@ -196,6 +327,21 @@ def probe(core: CoreImage) -> dict:
                             "total_update": "d458 obtains generation; d460 compares supplied generation; only equal branch d470 setOtaTotalBytes",
                             "next_capture": "record request/epoch/sequence plus native generation raw bits; path/URL/product/build/board/client as presence or digest only; callback transferred byte count; qm543 stage/inFlight/ready/error and snapshot totalBytes; task return is not completed",
                             "limit": "current DarkSword or fetchkcache local copy is not this producer"}},
+            "action_lifecycle": {
+                "v17-002": {"entry": "0x100004f00", "worker_block": "0x1000063a4",
+                            "watchdog_block": "0x100006938", "token_global": "0x100c20080",
+                            "watchdog": "6938 acquire token equals captured block+0x38; 240s overall timeout; 20s unchanged page progress; different token exits without acting",
+                            "block_setup_sites": ["0x1000050d4", "0x100005180"],
+                            "stage_worker": "646c prepares result; 6470 calls5c6a0; 6474..6480 copies0x168 via memcpy; callback65f8 submits operation4 with captured token",
+                            "unresolved": "5c6a0 provider identity/stop and60b0 operation4 response ownership/cleanup are not proved by these slices",
+                            "current_limit": "laramgr Bool/global fraction and Coordinator launch/180s offset epoch do not establish this action's lifecycle"},
+                "v17-003": {"entry": "0x10000538c", "typed_edges": [
+                    {"site": "0x1000054c8", "callee": "0x1000609a8", "input": "nonempty UTF8 input; w1=1; 0x30 tuple result via x8"},
+                    {"site": "0x100005560", "callee": "0x100006cc8", "input": "tuple[0] and zeroed0x288 information buffer"},
+                    {"site": "0x100005674", "callee": "0x100060358", "input": "tuple address and UTF8 name; false branch clears tuple/cache"},
+                    {"site": "0x100005684", "callee": "0x1000648ac", "input": "tuple+8 pair and tuple+0x28 count; only validated branch publishes status2"}],
+                            "rollback": "5698..56b0 zero tuple/cache; 56bc calls64b80(error); 56c8 calls6274(3)",
+                            "current_limit": "dlkcache resolves this device's kernel offsets; it is not this named-information pipeline"}},
             "status_semantics": {
                 "v17-004": {"snapshot_offset": "0x114", "status_owner": "lock-protected global0x100c20078 int32",
                             "strings": [core.string(address) for address in (0x10073A4B8, 0x10073A48B, 0x10073A498, 0x10073A4A8, 0x10073A47B)],
@@ -215,11 +361,16 @@ def probe(core: CoreImage) -> dict:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--reference-ipa", type=Path, required=True)
+    parser.add_argument("--reference-ipa", type=Path)
+    parser.add_argument("--current-sources", action="store_true", help="inspect current source callers without executing them")
     parser.add_argument("--compact", action="store_true")
     arguments = parser.parse_args()
-    result = probe(CoreImage(arguments.reference_ipa))
-    if arguments.compact:
+    if not arguments.reference_ipa and not arguments.current_sources:
+        parser.error("provide --reference-ipa and/or --current-sources")
+    result = probe(CoreImage(arguments.reference_ipa)) if arguments.reference_ipa else {}
+    if arguments.current_sources:
+        result["current_sources"] = probe_current_repository(Path(__file__).resolve().parents[1])
+    if arguments.compact and arguments.reference_ipa:
         result["functions"] = {name: {key: value for key, value in function.items()
                                      if key not in ("calls", "conditional_and_direct_branches")}
                                for name, function in result["functions"].items()}

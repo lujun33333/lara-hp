@@ -9,6 +9,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) double distanceUnitsDividedBy100;
 @property(nonatomic, copy, readonly, nullable) NSString *crateLevelLabel;
 @property(nonatomic, readonly, nullable) NSNumber *escapeBoxChildrenCount;
+// Independently observed InteractiveTreasureBox.bSyncHasBeenOpened byte.
+// Not substituted for Core's Children.Num==1 filter, or a network freshness proof.
+@property(nonatomic, readonly, nullable) NSNumber *interactiveTreasureBoxSyncOpened;
 @property(nonatomic, readonly, nullable) NSNumber *vehicleHPPercent;
 @property(nonatomic, readonly, nullable) NSNumber *vehicleFuelPercent;
 @end

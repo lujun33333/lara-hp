@@ -20,6 +20,7 @@ static constexpr uint64_t CSMPositionXORKeySlot = 0x110712dc;
 static constexpr uint64_t CSMVehicleClassSlot = 0x11c71920;
 static constexpr uint64_t CSMVehicleComponentClassSlot = 0x11cbcbd8;
 static constexpr uint64_t CSMCharacterClassSlot = 0x11c2b598;
+static constexpr uint64_t CSMInteractiveTreasureBoxClassSlot = 0x11b81f80;
 static constexpr int32_t CSMMaxActors = 50000;
 static constexpr NSUInteger CSMMaxMarks = 8192;
 
@@ -174,6 +175,7 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
 @property(nonatomic) double distanceUnitsDividedBy100;
 @property(nonatomic, copy) NSString *crateLevelLabel;
 @property(nonatomic) NSNumber *escapeBoxChildrenCount;
+@property(nonatomic) NSNumber *interactiveTreasureBoxSyncOpened;
 @property(nonatomic) NSNumber *vehicleHPPercent;
 @property(nonatomic) NSNumber *vehicleFuelPercent;
 @end
@@ -274,6 +276,9 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
     if (includeMetroArmor &&
         (!CSMReadValue(session, generation, base + CSMCharacterClassSlot, &characterClass) ||
          !CSMAddress(characterClass, 0x38))) return nil;
+    uint64_t openedClass = 0;
+    if (includeHideOpenedCrates &&
+        !CSMReadValue(session, generation, base + CSMInteractiveTreasureBoxClassSlot, &openedClass)) return nil;
     CoreSet::Vec3 localPosition = {};
     bool present = false;
     if (!CSMPosition(session, generation, base, local, &localPosition, &present) || !present) return nil;
@@ -281,11 +286,12 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
     NSMutableArray<CoreSetMetroArmorMark *> *metroMarks = [NSMutableArray array];
     NSUInteger namesMatched = 0, vehicleCandidates = 0, vehicleTyped = 0, vehicleComponentTyped = 0;
     NSUInteger hpValid = 0, fuelValid = 0, escapeBoxCandidates = 0, childrenOne = 0, levelsPresent = 0;
+    NSUInteger openedSyncKnown = 0, openedSyncTrue = 0, openedProxyDisagree = 0, openedWrongType = 0;
     NSUInteger metroCharacters = 0, metroSlots = 0, metroKnown = 0;
     struct Observed { uint64_t address; uint32_t nameIndex; uint64_t type;
                       CoreSet::Vec3 position; size_t record; std::string level;
                       bool escapeBox; CSMChildrenArray children;
-                      CSMVehicleObservation vehicle; };
+                      CSMVehicleObservation vehicle; bool openedObserved; uint8_t openedSync; };
     std::vector<uint64_t> observedPointers;
     std::vector<uint32_t> observedNames;
     std::vector<uint64_t> observedTypes;
@@ -417,6 +423,22 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
             }
             if (includeHideOpenedCrates && match >= 106 && match < 145 && nameMatch.escapeBox)
                 mark.escapeBoxChildrenCount = @(children.count);
+            bool openedObserved = false;
+            uint8_t openedSync = 0;
+            if (includeHideOpenedCrates && match >= 106 && match < 145 && nameMatch.escapeBox && openedClass) {
+                // Setter 10679cb3c stores byte +5fd; OnRep_SyncHasBeenOpened
+                // 10679c990 -> 104081b74 compares it and triggers the callback.
+                bool typed = false;
+                if (!CSMClassIsChildOf(session, generation, type, openedClass, &typed)) return nil;
+                if (typed) {
+                    if (!CSMReadValue(session, generation, actor + 0x5fd, &openedSync) || openedSync > 1) return nil;
+                    openedObserved = true;
+                    mark.interactiveTreasureBoxSyncOpened = @(openedSync != 0);
+                    ++openedSyncKnown;
+                    if (openedSync) ++openedSyncTrue;
+                    if ((children.count == 1) != (openedSync != 0)) ++openedProxyDisagree;
+                } else ++openedWrongType;
+            }
             if (vehicle.component && vehicle.componentType) {
                 CoreSet::VehiclePercent hp = CoreSet::vehiclePercent(vehicle.hp, vehicle.hpMax, true);
                 CoreSet::VehiclePercent fuel = CoreSet::vehiclePercent(vehicle.fuel, vehicle.fuelMax, false);
@@ -425,7 +447,7 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
             }
             [marks addObject:mark];
             observedMarks.push_back({actor, nameIndex, type, position, size_t(match), nameMatch.level,
-                                     nameMatch.escapeBox, children, vehicle});
+                                     nameMatch.escapeBox, children, vehicle, openedObserved, openedSync});
         }
     }
     uint64_t worldAfter = 0, poolAfter = 0, levelAfter = 0, clusterAfter = 0;
@@ -490,6 +512,7 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
         std::string name;
         CSMVehicleObservation vehicleAfter = {};
         CSMChildrenArray childrenAfter = {};
+        uint8_t openedSyncAfter = 0;
         if (!CSMReadValue(session, generation, item.address + 0x10, &type) || type != item.type ||
             !CSMPosition(session, generation, base, item.address, &position, &hasPosition) ||
             !hasPosition || std::memcmp(&position, &item.position, sizeof(position)) != 0 ||
@@ -510,6 +533,14 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
               vehicleAfter.hpMax != item.vehicle.hpMax || vehicleAfter.hp != item.vehicle.hp ||
               vehicleAfter.fuelMax != item.vehicle.fuelMax ||
               vehicleAfter.fuel != item.vehicle.fuel))) return nil;
+        if (item.openedObserved &&
+            (!CSMReadValue(session, generation, item.address + 0x5fd, &openedSyncAfter) ||
+             openedSyncAfter != item.openedSync || openedSyncAfter > 1)) return nil;
+    }
+    if (includeHideOpenedCrates) {
+        uint64_t openedClassAfter = 0;
+        if (!CSMReadValue(session, generation, base + CSMInteractiveTreasureBoxClassSlot, &openedClassAfter) ||
+            openedClassAfter != openedClass) return nil;
     }
     for (const ObservedMetro &item : observedMetro) {
         CSMMetroObservation now = {};
@@ -536,11 +567,14 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
         @"candidateCounts=capture-pass displayFields=end-reread actors=%d namesMatched=%lu marks=%lu vehicleRequested=%d vehicleCandidates=%lu "
          "vehicleTyped=%lu vehicleComponentTyped=%lu hpValid=%lu fuelValid=%lu "
          "openedRequested=%d escapeBoxCandidates=%lu childrenOne=%lu openedRule=children-num-eq1-proxy gameplayOpened=unproven "
+         "openedSyncClassKnown=%d openedSyncKnown=%lu openedSyncTrue=%lu openedProxyDisagree=%lu openedWrongType=%lu openedSyncScope=rendered-escape-only openedSyncOwner=interactive-treasurebox networkFreshness=unproven "
          "levelRequested=%d levelsPresent=%lu metroRequested=%d metroCharacters=%lu metroSlots=%lu metroKnown=%lu metroOnscreen=%lu",
         actors.count, (unsigned long)namesMatched, (unsigned long)marks.count, includeVehicleStatus,
         (unsigned long)vehicleCandidates, (unsigned long)vehicleTyped, (unsigned long)vehicleComponentTyped,
         (unsigned long)hpValid, (unsigned long)fuelValid, includeHideOpenedCrates,
-        (unsigned long)escapeBoxCandidates, (unsigned long)childrenOne, includeCrateLevel,
+        (unsigned long)escapeBoxCandidates, (unsigned long)childrenOne,
+        openedClass != 0, (unsigned long)openedSyncKnown, (unsigned long)openedSyncTrue,
+        (unsigned long)openedProxyDisagree, (unsigned long)openedWrongType, includeCrateLevel,
         (unsigned long)levelsPresent, includeMetroArmor, (unsigned long)metroCharacters,
         (unsigned long)metroSlots, (unsigned long)metroKnown, (unsigned long)metroMarks.count];
     return snapshot;
