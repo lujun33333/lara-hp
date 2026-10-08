@@ -155,9 +155,11 @@ static uint32_t CSContext(UIWindow *window) {
         !CSMessage(_process, cls, alloc, 0, 0, &controller) || !controller ||
         !CSMessage(_process, controller, init, 0, 0, &initialized) || !initialized) return NO;
     side.controller = initialized;
+    const uint32_t context = side.context;
+    const double level = side.level;
     if (!CSMainInvocation(_process, initialized, registerSelector,
-                          &side.context, sizeof(side.context),
-                          &side.level, sizeof(side.level), nullptr)) return NO;
+                          &context, sizeof(context),
+                          &level, sizeof(level), nullptr)) return NO;
     side.registered = YES;
     return YES;
 }
