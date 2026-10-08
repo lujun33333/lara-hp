@@ -69,6 +69,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     }
     var onClose: (() -> Void)?
     var onExitHUD: (() -> Void)?
+    var onHomeProbeRefusal: ((CoreSetHomeProbePoint, Int?) -> Void)?
     private var hostedExitAvailable = false
     func setHostedExitAvailable(_ available: Bool) {
         hostedExitAvailable = available
@@ -259,7 +260,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         case .localAimDisplay: evidence = proof(featureState.aimDisplay)
         default: evidence = (false, "未提供该能力的字段回执消费者")
         }
-        let scope = capability == .localAimDisplay ? "替代预览，不算v1.7原效果" : "声明字段，本次未验证v1.7设备效果"
+        let scope = capability == .localAimDisplay ? "替代预览，不算v1.7原效果" :
+            (capability == .frameScheduling ? "Metal调度器参数回读；非实测呈现FPS" : "声明字段，本次未验证v1.7设备效果")
         let text = "配置：\(control.accessibilityValue ?? "未选择")；\(evidence.0 ? "回执匹配" : "效果未确认")；\(scope)"
         control.accessibilityValue = text
         let identifier = control.accessibilityIdentifier ?? "unknown"
@@ -711,6 +713,11 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
 
     @objc private func explainUnavailable(_ sender: UIButton) {
         interactionControlIdentifier = sender.accessibilityIdentifier ?? "unavailable"
+        if selectedPage == 0, let point = CoreSetHomeProbePoint.allCases.first(where: {
+            interactionControlIdentifier.contains($0.stableID)
+        }) {
+            onHomeProbeRefusal?(point, point == .runMode || point == .coverMode ? sender.tag : nil)
+        }
         let title = sender.accessibilityLabel ?? sender.currentTitle ?? "该控件"
         let reason = sender.accessibilityHint ?? "功能尚未接入，未执行操作"
         showConfigurationFeedback("\(title)：尚未生效；\(reason)")
@@ -766,6 +773,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             if disabledControl || disabledRow {
                 let info = UnavailableInfoButton(type: .custom)
                 info.explainedView = child
+                info.tag = child.tag
                 info.frame = child.frame
                 info.accessibilityLabel = child.accessibilityLabel ?? (child as? UIButton)?.currentTitle ??
                     container.subviews.compactMap { ($0 as? UILabel)?.text }.first ?? "该控件"
@@ -964,6 +972,14 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         if isViewLoaded { rebuildMenu() }
     }
 
+    func invalidateFrameRateObservation(reason: String) {
+        precondition(Thread.isMainThread)
+        featureState.frameRate.invalidateSchedulerObservation(reason: reason)
+        showConfigurationFeedback("v17-029：Metal调度器旧回读已撤销；配置保留，当前调度效果未确认")
+        NSLog("Core-SET: menu stage=observation-invalidated point=v17-029 capability=frameScheduling confirmed=0 reason=%@", reason)
+        if isViewLoaded { rebuildMenu() }
+    }
+
     @discardableResult
     func bindGameConsumer<C: CoreSetFeatureConsumer>(_ consumer: C,
         to path: WritableKeyPath<CoreSetFeatureState, CoreSetFeatureChannel<C.State>>) -> Bool {
@@ -1042,7 +1058,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 if channel.isSupportedDesiredConfirmed {
                     self.showConfigurationFeedback(channel.capability == .localAimDisplay
                         ? "替代预览回执已确认；不算v1.7原效果闭合"
-                        : "消费者声明字段回执已确认；v1.7设备效果仍需验证")
+                        : (channel.capability == .frameScheduling ? "Metal调度器参数回读已确认；不是实测呈现FPS"
+                            : "消费者声明字段回执已确认；v1.7设备效果仍需验证"))
                 }
                 else if case .unavailable(let reason) = channel.availability {
                     self.showConfigurationFeedback("配置已记录；尚未生效：\(reason)")
@@ -1407,6 +1424,17 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             caption.minimumScaleFactor = 0.72
             row.addSubview(caption)
             let parts = title.components(separatedBy: "  ")
+            if selectedPage == 0 {
+                let homePoint: CoreSetHomeProbePoint? = parts[0] == "运行模式" ? .runMode :
+                    (parts[0] == "掩体判断" ? .coverMode : (title == "内核利用" ? .kernelAction :
+                        (title == "获取信息" ? .informationAction : nil)))
+                if let homePoint {
+                    row.accessibilityIdentifier = "core-set.0.\(homePoint.stableID).unavailable"
+                    if homePoint == .runMode || homePoint == .coverMode {
+                        row.isUserInteractionEnabled = true; row.isAccessibilityElement = false
+                    }
+                }
+            }
             if let range = ranges[title] {
                 caption.frame = CGRect(x: 0, y: 0, width: width * 0.45, height: height - 2)
                 let slider = UISlider(frame: CGRect(x: width * 0.46, y: 0, width: width * 0.50, height: height - 2))
@@ -1538,6 +1566,11 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                     selection.layer.cornerRadius = 5
                     selection.backgroundColor = gray(41, 230)
                     selection.setTitle(option, for: .normal)
+                    if selectedPage == 0, parts[0] == "掩体判断" {
+                        selection.tag = optionIndex
+                        selection.accessibilityLabel = "掩体判断  \(option)"
+                        selection.accessibilityIdentifier = "core-set.0.v17-001.option\(optionIndex).unavailable"
+                    }
                     selection.titleLabel?.font = font(12)
                     selection.titleLabel?.adjustsFontSizeToFitWidth = true
                     selection.titleLabel?.minimumScaleFactor = 0.72
@@ -1625,6 +1658,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                     selection.titleLabel?.font = font(12)
                     selection.setTitleColor(gray(255, 80), for: .normal)
                     selection.isEnabled = false
+                    selection.tag = optionIndex
+                    selection.accessibilityLabel = "运行模式  \(option)"
+                    selection.accessibilityIdentifier = "core-set.0.v17-000.option\(optionIndex).unavailable"
                     row.addSubview(selection)
                 }
             } else if title == "全开" || title == "全关" || kernelAction {

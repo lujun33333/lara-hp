@@ -20,6 +20,14 @@
       "reference_key_prefix": "native-v17/",
       "one_to_one_complete": false,
       "original_runtime_receipt_verified": false
+    },
+    "home_producer_probe": {
+      "tool": "tools/core_set_v17_home_producer_probe.py",
+      "source_contract": "tests/core_set_home_scheduler_contract_test.py",
+      "points": ["v17-000", "v17-001", "v17-002", "v17-003", "v17-009", "v17-010", "v17-029"],
+      "runtime_insertion": "CoreSetRuntimeCoordinator.recordHomeProducerProbeEvent",
+      "scope": "diagnostic-only; no action consumer or progress provider attached",
+      "original_runtime_receipt_verified": false
     }
   },
   "acceptance_rule": "visible/hittable/configurable/source contract alone never counts as original effect; device evidence and same-meaning consumer receipt are required.",
@@ -83,12 +91,12 @@
     "frame_rate": {
       "source": "lara/views/app/CoreSetFrameRateConsumer.swift",
       "producer": "apply",
-      "receipt": "applyFrameRate scheduler readback == requested + channel token match",
-      "scope": "live scheduler only; CA event-driven backend remains unavailable",
+      "receipt": "applyFrameRate live Metal property readback == requested + same host generation + channel token match",
+      "scope": "live MTKView preferred FPS property only; not measured presentation cadence; CA remains unavailable",
       "runtime_device_verified": false,
       "lifecycle": {
         "start": "CoreSetFrameRateConsumer.apply",
-        "update": "applyFrameRate/observedRenderFPS equality",
+        "update": "refreshSchedulerObservation revokes old actual after host-generation/value/readiness mismatch",
         "stop": "CoreSetFrameRateConsumer.stop -> restoreFrameRate"
       }
     },
@@ -3793,12 +3801,12 @@
     "v17-009": {
       "field": "homeSnapshot.completedPages/totalPages",
       "producer_available": false,
-      "requirement": "提供带来源身份、时间戳、总量单位和实际完成量的Core页面进度观察源；当前TelemetrySource返回nil，不生成假计数。"
+      "requirement": "原链4010→4e2e4→2fd1c，页面phase=0x100c20284、UInt64计数=288/290；需要同一运行请求/producer epoch/sequence/阶段/完成失败与停止回执的真实provider。recordHomeProducerProbeEvent已提供只读诊断接口，但不显示未绑定provider的计数，不用DarkSword fraction替代。"
     },
     "v17-010": {
       "field": "homeSnapshot.downloadedBytes/totalBytes/environmentStage",
       "producer_available": false,
-      "requirement": "提供ota-download状态、总字节和已下载字节的同一下载任务观察源及 freshness；当前TelemetrySource返回nil，不生成假进度。"
+      "requirement": "原链4010→112d0→QXA107 qx327/qx307:；0x170 snapshot包含phase/inFlight/ready/errorCode及UInt64 bytes(+10/+18)，qm543按generation门禁发布，cancel推进代次。需要同任务的真实OTA provider及完成失败/取消回执；只读诊断接口不充当provider，不用fetchkcache本地复制量替代。"
     }
   },
   "statistics": {

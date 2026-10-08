@@ -1,3 +1,19 @@
+#if defined(__cplusplus)
+#include <stddef.h>
+#include <string.h>
+namespace coreset_read_contract {
+inline constexpr size_t maximumLength = 0x10000;
+// Invalid spans are not writable contracts. Clear every valid bounded span
+// before checking address, generation, identity or transport completion.
+inline bool clearDestination(void *destination, size_t length) {
+    if (!destination || length == 0 || length > maximumLength) return false;
+    memset(destination, 0, length);
+    return true;
+}
+}
+#endif
+
+#if !defined(CORESET_READ_BUFFER_CONTRACT_ONLY)
 #import <Foundation/Foundation.h>
 
 NS_ASSUME_NONNULL_BEGIN
@@ -24,6 +40,8 @@ NS_ASSUME_NONNULL_BEGIN
 // capture. Only a changed sequence attributes lastReadDiagnostic to that capture.
 @property(nonatomic, readonly) uint64_t readFailureSequence;
 @property(nonatomic, copy, readonly) NSString *lastReadDiagnostic;
+// Resource release/generation receipt; no payload or target-write capability.
+@property(nonatomic, copy, readonly) NSString *lastCleanupDiagnostic;
 
 // Only ShadowTrackerExtra 1.38.12/build 15915/LC_UUID 34b785b2... is accepted.
 // An unavailable task_read_for_pid port leaves this session unavailable; there is no
@@ -36,3 +54,4 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 NS_ASSUME_NONNULL_END
+#endif

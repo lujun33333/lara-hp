@@ -2,6 +2,7 @@
 #import "CoreSetReadSession.h"
 #import "CoreSetMappedPageWriteBackend.h"
 #include "CoreSetTargetWriteContract.h"
+#include "CoreSetActionEffectLedger.h"
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -11,12 +12,24 @@
                          mappedAliasReleased:(BOOL)mappedAliasReleased
                           generationAdvanced:(BOOL)generationAdvanced
                                   noInFlight:(BOOL)noInFlight {
+    // Legacy callers provide no target restoration/no-effects proof.
+    return [self initWithReadTaskPortReleased:readTaskPortReleased
+        mappedAliasReleased:mappedAliasReleased generationAdvanced:generationAdvanced
+        noInFlight:noInFlight targetEffectsResolved:NO];
+}
+- (instancetype)initWithReadTaskPortReleased:(BOOL)readTaskPortReleased
+                         mappedAliasReleased:(BOOL)mappedAliasReleased
+                          generationAdvanced:(BOOL)generationAdvanced
+                                  noInFlight:(BOOL)noInFlight
+                       targetEffectsResolved:(BOOL)targetEffectsResolved {
     if ((self = [super init])) {
         _readTaskPortReleased = readTaskPortReleased;
         _mappedAliasReleased = mappedAliasReleased;
         _generationAdvanced = generationAdvanced;
         _noInFlight = noInFlight;
-        _complete = readTaskPortReleased && mappedAliasReleased && generationAdvanced && noInFlight;
+        _targetEffectsResolved = targetEffectsResolved;
+        _complete = readTaskPortReleased && mappedAliasReleased && generationAdvanced &&
+            noInFlight && targetEffectsResolved;
     }
     return self;
 }
@@ -38,6 +51,7 @@
     CoreSetMappedPageWriteBackend *_backend;
     id<CoreSetTargetWriteAuthority> _authority;
     CoreSet::ControlRotationWriteGate _gate;
+    CoreSet::ActionEffectLedger _effects;
     uint64_t _generation;
     BOOL _pendingCleanup;
     BOOL _backendBound;
@@ -155,9 +169,15 @@
                 completedBytes:&completed error:&error] ? completed : 0;
         };
         auto write = [&](uint64_t address, const void *buffer, size_t length) -> size_t {
-            return address == controller + offset && length == expectedOld.length ?
-                [_backend writeControllerSlot:slot axis:axis controller:controller
-                                        bytes:buffer length:length] : 0;
+            if (address != controller + offset || length != expectedOld.length) return 0;
+            // Mark BEFORE calling the backend: partial/zero returns cannot
+            // independently prove that no effect occurred on the target.
+            _effects.markWriteAttempt();
+            NSLog(@"Core-SET: target-write stage=write-attempt lane=%u slot=%u axis=%u unresolvedEffects=1 effectEpoch=%llu request=%@ snapshot=%@",
+                (unsigned)lane, (unsigned)slot, (unsigned)axis,
+                (unsigned long long)_effects.attemptEpoch(), requestToken.UUIDString, snapshotID.UUIDString);
+            return [_backend writeControllerSlot:slot axis:axis controller:controller
+                                           bytes:buffer length:length];
         };
         auto result = _gate.transact(lease, oldBytes, newBytes, identity, read, write);
         _pendingCleanup = result.pending || _backend.pendingCleanup;
@@ -178,12 +198,18 @@
         CoreSetReadCleanupResult *readCleanup = [_readSession disconnect];
         BOOL advanced = _generation != UINT64_MAX;
         if (advanced) ++_generation;
+        const BOOL effectsResolved = _effects.targetEffectsResolved();
         _pendingCleanup = _pendingCleanup || !backendClean || !drained || !readCleanup.taskPortReleased ||
-            !readCleanup.generationAdvanced || !advanced || !mappedReleased;
+            !readCleanup.generationAdvanced || !advanced || !mappedReleased || !effectsResolved;
+        if (!effectsResolved) {
+            NSLog(@"Core-SET: target-write stage=stop ready=0 targetEffectsResolved=0 effectEpoch=%llu reason=explicit-independent-restoration-receipt-unavailable noAutomaticWriteback=1 noRotationInputClear=1",
+                  (unsigned long long)_effects.attemptEpoch());
+        }
         return [[CoreSetTargetWriteCleanupResult alloc]
             initWithReadTaskPortReleased:readCleanup.taskPortReleased
-            mappedAliasReleased:mappedReleased generationAdvanced:advanced
-            noInFlight:drained];
+            mappedAliasReleased:mappedReleased
+            generationAdvanced:advanced && readCleanup.generationAdvanced
+            noInFlight:drained && backendClean targetEffectsResolved:effectsResolved];
     }
 }
 @end

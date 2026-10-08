@@ -23,11 +23,18 @@ typedef NS_ENUM(uint8_t, CoreSetTargetWriteAxis) {
 @property(nonatomic, readonly) BOOL mappedAliasReleased;
 @property(nonatomic, readonly) BOOL generationAdvanced;
 @property(nonatomic, readonly) BOOL noInFlight;
+// Resource drain alone never proves a prior target write was restored.
+@property(nonatomic, readonly) BOOL targetEffectsResolved;
 @property(nonatomic, readonly) BOOL complete;
 - (instancetype)initWithReadTaskPortReleased:(BOOL)readTaskPortReleased
                          mappedAliasReleased:(BOOL)mappedAliasReleased
                           generationAdvanced:(BOOL)generationAdvanced
                                   noInFlight:(BOOL)noInFlight;
+- (instancetype)initWithReadTaskPortReleased:(BOOL)readTaskPortReleased
+                         mappedAliasReleased:(BOOL)mappedAliasReleased
+                          generationAdvanced:(BOOL)generationAdvanced
+                                  noInFlight:(BOOL)noInFlight
+                       targetEffectsResolved:(BOOL)targetEffectsResolved;
 @end
 
 @interface CoreSetTargetWriteResult : NSObject

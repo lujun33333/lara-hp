@@ -208,6 +208,11 @@ final class CoreSetRuntimeCoordinator {
     private(set) var lastStopResult: CoreSetHUDStopResult?
     // Read-only snapshot, not a second mutable configuration store.
     var featureState: CoreSetFeatureState { menu.featureState }
+    @discardableResult
+    func recordHomeProducerProbeEvent(_ event: CoreSetHomeProducerProbeEvent) -> Bool {
+        precondition(Thread.isMainThread)
+        return homeTelemetry.recordProducerProbeEvent(event)
+    }
     func invalidateReadFrameObservation(_ capability: CoreSetCapability, reason: String) {
         precondition(Thread.isMainThread)
         menu.invalidateReadFrameObservation(capability: capability, reason: reason)
@@ -219,8 +224,19 @@ final class CoreSetRuntimeCoordinator {
     }
     var playerStyleReady: Bool { playerConsumer?.availability == .ready }
     var materialStyleReady: Bool { materialConsumer?.availability == .ready }
-    var frameRateReady: Bool {
-        host.renderFPSControlReady && host.observedRenderFPS() >= 30
+    var frameRateObservation: CoreSetFrameRateObservation? {
+        precondition(Thread.isMainThread)
+        guard host.renderFPSControlReady, host.activeBackend == CoreSetHUDBackendMetal else { return nil }
+        let generation = host.generation
+        let observed = host.observedRenderFPS()
+        guard host.generation == generation, host.renderFPSControlReady,
+              (30...144).contains(observed) else { return nil }
+        return CoreSetFrameRateObservation(hostGeneration: generation, preferredFramesPerSecond: observed)
+    }
+    var frameRateReady: Bool { frameRateObservation != nil }
+    func invalidateFrameRateObservation(reason: String) {
+        precondition(Thread.isMainThread)
+        menu.invalidateFrameRateObservation(reason: reason)
     }
     func applyFrameRate(_ requested: Int) -> Bool {
         precondition(Thread.isMainThread)
@@ -296,6 +312,9 @@ final class CoreSetRuntimeCoordinator {
         }
         menu.onClose = { [weak self] in self?.publishStatus() }
         menu.onExitHUD = { [weak self] in self?.exitHostedHUD() }
+        menu.onHomeProbeRefusal = { [weak self] point, option in
+            self?.homeTelemetry.recordRefusedControl(point, option: option)
+        }
         Self.retained[identity] = self
         startPerformanceSampling()
     }
@@ -944,6 +963,7 @@ final class CoreSetRuntimeCoordinator {
     }
 
     private func publishStatus() {
+        frameRateConsumer?.refreshSchedulerObservation()
         let local = host.localSurfacesReady ? "本应用悬浮可用" : "本应用悬浮未就绪"
         let renderer = host.activeBackend == CoreSetHUDBackendMetal ? "Metal" : "CA"
         let frame = host.lastConsumedSequence > 0 ? "\(renderer) 本地帧已消费" : "\(renderer) 本地帧未确认"

@@ -45,6 +45,9 @@ static const uint8_t CSUUID[16] = {
     NSString *_lastReadDiagnostic;
     NSString *_lastLoggedReadFailureKind;
     CFAbsoluteTime _lastReadFailureLogTime;
+    NSString *_lastCleanupDiagnostic;
+    NSString *_lastLoggedCleanupKind;
+    CFAbsoluteTime _lastCleanupLogTime;
 }
 @end
 
@@ -56,6 +59,7 @@ static const uint8_t CSUUID[16] = {
         _diagnosticLabel = @"unassigned";
         _lastConnectDiagnostic = @"尚未尝试连接目标只读会话";
         _lastReadDiagnostic = @"no-read-failure";
+        _lastCleanupDiagnostic = @"no-cleanup-attempt";
     }
     return self;
 }
@@ -88,6 +92,9 @@ static const uint8_t CSUUID[16] = {
 - (uint64_t)readFailureSequence { @synchronized (self) { return _readFailureSequence; } }
 - (NSString *)lastReadDiagnostic {
     @synchronized (self) { return [_lastReadDiagnostic copy] ?: @"no-read-failure"; }
+}
+- (NSString *)lastCleanupDiagnostic {
+    @synchronized (self) { return [_lastCleanupDiagnostic copy] ?: @"cleanup-state-unknown"; }
 }
 
 // Called only while this session's lock is held. Never log the read buffer.
@@ -294,7 +301,8 @@ static const uint8_t CSUUID[16] = {
     @synchronized (self) {
         if (completedBytes) *completedBytes = 0;
         if (error) *error = nil;
-        if (!destination || length == 0 || length > 0x10000 || address == 0 ||
+        const BOOL writableSpan = coreset_read_contract::clearDestination(destination, length);
+        if (!writableSpan || address == 0 ||
             address > UINT64_MAX - length) {
             [self recordReadFailure:@"read-arguments-invalid" address:address length:length
                          generation:generation completed:0 result:KERN_INVALID_ARGUMENT];
@@ -347,9 +355,12 @@ static const uint8_t CSUUID[16] = {
 - (CoreSetReadCleanupResult *)disconnect {
     @synchronized (self) {
         BOOL released = YES;
+        kern_return_t releaseResult = KERN_SUCCESS;
+        const uint64_t previousGeneration = _generation;
         const BOOL hadIdentity = _task != MACH_PORT_NULL || _pid > 0 || _base != 0 || _path.length != 0;
         if (_task != MACH_PORT_NULL) {
-            released = mach_port_deallocate(mach_task_self(), _task) == KERN_SUCCESS;
+            releaseResult = mach_port_deallocate(mach_task_self(), _task);
+            released = releaseResult == KERN_SUCCESS;
         }
         if (released) _task = MACH_PORT_NULL;
         _pid = -1; _base = 0; _path = nil;
@@ -365,6 +376,19 @@ static const uint8_t CSUUID[16] = {
         }
         BOOL advanced = _generation != UINT64_MAX;
         if (advanced) ++_generation;
+        NSString *kind = !released ? @"task-port-release-failed" :
+            (!advanced ? @"generation-exhausted" : @"complete");
+        _lastCleanupDiagnostic = [NSString stringWithFormat:
+            @"%@ taskPortReleased=%d generationAdvanced=%d retainedPort=%d hadIdentity=%d previousGeneration=%llu sessionGeneration=%llu kr=0x%x",
+            kind, released, advanced, _task != MACH_PORT_NULL, hadIdentity,
+            (unsigned long long)previousGeneration, (unsigned long long)_generation,
+            (unsigned)releaseResult];
+        const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+        if (![_lastLoggedCleanupKind isEqualToString:kind] || now - _lastCleanupLogTime >= 30.0) {
+            _lastLoggedCleanupKind = [kind copy]; _lastCleanupLogTime = now;
+            NSLog(@"Core-SET: target-read lane=%@ stage=cleanup reason=%@",
+                _diagnosticLabel ?: @"unassigned", _lastCleanupDiagnostic);
+        }
         return [[CoreSetReadCleanupResult alloc] initWithTaskPortReleased:released generationAdvanced:advanced];
     }
 }

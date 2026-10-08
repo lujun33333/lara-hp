@@ -268,6 +268,17 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         phase = mayHaveEffects ? .active : .unknown
     }
 
+    // A live Metal scheduler property readback is not a measured presentation
+    // rate. Its proof expires when its host generation or property changes.
+    mutating func invalidateSchedulerObservation(reason: String) {
+        guard capability == .frameScheduling else { return }
+        actual = nil; observationInvalidationReason = reason
+        guard pendingStop == nil else { return }
+        generation = UUID(); pendingApply = nil
+        phase = mayHaveEffects ? .active : .unknown
+        // The underlying scheduler baseline still has to be restored on stop.
+    }
+
     mutating func prepareApply() -> CoreSetApplyRequest<Value>? {
         refreshAvailability()
         guard let binding = binding, binding.owner != nil else { return nil }
@@ -388,7 +399,7 @@ struct CoreSetRGBA: Equatable {
     var opaque: CoreSetRGBA { CoreSetRGBA(red: red, green: green, blue: blue, alpha: 1)! }
 }
 
-enum CoreSetRunMode: String { case safe, efficiency } // Native enum conversion unresolved.
+enum CoreSetRunMode: String { case safe, efficiency } // Reference UI 0/1 is evidenced; runtime strategy is not.
 enum CoreSetCoverMode: String { case global, inGame, off } // No guessed backend policy.
 enum CoreSetTheme: String { case dark, light }
 enum CoreSetFloatingPalette: Int, CaseIterable {
@@ -407,6 +418,11 @@ struct CoreSetHomeSettings: Equatable {
 
 struct CoreSetFrameRateSettings: Equatable {
     var framesPerSecond = CoreSetIntSetting(30...144)
+}
+
+struct CoreSetFrameRateObservation: Equatable {
+    let hostGeneration: UInt64
+    let preferredFramesPerSecond: Int
 }
 
 // Read-only observations: these are not desired configuration or fabricated status.
