@@ -21,19 +21,28 @@ struct CoreSetHomeObservation {
 }
 
 // Original OTA/environment/info/stage/page providers have a fixed read-only
-// insertion boundary. No implementation is fabricated from DarkSword fraction,
-// target-read readiness, file-copy sizes, or a submit function's return value.
-struct CoreSetHomeReferenceObservation {
+// insertion boundary. Current live local owners can populate it, but their
+// receipts remain explicitly distinct from the original Core runtime owners.
+struct CoreSetHomeReferenceFieldObservation {
+    let field: CoreSetHomeObservationField
     let identity: CoreSetHomeObservationIdentity
     let nativeRequestID: UUID
-    let nativeGeneration: UInt64?
+    let currentGeneration: UInt64?
+    let publishGenerationRaw: UInt64?
+    let nativeSequence: UInt64
     let snapshot: CoreSetHomeSnapshot
-    let supportedFields: Set<CoreSetHomeObservationField>
+    // Local equivalents remain useful live producers, but are never promoted
+    // to an original Core runtime receipt.
+    let originalRuntimeReceipt: Bool
+}
+struct CoreSetHomeReferenceObservation {
+    let fields: [CoreSetHomeObservationField: CoreSetHomeReferenceFieldObservation]
     let actionProbeEvents: [CoreSetHomeProducerProbeEvent]
 }
 protocol CoreSetHomeReferenceObservationProvider: AnyObject {
     var observerEpoch: UUID { get }
     func readObservation(hostGeneration: UInt64) -> CoreSetHomeReferenceObservation?
+    func stopObservation() -> Bool
 }
 
 struct CoreSetExistingHomeRuntimeObservation {
@@ -128,10 +137,11 @@ struct CoreSetHomeProducerProbeEvent {
 final class CoreSetHomeTelemetrySource {
     private let runtimeProvider: CoreSetExistingHomeRuntimeObservationProvider
     private weak var referenceProvider: CoreSetHomeReferenceObservationProvider?
-    private var referenceIdentity: CoreSetHomeObservationIdentity?
-    private var referenceRequest: UUID?
-    private var referenceNativeGeneration: UInt64?
-    private var referenceSnapshot: CoreSetHomeSnapshot?
+    private var referenceIdentities: [CoreSetHomeObservationField: CoreSetHomeObservationIdentity] = [:]
+    private var referenceRequests: [CoreSetHomeObservationField: UUID] = [:]
+    private var referenceGenerations: [CoreSetHomeObservationField: UInt64] = [:]
+    private var referenceNativeSequences: [CoreSetHomeObservationField: UInt64] = [:]
+    private var referenceSnapshots: [CoreSetHomeObservationField: CoreSetHomeSnapshot] = [:]
     private var observationsStopped = false
     init(runtimeProvider: CoreSetExistingHomeRuntimeObservationProvider = CoreSetLaraHomeRuntimeObservationProvider()) {
         self.runtimeProvider = runtimeProvider
@@ -139,16 +149,21 @@ final class CoreSetHomeTelemetrySource {
     func bindReferenceObservationProvider(_ provider: CoreSetHomeReferenceObservationProvider) {
         precondition(Thread.isMainThread)
         guard !observationsStopped else { return }
-        referenceProvider = provider; referenceIdentity = nil; referenceRequest = nil; referenceNativeGeneration = nil; referenceSnapshot = nil
+        referenceProvider = provider
+        referenceIdentities.removeAll(); referenceRequests.removeAll(); referenceGenerations.removeAll()
+        referenceNativeSequences.removeAll(); referenceSnapshots.removeAll()
     }
     @discardableResult
     func stopObservations() -> Bool {
         precondition(Thread.isMainThread)
-        observationsStopped = true; referenceProvider = nil
-        referenceIdentity = nil; referenceRequest = nil; referenceNativeGeneration = nil; referenceSnapshot = nil
+        observationsStopped = true
+        let referenceStopped = referenceProvider?.stopObservation() ?? true
+        referenceProvider = nil
+        referenceIdentities.removeAll(); referenceRequests.removeAll(); referenceGenerations.removeAll()
+        referenceNativeSequences.removeAll(); referenceSnapshots.removeAll()
         let stopped = runtimeProvider.stopObservation()
-        NSLog("Core-SET: home-observation stage=stop confirmed=%d scope=read-only-observation-owner native-action-stop=0", stopped ? 1 : 0)
-        return stopped && referenceProvider == nil
+        NSLog("Core-SET: home-observation stage=stop confirmed=%d reference-detached=%d scope=read-only-observation-owner native-action-stop=0", stopped ? 1 : 0, referenceStopped ? 1 : 0)
+        return stopped && referenceStopped && referenceProvider == nil
     }
     private let probeEpoch = UUID()
     private var probeEvents: [CoreSetHomeProbePoint: CoreSetHomeProducerProbeEvent] = [:]
@@ -218,16 +233,19 @@ final class CoreSetHomeTelemetrySource {
         if !requirementsLogged {
             requirementsLogged = true
             for point in CoreSetHomeProbePoint.allCases {
-                NSLog("Core-SET: home-probe stage=producer-required point=%@ producer=unbound confirmed=0 required=%@ scope=reference-contract",
-                      point.stableID, point.requiredEvidence)
+                let locallyBound = referenceProvider != nil &&
+                    (point == .pageProgress || point == .firmwareProgress)
+                NSLog("Core-SET: home-probe stage=producer-required point=%@ producer=%@ confirmed=0 original-runtime-receipt=0 required=%@ scope=%@",
+                      point.stableID, locallyBound ? "local-equivalent-bound" : "original-action-unbound",
+                      point.requiredEvidence, locallyBound ? "live-local-owner" : "reference-contract")
             }
         }
         var reasons: [CoreSetHomeObservationField: String] = [
-            .environment: "v17-005: QXA107 OTA/system-support environment provider is not bound",
-            .information: "v17-006: native538c information lifecycle provider is not bound; target identity is not this status",
-            .stage: "v17-008: native5c6a8 stage buffer provider is not bound; running is not a stage",
-            .pageProgress: "v17-009: native2fd1c same-request page producer is not bound",
-            .firmwareProgress: "v17-010: QXA107 qm571/qm543 byte producer is not bound"]
+            .environment: "v17-005: environment owner has not published a live state",
+            .information: "v17-006: information lifecycle has not resolved a local target",
+            .stage: "v17-008: typed DarkSword stage owner has not published",
+            .pageProgress: "v17-009: typed PAGE owner has not started a scan",
+            .firmwareProgress: "v17-010: byte-transfer owner has not started a transfer"]
         guard !observationsStopped, let runtime = runtimeProvider.readObservation(hostGeneration: hostGeneration) else {
             reasons[.kernel] = "v17-004: runtime observation owner stopped or native readiness changed during capture"
             reasons[.floating] = "v17-007: observation owner stopped/unavailable"
@@ -260,62 +278,80 @@ final class CoreSetHomeTelemetrySource {
             downloadedBytes: nil, totalBytes: nil,
             kernelProgressFraction: kernelProgress)
         if let provider = referenceProvider, let reference = provider.readObservation(hostGeneration: hostGeneration) {
-            for field in referenceFields {
-                reasons[field] = "bound reference provider returned no validated value for this field"
+            for field in referenceFields { reasons[field] = "bound producer returned no validated value for this field" }
+            for (field, value) in reference.fields where referenceFields.contains(field) && value.field == field {
+                let identity = value.identity
+                let age = Date().timeIntervalSince(identity.observedAt)
+                let previousIdentity = referenceIdentities[field]
+                let sameOwner = previousIdentity?.observerEpoch == identity.observerEpoch
+                let sameRequest = sameOwner && referenceRequests[field] == value.nativeRequestID
+                let current = identity.observerEpoch == provider.observerEpoch && identity.hostGeneration == hostGeneration &&
+                    identity.sequence > 0 && value.nativeSequence > 0 && age >= 0 && age <= 5
+                let ordered = previousIdentity.map { $0.observerEpoch != identity.observerEpoch || identity.sequence > $0.sequence } ?? true
+                let generationStable = !sameRequest || value.currentGeneration == referenceGenerations[field]
+                let publishGenerationValid = value.publishGenerationRaw == nil ||
+                    value.publishGenerationRaw == value.currentGeneration || value.publishGenerationRaw == UInt64.max
+                let nativeSequenceStable = !sameRequest || value.nativeSequence >= (referenceNativeSequences[field] ?? 0)
+                let oldSnapshot = referenceSnapshots[field]
+                func countContinues(_ old: UInt64?, _ oldTotal: UInt64?, _ new: UInt64?, _ newTotal: UInt64?) -> Bool {
+                    guard sameRequest, let old, let new else { return true }
+                    return new >= old && (oldTotal == nil || newTotal == nil || oldTotal == newTotal)
+                }
+                let countersStable = countContinues(oldSnapshot?.completedPages, oldSnapshot?.totalPages,
+                    value.snapshot.completedPages, value.snapshot.totalPages) &&
+                    countContinues(oldSnapshot?.downloadedBytes, oldSnapshot?.totalBytes,
+                    value.snapshot.downloadedBytes, value.snapshot.totalBytes)
+                guard current && ordered && generationStable && publishGenerationValid && nativeSequenceStable && countersStable else {
+                    reasons[field] = "producer epoch/host generation/sequence/freshness/request/generation/counter continuity mismatch"
+                    continue
+                }
+                switch field {
+                case .environment:
+                    guard let text = value.snapshot.environment, !text.isEmpty, text.utf8.count <= 63 else { continue }
+                    snapshot.environment = text
+                case .information:
+                    guard let text = value.snapshot.information, !text.isEmpty, text.utf8.count <= 191 else { continue }
+                    snapshot.information = text; snapshot.informationState = value.snapshot.informationState
+                case .stage:
+                    // The original 0x168 owner has a 0x30-byte stage member;
+                    // the later 0x80 home buffer is only a projection.
+                    guard let text = value.snapshot.stage, !text.isEmpty, text.utf8.count <= 47 else { continue }
+                    snapshot.stage = text; snapshot.stageState = value.snapshot.stageState
+                case .pageProgress:
+                    guard let state = value.snapshot.pageProgressState, state.totalPages > 0,
+                          state.completedPages <= state.totalPages else { continue }
+                    snapshot.pageProgressState = state
+                    snapshot.completedPages = state.completedPages; snapshot.totalPages = state.totalPages
+                    snapshot.executing = state.executing; snapshot.status = Int(state.phase)
+                case .firmwareProgress:
+                    guard let state = value.snapshot.firmwareState, value.currentGeneration != nil,
+                          state.totalBytes > 0, state.downloadedBytes <= state.totalBytes,
+                          state.stage == "ota-download" || (state.localEquivalent && state.stage == "local-kernelcache-copy") else { continue }
+                    snapshot.firmwareState = state; snapshot.downloadedBytes = state.downloadedBytes
+                    snapshot.totalBytes = state.totalBytes; snapshot.environmentStage = state.stage
+                default: continue
+                }
+                referenceIdentities[field] = identity
+                referenceRequests[field] = value.nativeRequestID
+                if let generation = value.currentGeneration { referenceGenerations[field] = generation }
+                else { referenceGenerations.removeValue(forKey: field) }
+                referenceNativeSequences[field] = value.nativeSequence
+                referenceSnapshots[field] = value.snapshot
+                supported.insert(field); reasons[field] = nil; fieldIdentities[field] = identity
+                NSLog("Core-SET: home-producer field=%@ request=%@ generation=%@ nativeSequence=%llu original-runtime-receipt=%d scope=%@",
+                      String(describing: field), value.nativeRequestID.uuidString,
+                      value.currentGeneration.map(String.init) ?? "absent", value.nativeSequence,
+                      value.originalRuntimeReceipt ? 1 : 0,
+                      value.originalRuntimeReceipt ? "core-v17-owner" : "local-equivalent-live-owner")
             }
-            let identity = reference.identity, age = Date().timeIntervalSince(identity.observedAt)
-            let current = identity.observerEpoch == provider.observerEpoch && identity.hostGeneration == hostGeneration &&
-                identity.sequence > 0 && age >= 0 && age <= 5
-            let ordered = referenceIdentity.map { $0.observerEpoch != identity.observerEpoch || identity.sequence > $0.sequence } ?? true
-            let requestStable = referenceIdentity?.observerEpoch != identity.observerEpoch ||
-                referenceRequest != reference.nativeRequestID || referenceNativeGeneration == reference.nativeGeneration
-            let sameRequest = referenceIdentity?.observerEpoch == identity.observerEpoch && referenceRequest == reference.nativeRequestID
-            func countContinues(_ old: UInt64?, _ oldTotal: UInt64?, _ new: UInt64?, _ newTotal: UInt64?) -> Bool {
-                guard sameRequest, let old, let new else { return true }
-                return new >= old && (oldTotal == nil || newTotal == nil || oldTotal == newTotal)
-            }
-            let countersStable = countContinues(referenceSnapshot?.completedPages, referenceSnapshot?.totalPages,
-                reference.snapshot.completedPages, reference.snapshot.totalPages) &&
-                countContinues(referenceSnapshot?.downloadedBytes, referenceSnapshot?.totalBytes,
-                reference.snapshot.downloadedBytes, reference.snapshot.totalBytes)
-            if current && ordered && requestStable && countersStable {
-                referenceIdentity = identity; referenceRequest = reference.nativeRequestID; referenceNativeGeneration = reference.nativeGeneration
-                if !sameRequest { referenceSnapshot = nil }
-                for field in [CoreSetHomeObservationField.environment, .information, .stage] where reference.supportedFields.contains(field) {
-                    let text = field == .environment ? reference.snapshot.environment : (field == .information ? reference.snapshot.information : reference.snapshot.stage)
-                    let limit = field == .environment ? 63 : (field == .information ? 191 : 127)
-                    guard let text, !text.isEmpty, text.utf8.count <= limit else { continue }
-                    supported.insert(field); reasons[field] = nil; fieldIdentities[field] = identity
-                    switch field {
-                    case .environment: snapshot.environment = text
-                    case .information: snapshot.information = text
-                    case .stage: snapshot.stage = text
-                    default: break
-                    }
-                }
-                if reference.supportedFields.contains(.pageProgress), let completed = reference.snapshot.completedPages,
-                   let total = reference.snapshot.totalPages, total > 0, completed <= total, reference.snapshot.executing != nil {
-                    snapshot.completedPages = completed; snapshot.totalPages = total; snapshot.executing = reference.snapshot.executing
-                    snapshot.status = reference.snapshot.status; supported.insert(.pageProgress); reasons[.pageProgress] = nil
-                    fieldIdentities[.pageProgress] = identity
-                    if referenceSnapshot == nil { referenceSnapshot = CoreSetHomeSnapshot() }
-                    referenceSnapshot?.completedPages = completed; referenceSnapshot?.totalPages = total
-                }
-                if reference.supportedFields.contains(.firmwareProgress), reference.nativeGeneration != nil,
-                   let downloaded = reference.snapshot.downloadedBytes, let total = reference.snapshot.totalBytes,
-                   total > 0, downloaded <= total, reference.snapshot.environmentStage == "ota-download" {
-                    snapshot.downloadedBytes = downloaded; snapshot.totalBytes = total; snapshot.environmentStage = "ota-download"
-                    supported.insert(.firmwareProgress); reasons[.firmwareProgress] = nil
-                    fieldIdentities[.firmwareProgress] = identity
-                    if referenceSnapshot == nil { referenceSnapshot = CoreSetHomeSnapshot() }
-                    referenceSnapshot?.downloadedBytes = downloaded; referenceSnapshot?.totalBytes = total
-                }
-                for event in reference.actionProbeEvents where event.producerEpoch == identity.observerEpoch &&
-                    event.requestID == reference.nativeRequestID && event.nativeGeneration == reference.nativeGeneration {
-                    _ = recordProducerProbeEvent(event)
-                }
-            } else {
-                for field in reference.supportedFields.intersection(referenceFields) { reasons[field] = "reference-provider epoch/host generation/sequence/freshness/native request/counter continuity mismatch" }
+            for event in reference.actionProbeEvents {
+                let field: CoreSetHomeObservationField? = event.point == .pageProgress ? .pageProgress :
+                    (event.point == .firmwareProgress ? .firmwareProgress : nil)
+                guard let field, let owner = reference.fields[field],
+                      event.producerEpoch == owner.identity.observerEpoch,
+                      event.requestID == owner.nativeRequestID,
+                      event.nativeGeneration == owner.currentGeneration else { continue }
+                _ = recordProducerProbeEvent(event)
             }
         } else if referenceProvider != nil {
             for field in referenceFields {

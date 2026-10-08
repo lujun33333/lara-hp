@@ -3227,13 +3227,17 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         if active, let total = snapshot?.totalPages, total > 0, let completed = snapshot?.completedPages {
             add("页面进度", "\(completed)/\(total)")
         }
-        if snapshot?.environmentStage == "ota-download", let total = snapshot?.totalBytes,
-           total > 0, let downloaded = snapshot?.downloadedBytes {
-            add("固件下载进度", "\(downloaded)/\(total) B")
+        if let firmware = snapshot?.firmwareState, firmware.totalBytes > 0,
+           firmware.downloadedBytes <= firmware.totalBytes,
+           firmware.stage == "ota-download" ||
+             (firmware.localEquivalent && firmware.stage == "local-kernelcache-copy") {
+            let title = firmware.localEquivalent
+                ? "本机 kernelcache 复制进度（Core 同位本地等价）" : "固件下载进度"
+            add(title, "\(firmware.downloadedBytes)/\(firmware.totalBytes) B")
             let progress = UIProgressView(progressViewStyle: .default)
             progress.frame = CGRect(x: 20, y: y - 3, width: card.bounds.width - 40, height: 2)
-            progress.progress = Float(min(1, Double(downloaded) / Double(total)))
-            progress.accessibilityLabel = "固件下载进度"
+            progress.progress = Float(min(1, Double(firmware.downloadedBytes) / Double(firmware.totalBytes)))
+            progress.accessibilityLabel = title
             card.addSubview(progress)
         }
     }

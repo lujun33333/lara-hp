@@ -35,7 +35,7 @@
       "source_contract": "tests/core_set_home_scheduler_contract_test.py",
       "points": ["v17-000", "v17-001", "v17-002", "v17-003", "v17-005", "v17-006", "v17-008", "v17-009", "v17-010"],
       "evidence": "current UTF8 source hashes + exact caller line/anchor + all lara Swift provider binding candidates; reference30 roots/244 words replay separately",
-      "scope": "current source callers only; no same-meaning producer bound, no claim about opaque external Partial archive internals",
+      "scope": "current source callers plus default-bound local-equivalent producers for v17-005/006/008/009/010; no claim that these are Core QXA107/native runtime receipts or opaque external Partial archive internals",
       "original_runtime_receipt_verified": false,
       "device_effect_verified": false
     },
@@ -43,10 +43,10 @@
       "source_contract": "tests/core_set_local_observation_receipt_contract_test.py",
       "cadence_math_contract": "tests/core_set_presentation_cadence_test.cpp",
       "host_palette_points": ["v17-014", "v17-022", "v17-023", "v17-024", "v17-025", "v17-026", "v17-027", "v17-028"],
-      "current_live_home_points": ["v17-004", "v17-007"],
-      "unbound_reference_status_points": ["v17-005", "v17-006", "v17-008"],
+      "current_live_home_points": ["v17-004", "v17-005", "v17-006", "v17-007", "v17-008", "v17-009", "v17-010"],
+      "unbound_reference_status_points": [],
       "reference_provider_protocol": "CoreSetHomeReferenceObservationProvider.readObservation(hostGeneration:)",
-      "reference_provider_binding": "CoreSetRuntimeCoordinator.bindHomeReferenceObservationProvider; no default reference implementation",
+      "reference_provider_binding": "CoreSetRuntimeCoordinator defaults to CoreSetHomeRuntimeProducer and binds it through CoreSetHomeTelemetrySource; local-equivalent only",
       "cadence": "MTLDrawable addPresentedHandler/presentedTime; positive monotonically increasing host timestamps in a bounded window, same adapter epoch + host/render generation; preferred FPS and command completion are NOT samples",
       "original_runtime_receipt_verified": false,
       "device_effect_verified": false
@@ -100,10 +100,10 @@
       "source": "lara/views/app/CoreSetHomeTelemetrySource.swift",
       "producer": "CoreSetHomeTelemetrySource.capture",
       "receipt": "observer epoch/monotone sequence/age0..5s + actual host generation; kernel double ds_is_ready corroboration; host floating geometry/panel/registration/cleanup properties; NOT native action receipt",
-      "scope": "004/007 current same-meaning local init/host observations; 005/006/008 require separately bound original environment/info/stage provider, never nativeReady/target-read-ready/running substitutes",
+      "scope": "004/007 current same-meaning local init/host observations; 005/006/008/009/010 have default-bound typed local-equivalent live owners, while original Core QXA107/native producer receipts remain unverified",
       "runtime_device_verified": false,
       "lifecycle": {
-        "start": "CoreSetLaraHomeRuntimeObservationProvider + CoreSetHomeTelemetrySource.capture; optional reference provider defaults unbound",
+        "start": "CoreSetLaraHomeRuntimeObservationProvider + CoreSetHomeRuntimeProducer + CoreSetHomeTelemetrySource.capture; local-equivalent provider is bound by default",
         "update": "250ms read-only capture -> current epoch/sequence/host generation validation -> per-field value/reason; malformed reference counters fail closed",
         "stop": "cancel observation timer -> stopObservations clears provider/identity -> stopped source returns empty snapshot; late probe rejected; NOT native action/kernel restore receipt"
       }
@@ -3845,35 +3845,50 @@
       "receipt_required": "真实动作执行/失败及停止恢复观察；原包公式、类型、单位、时序须闭合，不能用纯C++计划或配置值充当回执。"
     }
   },
-  "missing_observation_producers": {
+  "original_observation_producer_gaps": {
     "v17-005": {
       "field": "homeSnapshot.environment",
-      "producer_available": false,
-      "current_caller_evidence": "home_current_caller_probe: kernel_call/range_fetch/observation_boundary; dsready/Partial final Bool do not own QXA107 environment state; provider scan unbound",
+      "local_equivalent_producer_available": true,
+      "original_producer_available": false,
+      "original_runtime_receipt_verified": false,
+      "counts_toward_v17_closure": false,
+      "current_caller_evidence": "home_current_caller_probe: default-bound CoreSetHomeRuntimeProducer publishes Core support classification plus the live local kernelcache owner lifecycle; it deliberately does not claim QXA107 environment state",
       "requirement": "原4010+2e4字段由5f14系统支持分类与QXA107 phase/inFlight/ready合成，不能用nativeReady替代。固定CoreSetHomeReferenceObservationProvider接口；下一包记录同请求/observer epoch/sequence/host generation及原始环境状态，文本UTF8最多63字节。"
     },
     "v17-006": {
       "field": "homeSnapshot.information",
-      "producer_available": false,
-      "current_caller_evidence": "home_current_caller_probe: kernel_cache_call/observation_boundary; current-device hasOffsets Bool is not 538c named-information status",
+      "local_equivalent_producer_available": true,
+      "original_producer_available": false,
+      "original_runtime_receipt_verified": false,
+      "counts_toward_v17_closure": false,
+      "current_caller_evidence": "home_current_caller_probe: default-bound CoreSetHomeRuntimeProducer publishes the live local kernel offset resolve/validate lifecycle; it is not the 538c named-information owner",
       "requirement": "原4010→4e00将global0x100c56da0状态与可选信息消息格式化到+464，生命周期属于538c；目标只读身份不是此字段。provider接口保留真实request/generation/状态转换/失败/停止，文本UTF8最多191字节。"
     },
     "v17-008": {
       "field": "homeSnapshot.stage",
-      "producer_available": false,
-      "current_caller_evidence": "home_current_caller_probe: kernel_call/observation_boundary; darksword.h exposes free-form log and double fraction, no same-meaning stage snapshot publisher",
+      "local_equivalent_producer_available": true,
+      "original_producer_available": false,
+      "original_runtime_receipt_verified": false,
+      "counts_toward_v17_closure": false,
+      "current_caller_evidence": "home_current_caller_probe: DarkSword now publishes typed stage observations with request/generation/sequence/phase through the default-bound CoreSetHomeRuntimeProducer; it is not the original 5c6a8 snapshot owner",
       "requirement": "原4010→5c6a8持锁复制global0x100c2c3b8的0x168快照，读取+78阶段缓冲到home+144；running bool不是阶段。provider需真实阶段文本及同请求/epoch/sequence/host generation，文本UTF8最多127字节；无绑定时保持unavailable。"
     },
     "v17-009": {
       "field": "homeSnapshot.completedPages/totalPages",
-      "producer_available": false,
-      "current_caller_evidence": "home_current_caller_probe: kernel_call/observation_boundary; ds_progress_callback_t(double) is not original UInt64 page pair/request snapshot",
+      "local_equivalent_producer_available": true,
+      "original_producer_available": false,
+      "original_runtime_receipt_verified": false,
+      "counts_toward_v17_closure": false,
+      "current_caller_evidence": "home_current_caller_probe: DarkSword now publishes typed UInt64 completed/total page observations with request/generation/sequence/phase through the default-bound CoreSetHomeRuntimeProducer; it is not the original 2fd1c owner",
       "requirement": "原链4010→4e2e4→2fd1c，页面phase=0x100c20284、UInt64计数=288/290；需要同一运行请求/producer epoch/sequence/阶段/完成失败与停止回执的真实provider。recordHomeProducerProbeEvent已提供只读诊断接口，但不显示未绑定provider的计数，不用DarkSword fraction替代。"
     },
     "v17-010": {
       "field": "homeSnapshot.downloadedBytes/totalBytes/environmentStage",
-      "producer_available": false,
-      "current_caller_evidence": "home_current_caller_probe: range_fetch/kernel_cache_call/local_copy/ota_switch/observation_boundary; archive size, decompressed member length, local-copy bytes and OTA disabled.plist write bytes are four different units/owners, none is original qm571 progress callback",
+      "local_equivalent_producer_available": true,
+      "original_producer_available": false,
+      "original_runtime_receipt_verified": false,
+      "counts_toward_v17_closure": false,
+      "current_caller_evidence": "home_current_caller_probe: fetchkcache now publishes fstat total and actual local-copy bytes from one live request owner through the default-bound CoreSetHomeRuntimeProducer; it is not the original qm571/QXA107 download owner",
       "requirement": "原链4010→112d0→QXA107 qx327/qx307:；0x170 snapshot包含phase/inFlight/ready/errorCode及UInt64 bytes(+10/+18)。新增已回放qm571调用ff24→selector72c640→bfc0，进度block调用cac0/cbd4/d6dc，qm543有22个selector调用点，totalBytes仅generation相等时更新。下一包记录request/epoch/sequence、代次原始位、callback bytes及qm543状态/失败/取消；URL/path/client只记录presence/digest。需要真实同任务OTA provider，不以只读诊断或fetchkcache本地复制量替代。"
     }
   },
@@ -3886,7 +3901,7 @@
     "observation_points": 10,
     "original_action_consumer_missing_points": 35,
     "alternative_aim_preview_points": 7,
-    "missing_observation_producers": 5,
+    "missing_original_observation_producers": 5,
     "source_same_meaning_local_contract_points": 26,
     "remaining_local_or_observation_points": 13,
     "device_effect_verified_points": 0

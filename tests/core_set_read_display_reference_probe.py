@@ -14,6 +14,7 @@ from capstone import CS_ARCH_ARM64, CS_MODE_ARM, Cs
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = 0x100000000
+CORE_IPA_SHA = "57412d36a1092931d81a9a820c57eb5c1eb92dcf77076ce865dc95035a3a41cb"
 CORE_SHA = "c842be92434b88b4d535d0d10a30ace068ce6b9a7b9a97ec5a6ca8fd97fa3dd5"
 TARGET_SHA = "e3b3e8d47f1ad116b74d0a578d3394f5f1ab85e85c9ceb4f61293bd7ba76dc98"
 SITES = {
@@ -73,6 +74,29 @@ SITES = {
     "ray_head_fallback": (0x1000D8CB4, "fadd", "s0, s0, s1"),
     "ray_head_projected_record": (0x1000D8CF4, "str", "s1, [sp, #0x3cc]"),
 }
+PLAYER_FILTER_SITES = {
+    "speed_offset_descriptor": (0x1000D5468, "ldr", "[x10, #0x258]"),
+    "speed_read_float32": (0x1000D5478, "bl", "#0x1000d60d0"),
+    "speed_finite_gate": (0x1000D548C, "b.gt", "#0x1000d56a4"),
+    "speed_tolerance_gate": (0x1000D549C, "b.pl", "#0x1000d56a4"),
+    "local_actor_gate": (0x1000D54A4, "cmp", "x8, x24"),
+    "team_read_u32": (0x1000D54C4, "bl", "#0x1000d5fd8"),
+    "team_range_lowering": (0x1000D54C8, "sub", "w8, w0, #0x65"),
+    "team_local_compare": (0x1000D54D4, "ccmp", "w0, w8, #4, hs"),
+    "state_owner_read_u64": (0x1000D54FC, "bl", "#0x1000d61cc"),
+    "state_flags_read_u32": (0x1000D5514, "bl", "#0x1000d6498"),
+    "lifecycle_read_u8": (0x1000D5538, "bl", "#0x1000d6590"),
+    "state_bit20_gate": (0x1000D553C, "tbnz", "w23, #0x14"),
+    "lifecycle_four_gate": (0x1000D5540, "cmp", "w0, #4"),
+    "health_read_float32": (0x1000D5564, "bl", "#0x1000d60d0"),
+    "maximum_read_float32": (0x1000D5584, "bl", "#0x1000d60d0"),
+    "health_nonnegative_gate": (0x1000D55C4, "fcmp", "s11, #0.0"),
+    "maximum_times_one_point_five": (0x1000D55D0, "fmul", "s0, s10, s14"),
+    "root_component_read_u64": (0x1000D55F8, "bl", "#0x1000d61cc"),
+    "mesh_component_read_u64": (0x1000D5614, "bl", "#0x1000d61cc"),
+    "ai_read_u8": (0x1000D565C, "bl", "#0x1000d6590"),
+    "hide_bot_option_gate": (0x1000D5674, "cbnz", "w0, #0x1000d5980"),
+}
 STRINGS = {
     0x1007448B5: "人机", 0x1007448BC: "未知玩家", 0x1007448EB: " 米",
     0x100744913: " 瞄准您", 0x10074491E: "未知武器({})",
@@ -99,6 +123,7 @@ def property_at(binary: bytes, descriptor: int) -> tuple[str, int]:
 
 
 def analyze(core_path: Path, target_path: Path) -> dict:
+    assert sha256(core_path.read_bytes()).hexdigest() == CORE_IPA_SHA, "Core IPA identity mismatch"
     core = load_member(core_path, "Payload/Core.app/Core", CORE_SHA)
     target = load_member(target_path, "Payload/ShadowTrackerExtra.app/ShadowTrackerExtra", TARGET_SHA)
     core_image = lief.MachO.parse(core).at(0)
@@ -121,6 +146,19 @@ def analyze(core_path: Path, target_path: Path) -> dict:
     for va, expected in STRINGS.items():
         actual = core[va - BASE:va - BASE + 128].split(b"\0", 1)[0].decode("utf-8")
         assert actual == expected, (hex(va), actual)
+    player_filter_observed = {}
+    for label, (va, mnemonic, operand) in PLAYER_FILTER_SITES.items():
+        instruction = next(decoder.disasm(core[va - BASE:va - BASE + 4], va))
+        assert instruction.mnemonic == mnemonic and operand in instruction.op_str, (
+            label, instruction.mnemonic, instruction.op_str)
+        player_filter_observed[label] = {"va": hex(va), "file_offset": hex(va - BASE),
+                                         "instruction": f"{instruction.mnemonic} {instruction.op_str}"}
+    setup = [(i.mnemonic, i.op_str) for i in decoder.disasm(
+        core[0xD542C:0xD543C], 0x1000D542C)]
+    assert setup == [("ldr", "s12, [x8, #0x2d4]"), ("adrp", "x8, #0x100797000"),
+                     ("ldr", "s13, [x8, #0x978]"), ("fmov", "s14, #1.50000000")]
+    assert abs(struct.unpack_from("<f", core, 0xAC82D4)[0] + 479.5) < 1e-7
+    assert abs(struct.unpack_from("<f", core, 0x797978)[0] - 0.1) < 1e-6
     # Inline warning prefix at dd984..dd994 is constructed as an eight-byte
     # UTF-8 string, not merely a coincidental cstring hit.
     prefix = struct.pack("<Q", 0x20A894E7BFBDE420).decode("utf-8")
@@ -258,8 +296,10 @@ def analyze(core_path: Path, target_path: Path) -> dict:
         assert instruction.mnemonic == mnemonic and operand in instruction.op_str
     template = 0x100797628
     values = {index: struct.unpack_from("<Q", core, template + index * 8 - BASE)[0]
-              for index in (38, 47, 49, 57, 63, 68)}
-    assert values == {38: 0x1700, 47: 0x258, 49: 0x88C, 57: 0x190, 63: 0x2758, 68: 0x3BE0}
+              for index in (12, 16, 18, 34, 35, 36, 37, 38, 47, 49, 57, 63, 68)}
+    assert values == {12: 0xB78, 16: 0x260, 18: 0x658, 34: 0xB94,
+                      35: 0x1060, 36: 0x1068, 37: 0x10BC, 38: 0x1700,
+                      47: 0x258, 49: 0x88C, 57: 0x190, 63: 0x2758, 68: 0x3BE0}
     # Micro-CFG: history ready -> distance/dt gate -> local delta velocity ->
     # range gate -> optional smoothing -> sample commit -> .35s/2s/25 gate.
     # None of these sites reads target RepMovement.LinearVelocity.
@@ -336,7 +376,9 @@ def analyze(core_path: Path, target_path: Path) -> dict:
         assert target[va - BASE:va - BASE + 120].decode("utf-16le").split("\0", 1)[0] == expected
     assert property_at(target, 0x10F2CCD68) == ("GrenadeRadius", 0x628)
     assert property_at(target, 0x1100510A0) == ("LastRepReplicatedMovementTime", 0x5D8)
-    return {"core_sha256": CORE_SHA, "target_sha256": TARGET_SHA, "sites": observed,
+    return {"core_ipa_sha256": CORE_IPA_SHA, "core_sha256": CORE_SHA,
+            "target_sha256": TARGET_SHA, "sites": observed,
+            "player_filter_sites": player_filter_observed,
             "strings": {hex(va): text for va, text in STRINGS.items()}, "warning_prefix": prefix,
             "target_properties": properties, "template_values": values,
             "warning_fallback_lifecycle_sites": target_observed,
@@ -366,6 +408,6 @@ if __name__ == "__main__":
         print(json.dumps(result, ensure_ascii=True, indent=2))
     else:
         target_count = len(result['warning_fallback_lifecycle_sites']) + len(result['grenade_clock_lifecycle_sites'])
-        print(f"PASS: hash-bound Core {len(result['sites'])} / target lifecycle {target_count} instructions / {len(result['strings'])} strings / {len(result['target_properties'])} properties")
+        print(f"PASS: hash-bound Core {len(result['sites'])} display + {len(result['player_filter_sites'])} player-filter / target lifecycle {target_count} instructions / {len(result['strings'])} strings / {len(result['target_properties'])} properties")
         print(f"PASS: remaining micro-CFG {len(result['remaining_semantic_sites'])} instructions / {len(result['bone_head_profiles'])} head profiles")
         print("LIMIT: local animation is not target physics/blast radius; sync-opened is not children equivalence; network freshness, full information layout and device remain unverified")

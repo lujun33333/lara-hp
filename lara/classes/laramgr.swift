@@ -12,6 +12,27 @@ import notify
 import UIKit
 import WebKit
 
+struct LaraDarkSwordStageObservation: Equatable {
+    let text: String
+    let phase: UInt32
+    let requestID: UInt64
+    let generation: UInt64
+    let sequence: UInt64
+    let resultCode: Int32
+}
+
+struct LaraDarkSwordPageObservation: Equatable {
+    let executing: Bool
+    let cancelled: Bool
+    let phase: UInt32
+    let completedPages: UInt64
+    let totalPages: UInt64
+    let requestID: UInt64
+    let generation: UInt64
+    let sequence: UInt64
+    let resultCode: Int32
+}
+
 private func loadMutablePropertyListDictionary(from url: URL) throws -> NSMutableDictionary {
     let data = try Data(contentsOf: url)
     var format = PropertyListSerialization.PropertyListFormat.binary
@@ -58,6 +79,8 @@ final class laramgr: ObservableObject {
     @Published var dsattempted: Bool = false
     @Published var dsfailed: Bool = false
     @Published var dsprogress: Double = 0.0
+    @Published private(set) var dsStageObservation: LaraDarkSwordStageObservation?
+    @Published private(set) var dsPageObservation: LaraDarkSwordPageObservation?
     @Published var kernbase: UInt64 = 0
     @Published var kernslide: UInt64 = 0
     
@@ -142,6 +165,29 @@ final class laramgr: ObservableObject {
         ds_set_progress_callback { progress in
             DispatchQueue.main.async {
                 laramgr.shared.dsprogress = progress
+            }
+        }
+        ds_set_stage_event_callback { stage, phase, requestID, generation, sequence, resultCode in
+            guard let stage else { return }
+            let value = LaraDarkSwordStageObservation(text: String(cString: stage), phase: phase,
+                requestID: requestID, generation: generation, sequence: sequence, resultCode: resultCode)
+            DispatchQueue.main.async {
+                let old = laramgr.shared.dsStageObservation
+                guard old?.requestID != requestID || old?.generation != generation || sequence > (old?.sequence ?? 0) else { return }
+                laramgr.shared.dsStageObservation = value
+            }
+        }
+        ds_set_page_event_callback { executing, cancelled, phase, completed, total, requestID, generation, sequence, resultCode in
+            guard total > 0, completed <= total else { return }
+            let value = LaraDarkSwordPageObservation(executing: executing, cancelled: cancelled,
+                phase: phase, completedPages: completed, totalPages: total, requestID: requestID,
+                generation: generation, sequence: sequence, resultCode: resultCode)
+            DispatchQueue.main.async {
+                let old = laramgr.shared.dsPageObservation
+                let newOwner = old?.requestID != requestID || old?.generation != generation
+                guard newOwner || (sequence > (old?.sequence ?? 0) &&
+                    completed >= (old?.completedPages ?? 0) && total == (old?.totalPages ?? total)) else { return }
+                laramgr.shared.dsPageObservation = value
             }
         }
         

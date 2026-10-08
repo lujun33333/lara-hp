@@ -514,6 +514,46 @@ struct CoreSetPresentedFrameObservation: Equatable {
 }
 
 // Read-only observations: these are not desired configuration or fabricated status.
+// The original home producers do not share one lifecycle.  Keep their typed
+// state separate and only project the small legacy fields used by the menu.
+struct CoreSetHomeInformationState: Equatable {
+    let status: Int32
+    let message: String?
+    let localEquivalent: Bool
+}
+
+struct CoreSetHomeStageState: Equatable {
+    let text: String
+    let phase: UInt32
+    let nativeSequence: UInt64
+    let localEquivalent: Bool
+}
+
+struct CoreSetHomePageProgressState: Equatable {
+    let executing: Bool
+    let cancelled: Bool
+    let phase: UInt32
+    let completedPages: UInt64
+    let totalPages: UInt64
+    let resultCode: Int32
+    let nativeSequence: UInt64
+    let localEquivalent: Bool
+}
+
+struct CoreSetHomeFirmwareState: Equatable {
+    let phase: Int32
+    let inFlight: Bool
+    let ready: Bool
+    let errorCode: Int32
+    let stage: String
+    let message: String?
+    let downloadedBytes: UInt64
+    let totalBytes: UInt64
+    let currentGeneration: UInt64
+    let publishGenerationRaw: UInt64
+    let localEquivalent: Bool
+}
+
 struct CoreSetHomeSnapshot: Equatable {
     var kernel: String?
     var stage: String?
@@ -528,9 +568,18 @@ struct CoreSetHomeSnapshot: Equatable {
     var downloadedBytes: UInt64?
     var totalBytes: UInt64?
     var kernelProgressFraction: Double?
+    var informationState: CoreSetHomeInformationState? = nil
+    var stageState: CoreSetHomeStageState? = nil
+    var pageProgressState: CoreSetHomePageProgressState? = nil
+    var firmwareState: CoreSetHomeFirmwareState? = nil
     var showStage: Bool { executing == true || status == 3 }
     var showPageProgress: Bool { showStage && completedPages != nil && (totalPages ?? 0) > 0 }
-    var showDownloadProgress: Bool { environmentStage == "ota-download" && downloadedBytes != nil && (totalBytes ?? 0) > 0 }
+    var showDownloadProgress: Bool {
+        guard let firmwareState else { return false }
+        return (firmwareState.stage == "ota-download" ||
+                (firmwareState.localEquivalent && firmwareState.stage == "local-kernelcache-copy")) &&
+            firmwareState.downloadedBytes <= firmwareState.totalBytes && firmwareState.totalBytes > 0
+    }
 }
 
 struct CoreSetPerformanceSnapshot: Equatable {

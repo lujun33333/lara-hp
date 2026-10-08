@@ -120,11 +120,13 @@ class HomeSchedulerContract(unittest.TestCase):
         self.assertIn("core-set.0.v17-001.option", self.menu)
         self.assertIn("core-set.0.v17-000.option", self.menu)
 
-    def test_progress_never_substitutes_dark_sword_or_file_copy(self):
+    def test_progress_requires_typed_owner_and_keeps_local_equivalent_scope(self):
         capture = body(self.telemetry, "func capture(")
         self.assertIn("completedPages: nil, totalPages: nil", capture)
         self.assertIn("downloadedBytes: nil, totalBytes: nil", capture)
-        self.assertIn("producer=unbound confirmed=0 required=%@ scope=reference-contract", capture)
+        self.assertIn("value.snapshot.pageProgressState", capture)
+        self.assertIn("value.snapshot.firmwareState", capture)
+        self.assertIn('state.stage == "local-kernelcache-copy"', capture)
         self.assertNotIn("fetchkcache", capture)
         provider = body(self.telemetry.split("final class CoreSetLaraHomeRuntimeObservationProvider", 1)[1], "func readObservation(hostGeneration:")
         self.assertIn("running && progress.isFinite", provider)
@@ -138,14 +140,17 @@ class HomeSchedulerContract(unittest.TestCase):
         self.assertTrue((ROOT / probe["tool"]).is_file())
         self.assertIn("same host generation", matrix["contracts"]["frame_rate"]["receipt"])
         self.assertIn("not measured", matrix["contracts"]["frame_rate"]["scope"])
-        self.assertFalse(matrix["missing_observation_producers"]["v17-009"]["producer_available"])
-        self.assertFalse(matrix["missing_observation_producers"]["v17-010"]["producer_available"])
+        gaps = matrix["original_observation_producer_gaps"]
+        self.assertTrue(gaps["v17-009"]["local_equivalent_producer_available"])
+        self.assertTrue(gaps["v17-010"]["local_equivalent_producer_available"])
+        self.assertFalse(gaps["v17-009"]["original_producer_available"])
+        self.assertFalse(gaps["v17-010"]["original_producer_available"])
         current = matrix["reference"]["home_current_caller_probe"]
         self.assertEqual(current["points"], [f"v17-{point:03}" for point in (0, 1, 2, 3, 5, 6, 8, 9, 10)])
         self.assertFalse(current["original_runtime_receipt_verified"])
         self.assertFalse(current["device_effect_verified"])
         for point in current["points"]:
-            requirement = (matrix["downstream_requirements"] | matrix["missing_observation_producers"])[point]
+            requirement = (matrix["downstream_requirements"] | matrix["original_observation_producer_gaps"])[point]
             self.assertTrue(requirement["current_caller_evidence"].startswith("home_current_caller_probe:") or
                             requirement["current_caller_evidence"].startswith("configureHome"))
 
@@ -165,9 +170,11 @@ class HomeSchedulerContract(unittest.TestCase):
                 lines = (ROOT / site["source"]).read_text(encoding="utf-8").splitlines()
                 for line in site["lines"]:
                     self.assertIn(site["anchor"], lines[line - 1])
-        self.assertEqual(evidence["provider_scan"]["conformers"], [])
+        self.assertEqual([hit["class"] for hit in evidence["provider_scan"]["conformers"]],
+                         ["CoreSetHomeRuntimeProducer"])
         self.assertEqual(evidence["provider_scan"]["binding_calls"], [])
         self.assertEqual(evidence["provider_scan"]["home_consumer_bindings"], [])
+        self.assertIn("homeTelemetry.bindReferenceObservationProvider(homeProducer)", self.coordinator)
         self.assertIn("NOT proof of absent internal functionality", evidence["external_partial"]["limit"])
 
     def test_current_quantities_remain_distinct_from_original_home_fields(self):

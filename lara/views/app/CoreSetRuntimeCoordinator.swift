@@ -317,6 +317,9 @@ final class CoreSetRuntimeCoordinator {
         if let aimDisplayConsumer { _ = menu.bindGameConsumer(aimDisplayConsumer, to: \.aimDisplay) }
         recoilConsumer = CoreSetRecoilConsumer()
         if let recoilConsumer { _ = menu.bindGameConsumer(recoilConsumer, to: \.recoil) }
+        let homeProducer = CoreSetHomeRuntimeProducer(manager: .shared)
+        homeReferenceObservationProvider = homeProducer
+        homeTelemetry.bindReferenceObservationProvider(homeProducer)
         host.stateDidChange = { [weak self] in self?.hostChanged() }
         host.frameDidConsume = { [weak self] frame, accepted, _ in
             guard let self, let receipt = self.frameComposer.consume(frame, accepted: accepted) else { return }
@@ -474,20 +477,26 @@ final class CoreSetRuntimeCoordinator {
         }
         let manager = laramgr.shared
         if manager.hasOffsets {
+            CoreSetKernelInformationOwner.shared.publishCachedValidation()
             prepareLocalHosting(epoch: epoch, completion: completion)
             return
         }
         kernelOffsetsRunning = true
+        CoreSetKernelInformationOwner.shared.beginResolve()
         gameLaunchStatus = "正在获取并解析当前设备内核偏移"
         NSLog("Core-SET: game launch epoch=%llu stage=kernel-offsets start", epoch)
         publishStatus()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let fetched = fetchkcache()
+            if fetched { CoreSetKernelInformationOwner.shared.didResolveArtifact() }
+            else { CoreSetKernelInformationOwner.shared.failValidation("kernelcache 获取失败") }
             let loaded = fetched && dlkcache()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.kernelOffsetsRunning = false
                 manager.hasOffsets = loaded
+                if loaded { CoreSetKernelInformationOwner.shared.completeValidation() }
+                else if fetched { CoreSetKernelInformationOwner.shared.failValidation("本机内核偏移验证失败") }
                 NSLog("Core-SET: game launch epoch=%llu stage=kernel-offsets fetched=%d resolved=%d",
                       epoch, fetched ? 1 : 0, loaded ? 1 : 0)
                 guard self.gameLaunchCurrent(epoch) else { return }

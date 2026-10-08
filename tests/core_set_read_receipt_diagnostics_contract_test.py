@@ -128,13 +128,14 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertIn("+ (NSString *)lastCaptureDiagnostic", header)
         self.assertIn("captureStartedMonotonicSeconds", header)
         stages = (
-            "request-validation", "identity-initial", "root-world-character",
+            "request-validation", "identity-initial", "root-world",
             "root-world-netdriver", "root-netdriver-serverconnection",
             "root-connection-playercontroller", "root-controller-camera-manager",
             "root-controller-local-character", "local-team", "root-level",
             "root-actor-array-core17-primary-or-level-fallback",
             "camera-candidate", "local-position", "actor-scan",
-            "stability-roots", "stability-actor-membership", "stability-player-actors",
+            "stability-roots", "stability-actor-membership", "stability-final-projection-roots",
+            "stability-player-actors",
             "stability-count-actors", "stability-grenades", "stability-bones",
             "stability-battle-inputs", "identity-final", "ready",
         )
@@ -144,10 +145,18 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
             self.assertIn(token, collector)
             positions.append(collector.index(token))
         self.assertEqual(positions, sorted(positions))
-        self.assertIn("static thread_local const char *CSLastCaptureDiagnostic", collector)
+        self.assertIn("static thread_local std::string CSLastCaptureDiagnostic", collector)
         self.assertIn("snapshot.captureStartedMonotonicSeconds = captureStartedAt", collector)
-        self.assertIn("snapshot.captureCompletedMonotonicSeconds = CACurrentMediaTime()", collector)
-        self.assertIn("freshnessBasis=completion", collector)
+        self.assertIn("snapshot.captureCompletedMonotonicSeconds = captureCompletedAt", collector)
+        self.assertIn("freshnessBasis=final-reprojected", collector)
+        self.assertIn("displayFields=final-reprojected", collector)
+        self.assertIn("finalReprojectionAge > 0.45", collector)
+        self.assertIn("final-reprojection-stale age=", collector)
+        for counter in ("speedMatched=%lu", "enemyTeam=%lu", "stateBit20Clear=%lu",
+                        "lifecyclePass=%lu", "healthPass=%lu", "rootValid=%lu",
+                        "meshValid=%lu", "coreAccepted=%lu", "producedPlayers=%lu",
+                        "producedBots=%lu"):
+            self.assertIn(counter, collector)
         self.assertNotIn("captureBudgetExceeded", collector)
         self.assertNotIn("capture-budget-exceeded", collector)
         self.assertLess(collector.index('CSLastCaptureDiagnostic = "request-validation"'),
@@ -158,8 +167,9 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         collector = read("lara/overlay/CoreSetPlayerSnapshot.mm")
         apply = body(player, "func apply(")
         self.assertLess(apply.index("armCaptureLoop()"), apply.index("capture()"))
-        self.assertIn("player-loop contract=core17-continuous-retry-v2", player)
-        self.assertIn("basis=completed", player)
+        self.assertIn("player-loop contract=core17-filter-final-reproject-v3", player)
+        self.assertIn("geometryFreshness=final-reprojected", player)
+        self.assertIn("emptyEffect=retry", player)
         loop = body(player, "private func armCaptureLoop()")
         self.assertIn("withTimeInterval: 0.15, repeats: true", loop)
         retry = body(player, "private func retryCapture(")
@@ -170,7 +180,9 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         capture = body(player, "private func capture()")
         for gate in ("if awaitingReceipt", "CACurrentMediaTime() - since >= 0.5",
                      'retryCapture("player-renderer-receipt-timeout", token: token)',
-                     "self.awaitingReceiptSince = CACurrentMediaTime()"):
+                     "self.awaitingReceiptSince = CACurrentMediaTime()",
+                     "let requiresRenderableEvidence =", "!requiresRenderableEvidence || !commands.isEmpty",
+                     'retryCapture("no-renderable-evidence marks='):
             self.assertIn(gate, capture)
         self.assertIn("self.retryCapture(failureReason, token: token)", capture)
         failed_capture = capture[capture.index("guard let snapshot,"):capture.index("self.lastCaptureFailure = nil")]

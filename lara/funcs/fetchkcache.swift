@@ -70,7 +70,23 @@ func fetchkcache() -> Bool {
         return false
     }
 
+    var sourceStat = stat()
+    guard fstat(src, &sourceStat) == 0, sourceStat.st_size > 0 else {
+        close(src)
+        close(dst)
+        vn_fileunredirect(ogvn, ogvd)
+        globallogger.log("(fetchkcache) 无法取得内核缓存总字节数")
+        return false
+    }
+    let expectedBytes = UInt64(sourceStat.st_size)
+    let transferOwner = CoreSetKernelCacheTransferOwner.shared
+    transferOwner.begin(totalBytes: expectedBytes)
+    var transferCompleted = false
+
     defer {
+        if !transferCompleted {
+            transferOwner.fail(code: -1, message: "本机 kernelcache 复制未完成")
+        }
         close(src)
         close(dst)
         vn_fileunredirect(ogvn, ogvd)
@@ -106,12 +122,13 @@ func fetchkcache() -> Bool {
             }
 
             written += w
+            transferOwner.advance(downloadedBytes: UInt64(totalBytes + written), totalBytes: expectedBytes)
         }
 
         totalBytes += n
     }
 
-    if !FileManager.default.fileExists(atPath: outpath) || totalBytes == 0 {
+    if !FileManager.default.fileExists(atPath: outpath) || totalBytes == 0 || UInt64(totalBytes) != expectedBytes {
         globallogger.log("(fetchkcache) 内核缓存输出缺失")
         return false
     }
@@ -130,6 +147,9 @@ func fetchkcache() -> Bool {
         return false
     }
 
+    transferOwner.advance(downloadedBytes: expectedBytes, totalBytes: expectedBytes)
+    transferOwner.complete()
+    transferCompleted = true
     globallogger.log("(fetchkcache) 内核缓存获取成功！")
     return true
 }

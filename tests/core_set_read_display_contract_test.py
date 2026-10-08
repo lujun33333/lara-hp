@@ -40,7 +40,8 @@ def require_yaw_reread(source: str) -> None:
     for stable in ("includeWarningYaw && !CoreSet::warningYawRawValid(warningYawRaw)",
                    "actor + 0x190, &warningFallbackRaw)) continue",
                    "actor.warningFallbackObserved", "actor.address + 0x190,",
-                   "actorClassAfter != actor.warningActorClass", "actor.address + 0x2758, &warningYawRaw"):
+                   "CSReadCorePlayerState(session, generation, actor.address",
+                   "actor.address + 0x2758, &warningYawRaw"):
         assert stable in source, stable
 
 
@@ -91,10 +92,11 @@ class ReadDisplayContracts(unittest.TestCase):
 
     def test_warning_fallback_owner_selection_and_raw_reread_fail_closed(self) -> None:
         require_yaw_reread(self.collector)
-        self.assertLess(self.collector.index("CSClassTypeIsChildOf(session, generation, actorClass, wanted"),
-                        self.collector.index("actor + 0x190, &warningFallbackRaw"))
+        self.assertLess(self.collector.index("++coreAccepted"),
+                        self.collector.index("CSClassTypeIsChildOf(session, generation, actorClass, wanted"))
         for missing in ("actor.address + 0x190,",
-                        "actorClassAfter != actor.warningActorClass", "actor.address + 0x2758, &warningYawRaw"):
+                        "CSReadCorePlayerState(session, generation, actor.address",
+                        "actor.address + 0x2758, &warningYawRaw"):
             with self.subTest(missing=missing), self.assertRaises(AssertionError):
                 require_yaw_reread(self.collector.replace(missing, "REMOVED"))
         header = read("lara/overlay/CoreSetPlayerSnapshot.h")
@@ -112,7 +114,7 @@ class ReadDisplayContracts(unittest.TestCase):
             self.assertIn(status, self.collector)
         for guessed in ("actor + 0x258", "actor.address + 0x258", "ExplosionTime - Children"):
             self.assertNotIn(guessed, self.collector)
-        self.assertIn("maximum <= 0 || health < 0 || health > maximum", self.collector)
+        self.assertIn("health <= maximum * 1.5f", self.collector)
         self.assertIn("if (health == 0 && !countEligible) continue", self.collector)
         self.assertLess(self.collector.index("distance > maximumDrawDistance"), self.collector.index("++observedBotCount"))
         self.assertLess(self.collector.index("++observedBotCount"), self.collector.index("bool onScreen ="))
@@ -169,9 +171,33 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertNotIn("captureBudgetExceeded", scan)
         self.assertNotIn("capture-budget-exceeded", scan)
 
+    def test_core17_player_filter_order_widths_and_optional_uclass(self) -> None:
+        scan = self.collector[self.collector.index("for (int32_t start = 0; start < array.count;"):
+                              self.collector.index('CSLastCaptureDiagnostic = "stability-roots"')]
+        ordered = ("actor + 0x10bc", "if (actor == local) continue", "actor + 0xb78",
+                   "actor + 0x1700", "coreState, &coreStateFlags", "actor + 0x3be0",
+                   "actor + 0x1060", "actor + 0x1068", "actor + 0x260",
+                   "actor + 0x658", "actor + 0xb94", "++coreAccepted",
+                   "CSClassTypeIsChildOf(session, generation, actorClass, wanted")
+        positions = [scan.index(token) for token in ordered]
+        self.assertEqual(positions, sorted(positions))
+        for declaration in ("float coreSpeed", "uint32_t team", "uint64_t coreState",
+                            "uint32_t coreStateFlags", "uint8_t status", "float health = 0, maximum",
+                            "uint64_t rootComponent = 0, meshComponent",
+                            "uint8_t ai"):
+            self.assertIn(declaration, scan)
+        helper = body(self.collector, "static bool CSReadCorePlayerState(")
+        self.assertNotIn("CSClassTypeIsChildOf", helper)
+        self.assertIn("health <= maximum * 1.5f", self.collector)
+        self.assertIn("fallback-semantic-unconfirmed localInActorArray=", self.collector)
+        self.assertIn("localInActorArrayAfter", self.collector)
+        self.assertIn("no-renderable-output coreAccepted=", self.collector)
+
     def test_zero_health_extension_is_count_only_and_has_lifecycle_reread(self) -> None:
         for scoped in ("CoreSet::playerCountEligible(health, maximum, countStatus)",
-                       "count.address + 0x3be0, &status", "type != count.type", "zeroHealthLastBreath=%lu",
+                       "actor + 0x3be0, &state->status",
+                       "CoreSet::playerCountEligible(current.health, current.maximum, current.status)",
+                       "zeroHealthLastBreath=%lu",
                        "if (health == 0) continue; // Count-only"):
             self.assertIn(scoped, self.collector)
         self.assertLess(self.collector.index("if (health == 0) continue; // Count-only"),
@@ -217,8 +243,9 @@ class ReadDisplayContracts(unittest.TestCase):
         for gate in ("state->registered & 4", "state->flags", "state->callback != base + CSPositionCallbackRVA",
                      "CoreSet::decodePositionBlock", "array.count > 256", "state->edges[edge] >= array.count"):
             self.assertIn(gate, bones)
-        for stable in ("left.registered == right.registered", "left.flags == right.flags",
-                       "left.callback == right.callback", "left.key == right.key", "CSBoneStructureEqual(bone.state, after)"):
+        for stable in ("CSReadBoneState(session, generation, base, bone.actor, &after, &present)",
+                       "CSProjectBones(after, cameraAfter, size)",
+                       "CSProjectBoneHead(after, cameraAfter, size, &top, &headIndex)"):
             self.assertIn(stable, self.collector)
         self.assertIn("mark.head = top; mark.headBoneIndex = @(headIndex)", self.collector)
         self.assertIn("headScope=requested-bones-only headParity=partial", self.collector)
@@ -309,8 +336,9 @@ class ReadDisplayContracts(unittest.TestCase):
 
     def test_reference_probe_binds_both_samples_and_preserves_boundaries(self) -> None:
         probe = read("tests/core_set_read_display_reference_probe.py")
-        for bound in ("actual == expected", "CORE_SHA", "TARGET_SHA", "property_at(target",
+        for bound in ("actual == expected", "CORE_IPA_SHA", "CORE_SHA", "TARGET_SHA", "property_at(target",
                       "instruction.mnemonic == mnemonic", "assert actual == expected",
+                      "PLAYER_FILTER_SITES", "player_filter_sites",
                       "target_clock_owner_closed_reference_258_is_children_num", "owner_rep_movement_rotation_yaw_closed",
                       "children_num_eq1_proxy_not_gameplay_state", "not_verified"):
             self.assertIn(bound, probe)

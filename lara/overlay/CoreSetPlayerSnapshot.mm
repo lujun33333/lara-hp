@@ -35,7 +35,7 @@ static constexpr int32_t CSMaxActors = 50000;
 static constexpr int32_t CSActorPointerBatch = 0x200;
 static constexpr size_t CSMaxBoneActors = 256;
 static constexpr NSUInteger CSMaxRenderedMarks = 8192;
-static thread_local const char *CSLastCaptureDiagnostic = "not-attempted";
+static thread_local std::string CSLastCaptureDiagnostic = "not-attempted";
 
 using CSVector = CoreSet::Vec3;
 using CSCamera = CoreSet::Camera;
@@ -71,6 +71,60 @@ static bool CSActorArraySpanValid(uint64_t data, int32_t count) {
 static bool CSUserPointerValid(uint64_t value) {
     return value >= 0x100000000ULL && value <= 0x8000000000ULL - sizeof(uint64_t) &&
         (value & (alignof(uint64_t) - 1)) == 0;
+}
+
+// Core v1.7 0x1000d5440..0x1000d569c does not begin with UClass. It first
+// identifies its player-shaped row with DefaultSpeedValue and then applies the
+// team/status/health/component filters below. Keep these predicates separate
+// so the scan order remains reviewable against the exact reference image.
+static bool CSCorePlayerSpeedMatches(float value) {
+    return std::isfinite(value) && std::fabs(value - 479.5f) < 0.1f;
+}
+
+static bool CSCorePlayerHealthMatches(float health, float maximum) {
+    return std::isfinite(health) && std::isfinite(maximum) &&
+        health >= 0 && maximum > 0 && health <= maximum * 1.5f;
+}
+
+struct CSCorePlayerState {
+    float speed = 0;
+    uint32_t team = 0;
+    uint64_t stateOwner = 0;
+    uint32_t stateFlags = 0;
+    uint8_t status = 0;
+    float health = 0;
+    float maximum = 0;
+    uint64_t rootComponent = 0;
+    uint64_t meshComponent = 0;
+    uint8_t ai = 0;
+};
+
+// End-of-capture validation repeats the same widths and predicate order as
+// Core v1.7 0x1000d5440..0x1000d569c. UClass is intentionally absent.
+static bool CSReadCorePlayerState(CoreSetReadSession *session, uint64_t generation,
+                                  uint64_t actor, uint64_t local, uint32_t localTeam,
+                                  CSCorePlayerState *state) {
+    *state = {};
+    if (!CSUserPointerValid(actor) ||
+        !CSReadValue(session, generation, actor + 0x10bc, &state->speed) ||
+        !CSCorePlayerSpeedMatches(state->speed) || actor == local ||
+        !CSReadValue(session, generation, actor + 0xb78, &state->team) ||
+        state->team < 1 || state->team > 100 || state->team == localTeam ||
+        !CSReadValue(session, generation, actor + 0x1700, &state->stateOwner) ||
+        !CSUserPointerValid(state->stateOwner) ||
+        !CSReadValue(session, generation, state->stateOwner, &state->stateFlags) ||
+        (state->stateFlags & (1u << 20)) ||
+        !CSReadValue(session, generation, actor + 0x3be0, &state->status) ||
+        state->status == 4 ||
+        !CSReadValue(session, generation, actor + 0x1060, &state->health) ||
+        !CSReadValue(session, generation, actor + 0x1068, &state->maximum) ||
+        !CSCorePlayerHealthMatches(state->health, state->maximum) ||
+        !CSReadValue(session, generation, actor + 0x260, &state->rootComponent) ||
+        !CSUserPointerValid(state->rootComponent) ||
+        !CSReadValue(session, generation, actor + 0x658, &state->meshComponent) ||
+        !CSUserPointerValid(state->meshComponent) ||
+        !CSReadValue(session, generation, actor + 0xb94, &state->ai)) return false;
+    return true;
 }
 
 static CSActorArraySource CSReadCoreActorArray(CoreSetReadSession *session, uint64_t generation,
@@ -347,13 +401,6 @@ static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation, ui
     return true;
 }
 
-static bool CSBoneStructureEqual(const CSBoneState &left, const CSBoneState &right) {
-    return left.mesh == right.mesh && left.registered == right.registered &&
-        left.flags == right.flags && left.callback == right.callback && left.key == right.key &&
-        left.status == right.status &&
-        std::memcmp(&left.array, &right.array, sizeof(left.array)) == 0;
-}
-
 @interface CoreSetBoneSegment ()
 @property(nonatomic) CGPoint start;
 @property(nonatomic) CGPoint end;
@@ -580,7 +627,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
 
 @implementation CoreSetPlayerCollector
 + (NSString *)lastCaptureDiagnostic {
-    return [NSString stringWithUTF8String:CSLastCaptureDiagnostic ?: "unknown"];
+    return [NSString stringWithUTF8String:CSLastCaptureDiagnostic.c_str()];
 }
 + (CoreSetPlayerSnapshot *)capture:(CoreSetReadSession *)session canvasSize:(CGSize)size {
     return [self capture:session canvasSize:size playerBones:NO botBones:NO
@@ -687,10 +734,16 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     uint64_t generation = session.generation, base = session.imageBase;
     int32_t pid = session.processID;
     if (!base || pid <= 0 || base > UINT64_MAX - CSGameStateClassSlot) return nil;
-    CSLastCaptureDiagnostic = "root-world-character";
+    CSLastCaptureDiagnostic = "root-world";
     uint64_t world = 0, wanted = 0;
-    if (!CSReadValue(session, generation, base + CSWorldSlot, &world) || !world ||
-        !CSReadValue(session, generation, base + CSCharacterClassSlot, &wanted) || !wanted) return nil;
+    if (!CSReadValue(session, generation, base + CSWorldSlot, &world) ||
+        !CSUserPointerValid(world)) return nil;
+    // Target UClass is retained only as a diagnostic observation. Core v1.7's
+    // player branch never places this gate before its field-order filters.
+    const bool wantedObserved =
+        CSReadValue(session, generation, base + CSCharacterClassSlot, &wanted) &&
+        CSUserPointerValid(wanted);
+    if (!wantedObserved) wanted = 0;
     CSLastCaptureDiagnostic = "root-name-pool";
     uint64_t namePool = 0;
     uint32_t nameCount = 0;
@@ -784,22 +837,17 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     std::vector<uint64_t> pointers(CSActorPointerBatch);
     struct ObservedActor {
         uint64_t address;
-        CSVector position;
-        float health, maximum;
         uint64_t weapon;
         uint32_t weaponID;
         uint64_t namePointer;
         std::array<uint16_t, 16> nameRaw;
-        uint32_t team;
-        uint8_t ai, status;
         uint32_t warningYawRaw;
         uint32_t warningFallbackRaw;
-        uint64_t warningActorClass;
         NSUInteger markIndex;
         bool weaponObserved, nameObserved, warningYawObserved, warningFallbackObserved;
     };
     std::vector<ObservedActor> observedActors;
-    struct ObservedCount { uint64_t address, type; CSVector position; float health, maximum; uint32_t team; uint8_t ai, status; };
+    struct ObservedCount { uint64_t address; };
     std::vector<ObservedCount> observedCounts;
     struct ObservedGrenade {
         uint64_t address; uint32_t nameIndex; CSVector position;
@@ -811,11 +859,18 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     auto nameRead = [session, generation](uint64_t address, void *output, size_t length) {
         return CSRead(session, generation, address, output, length);
     };
-    struct ObservedBone { uint64_t actor; CSBoneState state; NSUInteger markIndex; CGPoint fallbackHead; };
+    struct ObservedBone { uint64_t actor; NSUInteger markIndex; };
     std::vector<ObservedBone> observedBones;
     std::unordered_map<uint64_t, bool> characterClassCache;
     std::unordered_map<uint64_t, bool> grenadeClassCache;
     NSUInteger nonzeroActors = 0;
+    NSUInteger coreAddressValid = 0, coreSpeedRead = 0, coreSpeedFinite = 0, coreSpeedMatched = 0;
+    NSUInteger coreNotLocal = 0, coreTeamRead = 0, coreTeamRange = 0, coreEnemyTeam = 0;
+    NSUInteger coreStatePointerValid = 0, coreStateFlagsRead = 0, coreStateBit20Clear = 0;
+    NSUInteger coreLifecycleRead = 0, coreLifecyclePass = 0, coreHealthRead = 0, coreHealthPass = 0;
+    NSUInteger coreRootValid = 0, coreMeshValid = 0, coreAIRead = 0, coreAccepted = 0;
+    NSUInteger classObserved = 0, classMatched = 0, classMismatched = 0, classReadFailed = 0;
+    bool localInActorArray = false;
     for (int32_t start = 0; start < array.count; start += CSActorPointerBatch) {
         int32_t batch = std::min<int32_t>(CSActorPointerBatch, array.count - start);
         if (!CSRead(session, generation, array.data + (uint64_t)start * 8,
@@ -831,13 +886,30 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         }
         for (int32_t index = 0; index < batch; ++index) {
             uint64_t actor = pointers[(size_t)index];
-            if (!actor || actor == local) continue;
+            if (!actor) continue;
             ++nonzeroActors;
-            if (collectGrenades) {
+            if (!CSUserPointerValid(actor)) continue;
+            ++coreAddressValid;
+            if (actor == local) localInActorArray = true;
+
+            // Core v1.7 exact branch order, 0x1000d5460..0x1000d549c:
+            // float32 DefaultSpeedValue(+0x10bc), finite, |value-479.5| < 0.1.
+            float coreSpeed = 0;
+            const bool speedRead = CSReadValue(session, generation, actor + 0x10bc, &coreSpeed);
+            if (speedRead) {
+                ++coreSpeedRead;
+                if (std::isfinite(coreSpeed)) ++coreSpeedFinite;
+            }
+            const bool corePlayerProfile = speedRead && CSCorePlayerSpeedMatches(coreSpeed);
+            if (corePlayerProfile) ++coreSpeedMatched;
+
+            // Core's non-player-profile branch performs the grenade name path;
+            // it does not fall through to the player filters below.
+            if (!corePlayerProfile) {
+              if (collectGrenades) {
                 uint32_t nameIndex = 0;
                 bool grenade = false;
-                const bool nameIndexReady = actor <= UINT64_MAX - 0x20 &&
-                    CSReadValue(session, generation, actor + 0x18, &nameIndex);
+                const bool nameIndexReady = CSReadValue(session, generation, actor + 0x18, &nameIndex);
                 if (nameIndexReady) {
                     auto cached = grenadeNames.find(nameIndex);
                     if (cached != grenadeNames.end()) grenade = cached->second;
@@ -913,38 +985,94 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                                 grenadeOuter, explosionRaw, grenadeFlags, timerObserved, markIndex});
                         }
                     }
-                    continue;
                 }
+              }
+              continue;
             }
-            bool character = false;
-            uint64_t actorClass = 0;
-            if (!CSReadValue(session, generation, actor + 0x10, &actorClass) || !actorClass) continue;
-            auto cached = characterClassCache.find(actorClass);
-            if (cached != characterClassCache.end()) character = cached->second;
-            else {
-                if (!CSClassTypeIsChildOf(session, generation, actorClass, wanted, &character)) continue;
-                characterClassCache.emplace(actorClass, character);
-            }
-            if (!character) continue;
+
+            // 0x1000d54a0..0x1000d54a8: self exclusion occurs only after
+            // DefaultSpeedValue identifies the Core player-profile branch.
+            if (actor == local) continue;
+            ++coreNotLocal;
+
+            // 0x1000d54ac..0x1000d54d8: uint32 team, valid 1...100,
+            // and different from the local character's team.
             uint32_t team = 0;
-            if (actor > UINT64_MAX - 0xb7c ||
-                !CSReadValue(session, generation, actor + 0xb78, &team)) continue;
-            if (team < 1 || team > 100 || team == localTeam) continue;
+            if (!CSReadValue(session, generation, actor + 0xb78, &team)) continue;
+            ++coreTeamRead;
+            if (team < 1 || team > 100) continue;
+            ++coreTeamRange;
+            if (team == localTeam) continue;
+            ++coreEnemyTeam;
+
+            // 0x1000d54e0..0x1000d5544: read an 8-byte state owner at
+            // +0x1700, then its leading uint32 flags; bit20 and status byte 4
+            // both reject the candidate.
+            uint64_t coreState = 0;
+            if (!CSReadValue(session, generation, actor + 0x1700, &coreState) ||
+                !CSUserPointerValid(coreState)) continue;
+            ++coreStatePointerValid;
+            uint32_t coreStateFlags = 0;
+            if (!CSReadValue(session, generation, coreState, &coreStateFlags)) continue;
+            ++coreStateFlagsRead;
+            if (coreStateFlags & (1u << 20)) continue;
+            ++coreStateBit20Clear;
+
+            uint8_t status = 0;
+            if (!CSReadValue(session, generation, actor + 0x3be0, &status)) continue;
+            ++coreLifecycleRead;
+            if (status == 4) continue;
+            ++coreLifecyclePass;
+
+            // 0x1000d5548..0x1000d55d8: two float32 reads. Health must be
+            // finite/nonnegative; maximum must be finite/positive; Core allows
+            // health through maximum*1.5 rather than imposing health<=maximum.
             float health = 0, maximum = 0;
-            uint8_t ai = 0, status = 0;
             if (!CSReadValue(session, generation, actor + 0x1060, &health) ||
-                !CSReadValue(session, generation, actor + 0x1068, &maximum) ||
-                !CSReadValue(session, generation, actor + 0xb94, &ai)) continue;
-            if (includeBattleInputs &&
-                (actor < 0x100000000ULL || actor > 0x8000000000ULL - 0x3be1 ||
-                 !CSReadValue(session, generation, actor + 0x3be0, &status))) continue;
+                !CSReadValue(session, generation, actor + 0x1068, &maximum)) continue;
+            ++coreHealthRead;
+            if (!CSCorePlayerHealthMatches(health, maximum)) continue;
+            ++coreHealthPass;
+
+            // 0x1000d55dc..0x1000d563c: both 8-byte component pointers must
+            // be present and in the target user range before bIsAI is read.
+            uint64_t rootComponent = 0, meshComponent = 0;
+            if (!CSReadValue(session, generation, actor + 0x260, &rootComponent) ||
+                !CSUserPointerValid(rootComponent)) continue;
+            ++coreRootValid;
+            if (!CSReadValue(session, generation, actor + 0x658, &meshComponent) ||
+                !CSUserPointerValid(meshComponent)) continue;
+            ++coreMeshValid;
+
+            // 0x1000d5640..0x1000d568c: bIsAI is exactly one byte.
+            uint8_t ai = 0;
+            if (!CSReadValue(session, generation, actor + 0xb94, &ai)) continue;
+            ++coreAIRead;
+            ++coreAccepted;
+
+            // Optional target-build UClass observation. It is deliberately
+            // diagnostic-only and cannot remove a Core-qualified candidate.
+            if (wantedObserved) {
+                uint64_t actorClass = 0;
+                if (CSReadValue(session, generation, actor + 0x10, &actorClass) &&
+                    CSUserPointerValid(actorClass)) {
+                    ++classObserved;
+                    bool character = false;
+                    auto cached = characterClassCache.find(actorClass);
+                    if (cached != characterClassCache.end()) character = cached->second;
+                    else if (CSClassTypeIsChildOf(session, generation, actorClass, wanted, &character))
+                        characterClassCache.emplace(actorClass, character);
+                    else { ++classReadFailed; actorClass = 0; }
+                    if (actorClass) {
+                        if (character) ++classMatched; else ++classMismatched;
+                    }
+                } else ++classReadFailed;
+            }
+
             uint32_t warningYawRaw = 0;
             if (includeWarningYaw &&
                 !CSReadValue(session, generation, actor + 0x2758, &warningYawRaw)) continue;
-            uint8_t countStatus = 0;
-            if (includeCounts && !CSReadValue(session, generation, actor + 0x3be0, &countStatus)) continue;
-            if (!std::isfinite(health) || !std::isfinite(maximum) ||
-                maximum <= 0 || health < 0 || health > maximum) continue;
+            const uint8_t countStatus = status;
             const bool countEligible = includeCounts && CoreSet::playerCountEligible(health, maximum, countStatus);
             if (health == 0 && !countEligible) continue;
             CSVector position = {0};
@@ -969,7 +1097,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             }
             if (countEligible) {
                 if (ai) ++observedBotCount; else ++observedPlayerCount;
-                observedCounts.push_back({actor, actorClass, position, health, maximum, team, ai, countStatus});
+                observedCounts.push_back({actor});
                 if (health == 0) ++observedZeroHealthLastBreath;
             }
             if (health == 0) continue; // Count-only; never promote zero health into world marks/radar/battle input.
@@ -1057,21 +1185,27 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                             ++boneHeadProjected;
                         }
                     } else ++boneHeadUnknownProfile;
-                    observedBones.push_back({actor, std::move(bones), marks.count, headPoint});
+                    observedBones.push_back({actor, marks.count});
                 } else if (bones.status < 6) ++boneUnavailable[bones.status];
             }
             if (marks.count >= CSMaxRenderedMarks) return nil;
             [marks addObject:mark];
-            observedActors.push_back({actor, position, health, maximum,
-                                      weapon, weaponID, namePointer, nameRaw,
-                                      team, ai, status, warningYawRaw, warningFallbackRaw, actorClass,
+            observedActors.push_back({actor, weapon, weaponID, namePointer, nameRaw,
+                                      warningYawRaw, warningFallbackRaw,
                                       marks.count - 1, wantsWeapon, wantsInformation,
                                       includeWarningYaw, warningFallbackObserved});
         }
     }
+    if (actorArraySource == CSActorArraySource::levelFallback &&
+        (!localInActorArray || coreAccepted == 0)) {
+        CSLastCaptureDiagnostic = "fallback-semantic-unconfirmed localInActorArray=" +
+            std::to_string(localInActorArray ? 1 : 0) + " coreAccepted=" +
+            std::to_string(coreAccepted) + " speedMatched=" + std::to_string(coreSpeedMatched);
+        return nil;
+    }
     CSLastCaptureDiagnostic = "stability-roots";
     uint64_t worldAfter = 0, levelAfter = 0, clusterAfter = 0, controllerAfter = 0;
-    uint64_t managerAfter = 0, classAfter = 0, localAfter = 0;
+    uint64_t managerAfter = 0, localAfter = 0;
     uint32_t localTeamAfter = 0;
     CSCamera cameraAfter = {0};
     CSVector localPositionAfter = {0};
@@ -1103,7 +1237,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         arrayAfter.data != array.data ||
         !CSReadValue(session, generation, connection + 0x30, &controllerAfter) ||
         controllerAfter != controller || !session.ready || session.generation != generation ||
-        !CSReadValue(session, generation, base + CSCharacterClassSlot, &classAfter) || classAfter != wanted ||
         !CSReadValue(session, generation, controller + 0x3540, &localAfter) || localAfter != local ||
         !CSReadValue(session, generation, controller + 0x680, &managerAfter) || managerAfter != manager ||
         !CSRead(session, generation, manager + cameraOffset, &cameraAfter, sizeof(cameraAfter)) ||
@@ -1141,6 +1274,20 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         for (int32_t index = 0; index < batch; ++index)
             if (pointers[(size_t)index]) currentActors.insert(pointers[(size_t)index]);
     }
+    const bool localInActorArrayAfter = currentActors.find(local) != currentActors.end();
+    if (actorArraySource == CSActorArraySource::levelFallback && !localInActorArrayAfter) {
+        CSLastCaptureDiagnostic = "fallback-semantic-unstable localInActorArray=1 localInActorArrayAfter=0";
+        return nil;
+    }
+    // Membership enumeration can dominate a kernel-mapped capture. Refresh the
+    // camera/local origin after it, then bound the remaining projection window
+    // so a slow first pass cannot be reported as a current rendered frame.
+    CSLastCaptureDiagnostic = "stability-final-projection-roots";
+    if (!CSRead(session, generation, manager + cameraOffset, &cameraAfter, sizeof(cameraAfter)) ||
+        !CSCameraValid(cameraAfter) ||
+        !CSPosition(session, generation, base, local, &localPositionAfter, &hasLocalPositionAfter) ||
+        !hasLocalPositionAfter) return nil;
+    const double finalReprojectionStartedAt = CACurrentMediaTime();
     CSLastCaptureDiagnostic = "stability-player-actors";
     NSMutableIndexSet *invalidActorMarks = [NSMutableIndexSet indexSet];
     for (const ObservedActor &actor : observedActors) {
@@ -1148,9 +1295,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             [invalidActorMarks addIndex:actor.markIndex];
             continue;
         }
-        float health = 0, maximum = 0;
-        uint8_t ai = 0, status = 0;
-        uint32_t team = 0;
+        CSCorePlayerState current;
         CSVector position = {0};
         bool present = false;
         uint64_t weapon = 0;
@@ -1160,26 +1305,50 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         NSString *name = nil;
         uint32_t warningYawRaw = 0;
         uint32_t warningFallbackRaw = 0;
-        uint64_t actorClassAfter = 0;
-        if (!CSReadValue(session, generation, actor.address + 0x1060, &health) ||
-            !CSReadValue(session, generation, actor.address + 0x1068, &maximum) ||
-            !CSReadValue(session, generation, actor.address + 0xb94, &ai) ||
-            !CSReadValue(session, generation, actor.address + 0xb78, &team) ||
-            (includeBattleInputs &&
-             !CSReadValue(session, generation, actor.address + 0x3be0, &status)) ||
-            !CSReadValue(session, generation, actor.address + 0x10, &actorClassAfter) ||
-            !CSPosition(session, generation, base, actor.address, &position, &present)) {
+        if (!CSReadCorePlayerState(session, generation, actor.address, local, localTeam, &current) ||
+            current.health == 0 ||
+            !CSPosition(session, generation, base, actor.address, &position, &present) || !present) {
             [invalidActorMarks addIndex:actor.markIndex];
             continue;
         }
-        if (actorClassAfter != actor.warningActorClass || !present ||
-            !std::isfinite(health) || !std::isfinite(maximum) || maximum <= 0 ||
-            health < 0 || health > maximum || ai != actor.ai || team != actor.team) {
+        const double dx = (double)position.x - localPositionAfter.x;
+        const double dy = (double)position.y - localPositionAfter.y;
+        const double dz = (double)position.z - localPositionAfter.z;
+        const double distance = std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
+        if (!std::isfinite(distance) ||
+            (maximumDrawDistance != 0 && distance > maximumDrawDistance)) {
+            [invalidActorMarks addIndex:actor.markIndex];
+            continue;
+        }
+        CSVector head = position, feet = position;
+        head.z += 90; feet.z -= 90;
+        CGPoint centerPoint = CGPointZero, headPoint = CGPointZero, feetPoint = CGPointZero;
+        const bool projectedCenter = CSProject(cameraAfter, position, size, &centerPoint);
+        const bool projectedHead = CSProject(cameraAfter, head, size, &headPoint);
+        const bool projectedFeet = CSProject(cameraAfter, feet, size, &feetPoint);
+        const bool onScreen = projectedCenter && centerPoint.x >= 0 && centerPoint.x <= size.width &&
+            centerPoint.y >= 0 && centerPoint.y <= size.height;
+        CGPoint indicator = CGPointZero;
+        if ((onScreen && (!projectedHead || !projectedFeet) && !includeRadar) ||
+            (!onScreen && !includeRadar &&
+             (!includeOffscreen || !CSProjectIndicator(cameraAfter, position, size, &indicator)))) {
             [invalidActorMarks addIndex:actor.markIndex];
             continue;
         }
         CoreSetPlayerMark *mark = marks[actor.markIndex];
-        if (includeBattleInputs) mark.healthStatusCode = status;
+        mark.bot = current.ai != 0;
+        mark.healthStatusCode = current.status;
+        mark.teamID = current.team;
+        mark.health = current.health;
+        mark.maximumHealth = current.maximum;
+        mark.center = centerPoint;
+        mark.head = headPoint;
+        mark.feet = feetPoint;
+        mark.distanceUnitsDividedBy100 = distance;
+        mark.onScreen = onScreen;
+        mark.indicatorProjection = indicator;
+        mark.radarCameraDelta = CGPointMake((double)cameraAfter.location.x - position.x,
+                                            (double)cameraAfter.location.y - position.y);
         if (actor.weaponObserved) {
             if (!CSWeaponID(session, generation, actor.address, &weapon, &weaponID)) {
                 mark.weaponID = 0;
@@ -1224,46 +1393,25 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         }
     }
     CSLastCaptureDiagnostic = "stability-count-actors";
-    const auto discardObservedCount = [&](const ObservedCount &count) {
-        if (count.ai) {
-            if (observedBotCount) --observedBotCount;
-        } else if (observedPlayerCount) --observedPlayerCount;
-        if (count.health == 0 && observedZeroHealthLastBreath)
-            --observedZeroHealthLastBreath;
-    };
+    observedPlayerCount = 0;
+    observedBotCount = 0;
+    observedZeroHealthLastBreath = 0;
     for (const ObservedCount &count : observedCounts) {
-        if (currentActors.find(count.address) == currentActors.end()) {
-            discardObservedCount(count);
-            continue;
-        }
-        float health = 0, maximum = 0;
-        uint8_t ai = 0;
-        uint8_t status = 0;
-        uint64_t type = 0;
-        uint32_t team = 0;
+        if (currentActors.find(count.address) == currentActors.end()) continue;
+        CSCorePlayerState current;
         CSVector position = {0};
         bool present = false;
-        if (!CSReadValue(session, generation, count.address + 0x1060, &health) ||
-            !CSReadValue(session, generation, count.address + 0x1068, &maximum) ||
-            !CSReadValue(session, generation, count.address + 0xb94, &ai) ||
-            !CSReadValue(session, generation, count.address + 0xb78, &team) ||
-            !CSReadValue(session, generation, count.address + 0x10, &type) ||
-            !CSReadValue(session, generation, count.address + 0x3be0, &status) ||
-            !CSPosition(session, generation, base, count.address, &position, &present)) {
-            discardObservedCount(count);
-            continue;
-        }
-        if (type != count.type || !present || !std::isfinite(health) ||
-            !std::isfinite(maximum) || maximum <= 0 || health < 0 || health > maximum ||
-            ai != count.ai || team != count.team ||
-            !CoreSet::playerCountEligible(health, maximum, status)) {
-            discardObservedCount(count);
-            continue;
-        }
-        if (count.health == 0 && health > 0 && observedZeroHealthLastBreath)
-            --observedZeroHealthLastBreath;
-        else if (count.health > 0 && health == 0)
-            ++observedZeroHealthLastBreath;
+        if (!CSReadCorePlayerState(session, generation, count.address, local, localTeam, &current) ||
+            !CoreSet::playerCountEligible(current.health, current.maximum, current.status) ||
+            !CSPosition(session, generation, base, count.address, &position, &present) || !present) continue;
+        const double dx = (double)position.x - localPositionAfter.x;
+        const double dy = (double)position.y - localPositionAfter.y;
+        const double dz = (double)position.z - localPositionAfter.z;
+        const double distance = std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
+        if (!std::isfinite(distance) ||
+            (maximumDrawDistance != 0 && distance > maximumDrawDistance)) continue;
+        if (current.ai) ++observedBotCount; else ++observedPlayerCount;
+        if (current.health == 0) ++observedZeroHealthLastBreath;
     }
     CSLastCaptureDiagnostic = "stability-grenades";
     for (ObservedGrenade &grenade : observedGrenades) {
@@ -1301,7 +1449,19 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             [invalidGrenadeMarks addIndex:grenade.markIndex];
             continue;
         }
+        const double dx = (double)position.x - localPositionAfter.x;
+        const double dy = (double)position.y - localPositionAfter.y;
+        const double dz = (double)position.z - localPositionAfter.z;
+        const double distance = std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
+        CGPoint point = CGPointZero;
+        if (!std::isfinite(distance) || !CSProject(cameraAfter, position, size, &point) ||
+            point.x < 0 || point.x > size.width || point.y < 0 || point.y > size.height) {
+            [invalidGrenadeMarks addIndex:grenade.markIndex];
+            continue;
+        }
         CoreSetGrenadeMark *mark = grenadeMarks[grenade.markIndex];
+        mark.point = point;
+        mark.distanceUnitsDividedBy100 = distance;
         mark.motionPosition = position;
         if (grenade.timerObserved) {
             if (!CSReadValue(session, generation, grenade.address + 0x10, &type) ||
@@ -1359,14 +1519,24 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     for (const ObservedBone &bone : observedBones) {
         if ([invalidActorMarks containsIndex:bone.markIndex] ||
             currentActors.find(bone.actor) == currentActors.end()) continue;
+        CoreSetPlayerMark *mark = marks[bone.markIndex];
         CSBoneState after;
         bool present = false;
         const bool boneRead = CSReadBoneState(session, generation, base, bone.actor, &after, &present);
-        if (!boneRead || !present || !CSBoneStructureEqual(bone.state, after)) {
-            CoreSetPlayerMark *mark = marks[bone.markIndex];
+        if (!boneRead || !present) {
             mark.boneSegments = @[];
             mark.headBoneIndex = nil;
-            mark.head = bone.fallbackHead;
+            continue;
+        }
+        mark.boneSegments = CSProjectBones(after, cameraAfter, size);
+        uint8_t headIndex = 0;
+        CGPoint top = CGPointZero;
+        if (CoreSet::referenceBoneHeadIndex(after.array.count, &headIndex) &&
+            CSProjectBoneHead(after, cameraAfter, size, &top, &headIndex)) {
+            mark.head = top;
+            mark.headBoneIndex = @(headIndex);
+        } else {
+            mark.headBoneIndex = nil;
         }
     }
     CSLastCaptureDiagnostic = "stability-battle-inputs";
@@ -1378,18 +1548,40 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             !CSRead(session, generation, controller + 0x620, rotationAfter, sizeof(rotationAfter)) ||
             !std::isfinite(rotationAfter[0]) || !std::isfinite(rotationAfter[1]) ||
             std::fabs(rotationAfter[0]) > 360 || std::fabs(rotationAfter[1]) > 360) return nil;
+        localADS = adsAfter;
+        localFiring = firingAfter;
+        controlRotation[0] = rotationAfter[0];
+        controlRotation[1] = rotationAfter[1];
     }
     if (invalidActorMarks.count) [marks removeObjectsAtIndexes:invalidActorMarks];
     if (invalidGrenadeMarks.count) [grenadeMarks removeObjectsAtIndexes:invalidGrenadeMarks];
+    NSUInteger producedPlayerMarks = 0, producedBotMarks = 0;
+    for (CoreSetPlayerMark *mark in marks) {
+        if (mark.bot) ++producedBotMarks; else ++producedPlayerMarks;
+    }
+    if (!includeBattleInputs && !includeCounts && marks.count == 0 && grenadeMarks.count == 0) {
+        CSLastCaptureDiagnostic = "no-renderable-output coreAccepted=" +
+            std::to_string(coreAccepted) + " localInActorArray=" +
+            std::to_string(localInActorArray ? 1 : 0);
+        return nil;
+    }
+    const double captureCompletedAt = CACurrentMediaTime();
+    const double finalReprojectionAge = captureCompletedAt - finalReprojectionStartedAt;
+    if (!std::isfinite(finalReprojectionAge) || finalReprojectionAge < 0 ||
+        finalReprojectionAge > 0.45) {
+        CSLastCaptureDiagnostic = "final-reprojection-stale age=" +
+            std::to_string(finalReprojectionAge) + " limit=0.45";
+        return nil;
+    }
     CSLastCaptureDiagnostic = "identity-final";
     if (!session.ready || session.generation != generation) return nil;
     CoreSetPlayerSnapshot *snapshot = [CoreSetPlayerSnapshot new];
     snapshot.sessionGeneration = generation; snapshot.processID = pid;
     snapshot.imageBase = base; snapshot.snapshotID = [NSUUID UUID];
-    snapshot.cameraYawDegrees = camera.rotation.y;
-    snapshot.motionCamera = camera;
-    snapshot.cameraPitchDegrees = camera.rotation.x;
-    snapshot.cameraFieldOfViewDegrees = camera.fov;
+    snapshot.cameraYawDegrees = cameraAfter.rotation.y;
+    snapshot.motionCamera = cameraAfter;
+    snapshot.cameraPitchDegrees = cameraAfter.rotation.x;
+    snapshot.cameraFieldOfViewDegrees = cameraAfter.fov;
     snapshot.battleInputsPresent = includeBattleInputs;
     if (includeBattleInputs) {
         snapshot.controllerAddress = controller;
@@ -1400,13 +1592,13 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         snapshot.controlYawDegrees = controlRotation[1];
     }
     snapshot.captureStartedMonotonicSeconds = captureStartedAt;
-    snapshot.captureCompletedMonotonicSeconds = CACurrentMediaTime();
+    snapshot.captureCompletedMonotonicSeconds = captureCompletedAt;
     snapshot.marks = [marks copy];
     snapshot.grenadeMarks = [grenadeMarks copy];
     snapshot.observedPlayerCount = observedPlayerCount;
     snapshot.observedBotCount = observedBotCount;
     snapshot.readSemanticDiagnostic = [NSString stringWithFormat:
-        @"candidateCounts=capture-pass actorArraySource=%s displayFields=initial-sample-validated-at-end detailCounters=initial-observation marks=final-after-degradation actors=%d marks=%lu players=%lu bots=%lu zeroHealthLastBreath=%lu countScope=positive-health-or-last-breath-enemy-draw-range countParity=partial "
+        @"candidateCounts=capture-pass actorArraySource=%s displayFields=final-reprojected detailCounters=initial-filter-plus-final-output actors=%d nonzero=%lu addressValid=%lu speedRead=%lu speedFinite=%lu speedMatched=%lu notLocal=%lu teamRead=%lu teamRange=%lu enemyTeam=%lu statePointer=%lu stateFlags=%lu stateBit20Clear=%lu lifecycleRead=%lu lifecyclePass=%lu healthRead=%lu healthPass=%lu rootValid=%lu meshValid=%lu aiRead=%lu coreAccepted=%lu localInActorArray=%d localInActorArrayAfter=%d uclassWantedObserved=%d classObserved=%lu classMatched=%lu classMismatched=%lu classReadFailed=%lu marks=%lu producedPlayers=%lu producedBots=%lu players=%lu bots=%lu zeroHealthLastBreath=%lu countScope=positive-health-or-last-breath-enemy-draw-range countParity=partial "
          "grenadeRequested=%d grenadeCandidates=%lu grenadePosition=%lu grenadeOnscreen=%lu "
          "grenadeClassKnown=%d gameStateClassKnown=%d grenadeTyped=%lu grenadeCountdowns=%lu grenadeLifecycleSuppressed=%lu grenadeActorWorldMismatch=%lu grenadeClockKnown=%d grenadeClockStatus=%u "
          "grenadeTimer=target-server-clock-clamped grenadeRadius=unproven grenadeAnimation=local-prediction-partial "
@@ -1416,9 +1608,22 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
          "boneHeadKnownProfile=%lu boneHeadProjected=%lu boneHeadUnknownProfile=%lu headScope=requested-bones-only headParity=partial "
          "networkFreshness=unproven captureStability=stable-identity-plus-bounded-dynamic-reread grenadeAnimationScope=local-position-history grenadeRadiusGap=no-verified-elite-blast-field "
          "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationLayout=local-subset informationGap=native-font-icons-and-anchors "
-         "captureDuration=%.3f freshnessBasis=completion",
+         "captureDuration=%.3f finalReprojectionAge=%.3f freshnessBasis=final-reprojected",
         actorArraySource == CSActorArraySource::primary ? "core17-primary" : "core17-level-a0-a8-fallback",
-        array.count, (unsigned long)marks.count, (unsigned long)observedPlayerCount,
+        array.count, (unsigned long)nonzeroActors, (unsigned long)coreAddressValid,
+        (unsigned long)coreSpeedRead, (unsigned long)coreSpeedFinite, (unsigned long)coreSpeedMatched,
+        (unsigned long)coreNotLocal, (unsigned long)coreTeamRead, (unsigned long)coreTeamRange,
+        (unsigned long)coreEnemyTeam, (unsigned long)coreStatePointerValid,
+        (unsigned long)coreStateFlagsRead, (unsigned long)coreStateBit20Clear,
+        (unsigned long)coreLifecycleRead, (unsigned long)coreLifecyclePass,
+        (unsigned long)coreHealthRead, (unsigned long)coreHealthPass,
+        (unsigned long)coreRootValid, (unsigned long)coreMeshValid,
+        (unsigned long)coreAIRead, (unsigned long)coreAccepted,
+        localInActorArray, localInActorArrayAfter, wantedObserved,
+        (unsigned long)classObserved, (unsigned long)classMatched,
+        (unsigned long)classMismatched, (unsigned long)classReadFailed,
+        (unsigned long)marks.count, (unsigned long)producedPlayerMarks,
+        (unsigned long)producedBotMarks, (unsigned long)observedPlayerCount,
         (unsigned long)observedBotCount, (unsigned long)observedZeroHealthLastBreath,
         includeGrenadeWarning, (unsigned long)grenadeCandidates,
         (unsigned long)grenadePositionPresent, (unsigned long)grenadeMarks.count,
@@ -1434,7 +1639,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         (unsigned long)boneHeadKnownProfile, (unsigned long)boneHeadProjected, (unsigned long)boneHeadUnknownProfile,
         (unsigned long)nameRequested, (unsigned long)namePresent,
         (unsigned long)weaponRequested, (unsigned long)weaponKnown,
-        snapshot.captureCompletedMonotonicSeconds - captureStartedAt];
+        snapshot.captureCompletedMonotonicSeconds - captureStartedAt, finalReprojectionAge];
     CSLastCaptureDiagnostic = "ready";
     return snapshot;
 }

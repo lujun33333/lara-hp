@@ -260,7 +260,10 @@ for row in missing:
 assert [row["id"] for row in rows if row["alternative_preview_field"]] == [
     "v17-108", "v17-110", "v17-111", "v17-112", "v17-113", "v17-115", "v17-117"]
 assert all(row["consumer_contract"] == "missing_aim" for row in rows if row["alternative_preview_field"])
-assert set(matrix["missing_observation_producers"]) == {"v17-005", "v17-006", "v17-008", "v17-009", "v17-010"}
+assert set(matrix["original_observation_producer_gaps"]) == {"v17-005", "v17-006", "v17-008", "v17-009", "v17-010"}
+assert all(extra["local_equivalent_producer_available"] for extra in matrix["original_observation_producer_gaps"].values())
+assert all(not extra["original_producer_available"] for extra in matrix["original_observation_producer_gaps"].values())
+assert all(not extra["counts_toward_v17_closure"] for extra in matrix["original_observation_producer_gaps"].values())
 assert all(not extra["counts_toward_v17_closure"] for extra in matrix["current_ui_extensions"])
 
 parser = argparse.ArgumentParser()
@@ -278,5 +281,5 @@ if args.inventory:
     print(f"REFERENCE: {len(pages)} pages / {len(cards)} cards / {len(points)} inventory points; all card names present")
 
 print("PASS: local configuration staging, live apply gates, observable unavailable actions, pointer lifetime; source only")
-print("MATRIX: 137 reference points, 35 missing original action consumers, 7 alternative previews, 5 missing observation producers; device effect closure=0")
+print("MATRIX: 137 reference points, 35 missing original action consumers, 7 alternative previews, 5 missing original observation producers (all have local-equivalent producers); device effect closure=0")
 print("LIMIT: no Swift/UIKit compilation, physical hit testing, consumer receipt or device output verification")

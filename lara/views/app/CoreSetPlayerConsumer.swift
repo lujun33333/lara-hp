@@ -41,7 +41,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
         session.diagnosticLabel = "player"
-        NSLog("Core-SET: player-loop contract=core17-continuous-retry-v2 interval=0.15 freshness=0.5 basis=completed")
+        NSLog("Core-SET: player-loop contract=core17-filter-final-reproject-v3 interval=0.15 deliveryFreshness=0.5 geometryFreshness=final-reprojected emptyEffect=retry")
         probe = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
@@ -203,6 +203,15 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         let includeCounts = settings.player.count.enabled == true || settings.bot.count.enabled == true
         let playerInformation = settings.player.information.enabled == true
         let botInformation = settings.bot.information.enabled == true && settings.hideBots != true
+        let requiresRenderableEvidence = settings.player.box == true || settings.player.ray == true ||
+            settings.player.distance == true || settings.player.bones == true ||
+            settings.player.weapon.enabled == true || settings.player.count.enabled == true ||
+            settings.player.information.enabled == true ||
+            (settings.hideBots != true && (settings.bot.box == true || settings.bot.ray == true ||
+                settings.bot.distance == true || settings.bot.bones == true ||
+                settings.bot.weapon.enabled == true || settings.bot.count.enabled == true ||
+                settings.bot.information.enabled == true)) ||
+            settings.backIndicator?.showIndicator == true || settings.grenadeWarning == true
         worker.async { [weak self] in
             guard let self else { return }
             let failureSequence = self.session.readFailureSequence
@@ -252,6 +261,11 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                         self.pendingApply = nil
                         pending.1(token, .failed(reason: "玩家绘制命令超出本地宿主上限"))
                     }
+                    return
+                }
+                guard !requiresRenderableEvidence || !commands.isEmpty else {
+                    self.retryCapture("no-renderable-evidence marks=\(snapshot.marks.count) grenades=\(snapshot.grenadeMarks.count)",
+                                      token: token)
                     return
                 }
                 let input = CoreSetLaneSubmission(lane: .player, hostGeneration: canvas.generation,

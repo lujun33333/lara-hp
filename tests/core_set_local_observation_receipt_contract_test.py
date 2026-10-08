@@ -103,12 +103,15 @@ class LocalObservationReceiptContract(unittest.TestCase):
     def test_home_epoch_sequence_generation_and_stop(self):
         capture = body(self.home, "func capture(")
         for gate in ("identity.observerEpoch == provider.observerEpoch", "identity.hostGeneration == hostGeneration",
-                     "identity.sequence > $0.sequence", "age >= 0", "age <= 5", "referenceNativeGeneration == reference.nativeGeneration"):
+                     "identity.sequence > $0.sequence", "age >= 0", "age <= 5",
+                     "value.currentGeneration == referenceGenerations[field]",
+                     "value.nativeSequence >= (referenceNativeSequences[field] ?? 0)"):
             self.assertIn(gate, capture)
         menu = body(self.menu, "func updateRuntimeObservations(")
         self.assertIn("identity.hostGeneration == expectedHostGeneration", menu)
         self.assertIn("identity.sequence > (old?.sequence ?? 0)", menu)
         self.assertIn("referenceProvider = nil", body(self.home, "func stopObservations()"))
+        self.assertIn("referenceProvider?.stopObservation()", body(self.home, "func stopObservations()"))
         self.assertIn("observation-owner-stopped", body(self.home, "func recordProducerProbeEvent("))
         stop = body(self.coordinator, "func stop()")
         self.assertIn("observationTimer?.cancel()", stop)
