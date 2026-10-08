@@ -20,6 +20,7 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
     CIContext *_ciContext;
     CGImageRef _lastImage;
     BOOL _visible;
+    BOOL _hasVisibleCommands;
     BOOL _lastDrawSucceeded;
     NSInteger _requestedFPS;
     CoreSetPresentationCadence::Window _presentationCadence;
@@ -141,8 +142,10 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
     }
     if (_lastImage) CGImageRelease(_lastImage);
     _lastImage = CGImageRetain(bitmap.CGImage);
+    _hasVisibleCommands = frame.commands.count > 0;
     _lastDrawSucceeded = NO;
     [_metalView draw];
+    _metalView.paused = !_visible || !_hasVisibleCommands;
     if (!_lastDrawSucceeded && error) *error = CSMetalError(5, @"Metal command buffer completion was not confirmed");
     return _lastDrawSucceeded;
 }
@@ -151,8 +154,9 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
     if (_visible != (visible && _metalView != nil)) _presentationCadence.reset();
     _visible = visible && _metalView != nil;
     _metalView.hidden = !_visible;
-    // Only the visible, foreground Metal surface owns a running scheduler.
-    _metalView.paused = !_visible;
+    // An empty compositor frame needs one explicit clear, not a permanent
+    // drawable loop. Non-empty local frames keep the configured scheduler.
+    _metalView.paused = !_visible || !_hasVisibleCommands;
 }
 - (NSInteger)observedRenderFPS {
     if (!NSThread.isMainThread || !_visible || !_metalView || !_metalView.window ||
@@ -176,7 +180,9 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
     _presentationCadence.reset();
     [_raster clear];
     if (_lastImage) { CGImageRelease(_lastImage); _lastImage = nil; }
+    _hasVisibleCommands = NO;
     _lastDrawSucceeded = NO;
+    _metalView.paused = YES;
     [_metalView setNeedsDisplay];
 }
 - (void)detach {
@@ -187,7 +193,7 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
     _metalView = nil;
     [_raster detach]; _raster = nil; _rasterView = nil;
     _queue = nil; _ciContext = nil;
-    _visible = NO; _requestedFPS = 0;
+    _visible = NO; _hasVisibleCommands = NO; _requestedFPS = 0;
 }
 - (void)dealloc { if (_lastImage) CGImageRelease(_lastImage); }
 @end

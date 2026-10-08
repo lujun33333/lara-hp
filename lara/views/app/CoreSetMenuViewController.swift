@@ -997,7 +997,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         if hostConsumer != nil {
             requestMenuVisibility(false) { [weak self] confirmed in
                 guard let self else { return }
-                if confirmed { self.onClose?() } else { self.isClosing = false }
+                self.isClosing = false
+                if confirmed { self.onClose?() }
             }
         } else {
             dismiss(animated: true, completion: onClose)
@@ -1329,7 +1330,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         let palette = featureState.home.desired.floatingPalette
         hostChannel.updateDesired { $0.menuVisible = visible; $0.floatingPalette = palette }
         applyHostSettings { [weak self] confirmed in
-            if confirmed && visible { self?.isClosing = false }
+            self?.isClosing = false
             if confirmed && !visible { self?.dismissHostedColorEditor() }
             completion(confirmed)
         }

@@ -57,5 +57,5 @@ def test_home_status_uses_action_owner_state_and_hosted_metal_stays_live():
     assert "let information = CoreSetKernelInformationOwner.shared.snapshot()" in observation
     assert "manager.hasOffsets && information.status == 2" in observation
     assert "firmware.phase == 6 || information.status == 3" in observation
-    assert "return metalAvailable && (foreground || crossApplicationHosted)" in LIFECYCLE
+    assert "return foreground && metalAvailable && !crossApplicationHosted" in LIFECYCLE
 

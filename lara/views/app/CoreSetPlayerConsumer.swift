@@ -42,7 +42,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         self.coordinator = coordinator
         session.diagnosticLabel = "player"
         NSLog("Core-SET: player-loop contract=core17-filter-coalesced-final-reproject-v4 interval=0.15 deliveryFreshness=0.5 geometryFreshness=final-reprojected transportReads=actor-page-copy+bone-array-bulk emptyEffect=retry")
-        probe = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.probeTarget() }
+        probe = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
 

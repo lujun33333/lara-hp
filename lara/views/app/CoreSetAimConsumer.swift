@@ -44,7 +44,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
 
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
-        readinessTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
+        readinessTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
         refresh()
     }
     private func refresh() {

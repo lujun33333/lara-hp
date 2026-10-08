@@ -21,8 +21,8 @@ int main() {
     // after the launcher resigns foreground. Metal/FPS must therefore remain
     // active; CA is only the fallback when no Metal surface exists.
     assert(CoreSetHUDSelectBackend(true, true, false) == CoreSetHUDBackendMetal);
-    assert(CoreSetHUDSelectBackend(false, true, true) == CoreSetHUDBackendMetal);
-    assert(CoreSetHUDSelectBackend(true, true, true) == CoreSetHUDBackendMetal);
+    assert(CoreSetHUDSelectBackend(false, true, true) == CoreSetHUDBackendCoreAnimation);
+    assert(CoreSetHUDSelectBackend(true, true, true) == CoreSetHUDBackendCoreAnimation);
     assert(CoreSetHUDSelectBackend(false, true, false) == CoreSetHUDBackendCoreAnimation);
     assert(CoreSetHUDSelectBackend(true, false, true) == CoreSetHUDBackendCoreAnimation);
     std::puts("CoreSet frame generation boundary passed");

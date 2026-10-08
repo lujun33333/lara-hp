@@ -1280,7 +1280,17 @@ private final class CoreSetLocalHostConsumer: CoreSetFeatureConsumer {
         guard host.generation == generation, host.floatingControlReady,
               host.panelVisible == state.menuVisible, let palette = state.floatingPalette else { return false }
         let expected = colors(for: palette), observed = host.observedFloatingColors
-        return observed.count == expected.count && zip(observed, expected).allSatisfy { $0.0.isEqual($0.1) }
+        func rgba(_ color: UIColor) -> (CGFloat, CGFloat, CGFloat, CGFloat)? {
+            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+            guard color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return nil }
+            return (red, green, blue, alpha)
+        }
+        return observed.count == expected.count && zip(observed, expected).allSatisfy {
+            guard let lhs = rgba($0.0), let rhs = rgba($0.1) else { return false }
+            let epsilon = CGFloat(1.0 / 255.0)
+            return abs(lhs.0 - rhs.0) <= epsilon && abs(lhs.1 - rhs.1) <= epsilon &&
+                abs(lhs.2 - rhs.2) <= epsilon && abs(lhs.3 - rhs.3) <= epsilon
+        }
     }
     func refreshObservation(isCurrent: (CoreSetRequestToken) -> Bool,
                             canInspect: (CoreSetRequestToken) -> Bool, invalidate: (String) -> Void) {

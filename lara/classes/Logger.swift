@@ -93,6 +93,18 @@ class Logger: ObservableObject {
         "};",
         "NSLayoutConstraint",
         "   \"",
+        "(rc) 正在等待异常",
+        "(rc) 已收到异常",
+        "(rc) signState:",
+        "(rc) 正在回复远程调用",
+        "(rc) 返回异常:",
+        "(rc) objc_msgSend 的 pcAddr:",
+        "(rc) objc_msgSend 函数的返回值",
+        "(rc) main-thread invoke 的 pcAddr:",
+        "(rc) main-thread invoke 函数的返回值",
+        "(pac) remotepac:",
+        "(pac) remotepac 结果:",
+        "(pac) pac 线程状态已设置",
     ]
 
     init() {
@@ -249,6 +261,9 @@ class Logger: ObservableObject {
             let filtered = lines.filter { !shouldignore($0) }
             DispatchQueue.main.async {
                 self.logs.append(contentsOf: filtered)
+                if self.logs.count > 2_000 {
+                    self.logs.removeFirst(self.logs.count - 1_000)
+                }
             }
             appendtofile(filtered)
             for line in filtered {
@@ -340,7 +355,6 @@ class Logger: ObservableObject {
         let text = filtered.joined(separator: "\n") + "\n"
         if let data = text.data(using: .utf8) {
             try? handle.write(contentsOf: data)
-            try? handle.synchronize()
         }
     }
 }

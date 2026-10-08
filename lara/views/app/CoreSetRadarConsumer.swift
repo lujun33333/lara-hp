@@ -38,7 +38,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
         session.diagnosticLabel = "radar"
-        probe = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.probeTarget() }
+        probe = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
 

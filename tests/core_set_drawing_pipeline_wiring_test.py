@@ -36,8 +36,8 @@ def test_all_reference_drawing_consumers_share_one_composer_and_receipt_path():
         assert f"self.{owner}?.consumed(receipt)" in COORDINATOR
 
 
-def test_draw_surface_keeps_metal_when_remotely_hosted():
-    assert "return metalAvailable && (foreground || crossApplicationHosted)" in LIFECYCLE
+def test_draw_surface_uses_retained_ca_when_remotely_hosted():
+    assert "return foreground && metalAvailable && !crossApplicationHosted" in LIFECYCLE
     assert "id<CoreSetFrameConsumer> consumer = host->_activeBackend == CoreSetHUDBackendMetal" in HOST
     assert "host.frameDidConsume(frame, YES, nil)" in HOST
     assert "hostedRegistrationReceipt" in HOST

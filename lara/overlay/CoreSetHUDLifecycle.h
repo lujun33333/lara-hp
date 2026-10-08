@@ -22,11 +22,12 @@ static inline bool CoreSetHUDFrameIsCurrent(bool running, uint64_t generation,
 static inline CoreSetHUDBackend CoreSetHUDSelectBackend(bool foreground,
                                                         bool metalAvailable,
                                                         bool crossApplicationHosted) {
-    // A remotely hosted source UIWindow stays process-owned and keeps the same
-    // CAMetalLayer context. Keep Metal active for that hosted source so the
-    // v1.7 FPS scheduler and draw lanes do not silently fall back to CA when
-    // the launcher resigns foreground after opening the target application.
-    return metalAvailable && (foreground || crossApplicationHosted)
+    // The hosted source remains process-owned, but driving its MTKView while
+    // this app is in the background keeps a continuous drawable loop alive in
+    // parallel with the game. Use retained CoreAnimation for cross-application
+    // frames; it updates only when a composer frame changes and avoids stealing
+    // game/UI time from the foreground application.
+    return foreground && metalAvailable && !crossApplicationHosted
         ? CoreSetHUDBackendMetal : CoreSetHUDBackendCoreAnimation;
 }
 

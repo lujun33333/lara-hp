@@ -116,7 +116,9 @@ def validate_owner(text):
     need(match, "host.generation == generation", "host.floatingControlReady",
          "host.panelVisible == state.menuVisible", "let palette = state.floatingPalette",
          "let expected = colors(for: palette), observed = host.observedFloatingColors",
-         "return observed.count == expected.count && zip(observed, expected).allSatisfy { $0.0.isEqual($0.1) }")
+         "func rgba(_ color: UIColor)", "epsilon = CGFloat(1.0 / 255.0)",
+         "return observed.count == expected.count && zip(observed, expected).allSatisfy")
+    assert ".isEqual(" not in match
     assert apply.index("host.applyLocalMenu(visible:") < apply.index("guard matches(request.desired")
     assert apply.index("guard matches(request.desired") < apply.index("appliedToken = request.token") < apply.index(".applied(observed:")
     stop = swift(consumer, "stop")
@@ -133,7 +135,8 @@ for old in ["stopWindowsConfirmed", "host.observedFloatingColors",
             "submittedGeneration != host.renderGeneration", "CoreSetHUDHost(hostingAdapter: nil)",
             "guard matches(request.desired, generation: generation) else",
             "host.generation == generation", "host.floatingControlReady",
-            "observed.count == expected.count", "zip(observed, expected)", "$0.0.isEqual($0.1)",
+            "observed.count == expected.count", "zip(observed, expected)",
+            "epsilon = CGFloat(1.0 / 255.0)",
             "appliedToken = request.token", "finish(final)"]:
     try:
         validate_owner(coordinator.replace(old, "REMOVED_GATE"))

@@ -229,6 +229,38 @@ static bool CSReadCorePlayerState(CoreSetReadSession *session, uint64_t generati
     return true;
 }
 
+// The exact Core container is preferred. On this target the level +0xa0/+0xa8
+// fallback can be the only live actor array during a match transition. In that
+// case bind candidates to the hash-verified Character class and the same target
+// fields instead of requiring Core's separate +0x1700 state-owner branch.
+static bool CSReadTargetFallbackPlayerState(CoreSetReadSession *session,
+                                            uint64_t generation, uint64_t actor,
+                                            uint64_t expectedClass, uint64_t local,
+                                            uint32_t localTeam, CSCorePlayerState *state,
+                                            CSCaptureReadCache *cache) {
+    *state = {};
+    uint64_t actorClass = 0;
+    if (!expectedClass || !CSUserPointerValid(actor) || actor == local ||
+        !CSCaptureReadValue(session, generation, actor + 0x10, &actorClass, cache) ||
+        actorClass != expectedClass ||
+        !CSCaptureReadValue(session, generation, actor + 0xb78, &state->team, cache) ||
+        state->team < 1 || state->team > 100 || state->team == localTeam ||
+        !CSCaptureReadValue(session, generation, actor + 0x3be0, &state->status, cache) ||
+        state->status == 4 ||
+        !CSCaptureReadValue(session, generation, actor + 0x1060, &state->health, cache) ||
+        !CSCaptureReadValue(session, generation, actor + 0x1068, &state->maximum, cache) ||
+        !CSCorePlayerHealthMatches(state->health, state->maximum) ||
+        !CSCaptureReadValue(session, generation, actor + 0x260, &state->rootComponent, cache) ||
+        !CSUserPointerValid(state->rootComponent) ||
+        !CSCaptureReadValue(session, generation, actor + 0x658, &state->meshComponent, cache) ||
+        !CSUserPointerValid(state->meshComponent) ||
+        !CSCaptureReadValue(session, generation, actor + 0xb94, &state->ai, cache)) return false;
+    // HealthStatus is a hash-bound target enum. Preserve knocked filtering for
+    // the fallback without fabricating the unavailable Core state-owner word.
+    state->stateFlags = state->status == 1 ? (1u << 19) : 0;
+    return true;
+}
+
 static CSActorArraySource CSReadCoreActorArray(CoreSetReadSession *session, uint64_t generation,
                                                 uint64_t level, uint64_t *container,
                                                 CSActorArrayState *array,
@@ -1043,11 +1075,13 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         std::array<uint16_t, 16> nameRaw;
         uint32_t warningYawRaw;
         uint32_t warningFallbackRaw;
+        uint64_t actorClass;
         NSUInteger markIndex;
-        bool weaponObserved, nameObserved, warningYawObserved, warningFallbackObserved;
+        bool targetFallback, weaponObserved, nameObserved;
+        bool warningYawObserved, warningFallbackObserved;
     };
     std::vector<ObservedActor> observedActors;
-    struct ObservedCount { uint64_t address; };
+    struct ObservedCount { uint64_t address, actorClass; bool targetFallback; };
     std::vector<ObservedCount> observedCounts;
     struct ObservedGrenade {
         uint64_t address; uint32_t nameIndex; CSVector position;
@@ -1069,6 +1103,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     NSUInteger coreStatePointerValid = 0, coreStateFlagsRead = 0, coreStateBit20Clear = 0;
     NSUInteger coreLifecycleRead = 0, coreLifecyclePass = 0, coreHealthRead = 0, coreHealthPass = 0;
     NSUInteger coreRootValid = 0, coreMeshValid = 0, coreAIRead = 0, coreAccepted = 0;
+    NSUInteger targetFallbackAccepted = 0;
     NSUInteger classObserved = 0, classMatched = 0, classMismatched = 0, classReadFailed = 0;
     bool localInActorArray = false;
     for (int32_t start = 0; start < array.count; start += CSActorPointerBatch) {
@@ -1103,9 +1138,27 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             const bool corePlayerProfile = speedRead && CSCorePlayerSpeedMatches(coreSpeed);
             if (corePlayerProfile) ++coreSpeedMatched;
 
+            bool targetFallbackProfile = false;
+            uint64_t actorClass = 0;
+            if (!corePlayerProfile && actorArraySource == CSActorArraySource::levelFallback &&
+                wantedObserved && CSReadValue(session, generation, actor + 0x10, &actorClass) &&
+                CSUserPointerValid(actorClass)) {
+                ++classObserved;
+                bool character = false;
+                const auto cached = characterClassCache.find(actorClass);
+                if (cached != characterClassCache.end()) character = cached->second;
+                else if (CSClassTypeIsChildOf(session, generation, actorClass, wanted, &character))
+                    characterClassCache.emplace(actorClass, character);
+                else { ++classReadFailed; actorClass = 0; }
+                if (actorClass) {
+                    if (character) { ++classMatched; targetFallbackProfile = true; }
+                    else ++classMismatched;
+                }
+            }
+
             // Core's non-player-profile branch performs the grenade name path;
             // it does not fall through to the player filters below.
-            if (!corePlayerProfile) {
+            if (!corePlayerProfile && !targetFallbackProfile) {
               if (collectGrenades) {
                 uint32_t nameIndex = 0;
                 bool grenade = false;
@@ -1205,55 +1258,62 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             if (team == localTeam) continue;
             ++coreEnemyTeam;
 
-            // 0x1000d54e0..0x1000d5544: read an 8-byte state owner at
-            // +0x1700, then its leading uint32 flags; bit20 and status byte 4
-            // both reject the candidate.
             uint64_t coreState = 0;
-            if (!CSReadValue(session, generation, actor + 0x1700, &coreState) ||
-                !CSUserPointerValid(coreState)) continue;
-            ++coreStatePointerValid;
             uint32_t coreStateFlags = 0;
-            if (!CSReadValue(session, generation, coreState, &coreStateFlags)) continue;
-            ++coreStateFlagsRead;
-            if (coreStateFlags & (1u << 20)) continue;
-            ++coreStateBit20Clear;
-
             uint8_t status = 0;
-            if (!CSReadValue(session, generation, actor + 0x3be0, &status)) continue;
-            ++coreLifecycleRead;
-            if (status == 4) continue;
-            ++coreLifecyclePass;
-
-            // 0x1000d5548..0x1000d55d8: two float32 reads. Health must be
-            // finite/nonnegative; maximum must be finite/positive; Core allows
-            // health through maximum*1.5 rather than imposing health<=maximum.
             float health = 0, maximum = 0;
-            if (!CSReadValue(session, generation, actor + 0x1060, &health) ||
-                !CSReadValue(session, generation, actor + 0x1068, &maximum)) continue;
-            ++coreHealthRead;
-            if (!CSCorePlayerHealthMatches(health, maximum)) continue;
-            ++coreHealthPass;
-
-            // 0x1000d55dc..0x1000d563c: both 8-byte component pointers must
-            // be present and in the target user range before bIsAI is read.
             uint64_t rootComponent = 0, meshComponent = 0;
-            if (!CSReadValue(session, generation, actor + 0x260, &rootComponent) ||
-                !CSUserPointerValid(rootComponent)) continue;
-            ++coreRootValid;
-            if (!CSReadValue(session, generation, actor + 0x658, &meshComponent) ||
-                !CSUserPointerValid(meshComponent)) continue;
-            ++coreMeshValid;
-
-            // 0x1000d5640..0x1000d568c: bIsAI is exactly one byte.
             uint8_t ai = 0;
-            if (!CSReadValue(session, generation, actor + 0xb94, &ai)) continue;
-            ++coreAIRead;
-            ++coreAccepted;
+            if (corePlayerProfile) {
+                // 0x1000d54e0..0x1000d5544: read an 8-byte state owner at
+                // +0x1700, then its leading uint32 flags; bit20 and status byte
+                // 4 both reject the candidate.
+                if (!CSReadValue(session, generation, actor + 0x1700, &coreState) ||
+                    !CSUserPointerValid(coreState)) continue;
+                ++coreStatePointerValid;
+                if (!CSReadValue(session, generation, coreState, &coreStateFlags)) continue;
+                ++coreStateFlagsRead;
+                if (coreStateFlags & (1u << 20)) continue;
+                ++coreStateBit20Clear;
+                if (!CSReadValue(session, generation, actor + 0x3be0, &status)) continue;
+                ++coreLifecycleRead;
+                if (status == 4) continue;
+                ++coreLifecyclePass;
+                if (!CSReadValue(session, generation, actor + 0x1060, &health) ||
+                    !CSReadValue(session, generation, actor + 0x1068, &maximum)) continue;
+                ++coreHealthRead;
+                if (!CSCorePlayerHealthMatches(health, maximum)) continue;
+                ++coreHealthPass;
+                if (!CSReadValue(session, generation, actor + 0x260, &rootComponent) ||
+                    !CSUserPointerValid(rootComponent)) continue;
+                ++coreRootValid;
+                if (!CSReadValue(session, generation, actor + 0x658, &meshComponent) ||
+                    !CSUserPointerValid(meshComponent)) continue;
+                ++coreMeshValid;
+                if (!CSReadValue(session, generation, actor + 0xb94, &ai)) continue;
+                ++coreAIRead;
+                ++coreAccepted;
+            } else {
+                // Target-profile fallback: class membership was established
+                // above; use the hash-bound target fields shared by the Core
+                // display path and revalidate them again before publication.
+                if (!CSReadValue(session, generation, actor + 0x3be0, &status) ||
+                    status == 4 ||
+                    !CSReadValue(session, generation, actor + 0x1060, &health) ||
+                    !CSReadValue(session, generation, actor + 0x1068, &maximum) ||
+                    !CSCorePlayerHealthMatches(health, maximum) ||
+                    !CSReadValue(session, generation, actor + 0x260, &rootComponent) ||
+                    !CSUserPointerValid(rootComponent) ||
+                    !CSReadValue(session, generation, actor + 0x658, &meshComponent) ||
+                    !CSUserPointerValid(meshComponent) ||
+                    !CSReadValue(session, generation, actor + 0xb94, &ai)) continue;
+                coreStateFlags = status == 1 ? (1u << 19) : 0;
+                ++targetFallbackAccepted;
+            }
 
             // Optional target-build UClass observation. It is deliberately
             // diagnostic-only and cannot remove a Core-qualified candidate.
-            if (wantedObserved) {
-                uint64_t actorClass = 0;
+            if (corePlayerProfile && wantedObserved) {
                 if (CSReadValue(session, generation, actor + 0x10, &actorClass) &&
                     CSUserPointerValid(actorClass)) {
                     ++classObserved;
@@ -1297,7 +1357,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             }
             if (countEligible) {
                 if (ai) ++observedBotCount; else ++observedPlayerCount;
-                observedCounts.push_back({actor});
+                observedCounts.push_back({actor, actorClass, targetFallbackProfile});
                 if (health == 0) ++observedZeroHealthLastBreath;
             }
             if (health == 0) continue; // Count-only; never promote zero health into world marks/radar/battle input.
@@ -1396,16 +1456,19 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             if (marks.count >= CSMaxRenderedMarks) return nil;
             [marks addObject:mark];
             observedActors.push_back({actor, weapon, weaponID, namePointer, nameRaw,
-                                      warningYawRaw, warningFallbackRaw,
-                                      marks.count - 1, wantsWeapon, wantsInformation,
+                                      warningYawRaw, warningFallbackRaw, actorClass,
+                                      marks.count - 1, targetFallbackProfile,
+                                      wantsWeapon, wantsInformation,
                                       includeWarningYaw, warningFallbackObserved});
         }
     }
     if (actorArraySource == CSActorArraySource::levelFallback &&
-        (!localInActorArray || coreAccepted == 0)) {
+        (!localInActorArray || coreAccepted + targetFallbackAccepted == 0)) {
         CSLastCaptureDiagnostic = "fallback-semantic-unconfirmed localInActorArray=" +
             std::to_string(localInActorArray ? 1 : 0) + " coreAccepted=" +
-            std::to_string(coreAccepted) + " speedMatched=" + std::to_string(coreSpeedMatched);
+            std::to_string(coreAccepted) + " targetFallbackAccepted=" +
+            std::to_string(targetFallbackAccepted) + " speedMatched=" +
+            std::to_string(coreSpeedMatched);
         return nil;
     }
     CSLastCaptureDiagnostic = "stability-roots";
@@ -1515,8 +1578,12 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         uint32_t warningFallbackRaw = 0;
         CSCaptureReadCache readCache;
         readCache.reserve(6);
-        if (!CSReadCorePlayerState(session, generation, actor.address, local, localTeam,
-                                   &current, &readCache) ||
+        const bool stateReady = actor.targetFallback
+            ? CSReadTargetFallbackPlayerState(session, generation, actor.address,
+                actor.actorClass, local, localTeam, &current, &readCache)
+            : CSReadCorePlayerState(session, generation, actor.address, local, localTeam,
+                &current, &readCache);
+        if (!stateReady ||
             current.health == 0 ||
             !CSPosition(session, generation, base, actor.address, &position, &present, &readCache) ||
             !present) {
@@ -1630,8 +1697,12 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         } else {
             CSCaptureReadCache readCache;
             readCache.reserve(6);
-            if (!CSReadCorePlayerState(session, generation, count.address, local, localTeam,
-                                       &current, &readCache) ||
+            const bool stateReady = count.targetFallback
+                ? CSReadTargetFallbackPlayerState(session, generation, count.address,
+                    count.actorClass, local, localTeam, &current, &readCache)
+                : CSReadCorePlayerState(session, generation, count.address, local, localTeam,
+                    &current, &readCache);
+            if (!stateReady ||
                 !CSPosition(session, generation, base, count.address, &position, &present,
                             &readCache) || !present) continue;
             const double dx = (double)position.x - localPositionAfter.x;
@@ -1913,7 +1984,8 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     }
     if (!includeBattleInputs && !includeCounts && marks.count == 0 && grenadeMarks.count == 0) {
         CSLastCaptureDiagnostic = "no-renderable-output coreAccepted=" +
-            std::to_string(coreAccepted) + " localInActorArray=" +
+            std::to_string(coreAccepted) + " targetFallbackAccepted=" +
+            std::to_string(targetFallbackAccepted) + " localInActorArray=" +
             std::to_string(localInActorArray ? 1 : 0);
         return nil;
     }
@@ -1950,7 +2022,8 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             std::to_string(observedCounts.size()) + " grenades=" +
             std::to_string(observedGrenades.size()) + " bones=" +
             std::to_string(observedBones.size()) + " coreAccepted=" +
-            std::to_string(coreAccepted) + " marks=" + std::to_string(marks.count) +
+            std::to_string(coreAccepted) + " targetFallbackAccepted=" +
+            std::to_string(targetFallbackAccepted) + " marks=" + std::to_string(marks.count) +
             " phasePlayers=" + std::to_string(finalPlayersCompletedAt - finalValidationStartedAt) +
             " phaseCounts=" + std::to_string(finalCountsCompletedAt - finalPlayersCompletedAt) +
             " phaseGrenades=" + std::to_string(finalGrenadesCompletedAt - finalCountsCompletedAt) +
@@ -2010,7 +2083,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     snapshot.observedPlayerCount = observedPlayerCount;
     snapshot.observedBotCount = observedBotCount;
     snapshot.readSemanticDiagnostic = [NSString stringWithFormat:
-        @"candidateCounts=capture-pass actorArraySource=%s displayFields=final-reprojected detailCounters=initial-filter-plus-final-output actors=%d nonzero=%lu addressValid=%lu speedRead=%lu speedFinite=%lu speedMatched=%lu notLocal=%lu teamRead=%lu teamRange=%lu enemyTeam=%lu statePointer=%lu stateFlags=%lu stateBit20Clear=%lu lifecycleRead=%lu lifecyclePass=%lu healthRead=%lu healthPass=%lu rootValid=%lu meshValid=%lu aiRead=%lu coreAccepted=%lu localInActorArray=%d localInActorArrayAfter=%d uclassWantedObserved=%d classObserved=%lu classMatched=%lu classMismatched=%lu classReadFailed=%lu marks=%lu producedPlayers=%lu producedBots=%lu players=%lu bots=%lu zeroHealthLastBreath=%lu countScope=positive-health-or-last-breath-enemy-draw-range countParity=partial "
+        @"candidateCounts=capture-pass actorArraySource=%s displayFields=final-reprojected detailCounters=initial-filter-plus-final-output actors=%d nonzero=%lu addressValid=%lu speedRead=%lu speedFinite=%lu speedMatched=%lu notLocal=%lu teamRead=%lu teamRange=%lu enemyTeam=%lu statePointer=%lu stateFlags=%lu stateBit20Clear=%lu lifecycleRead=%lu lifecyclePass=%lu healthRead=%lu healthPass=%lu rootValid=%lu meshValid=%lu aiRead=%lu coreAccepted=%lu targetFallbackAccepted=%lu localInActorArray=%d localInActorArrayAfter=%d uclassWantedObserved=%d classObserved=%lu classMatched=%lu classMismatched=%lu classReadFailed=%lu marks=%lu producedPlayers=%lu producedBots=%lu players=%lu bots=%lu zeroHealthLastBreath=%lu countScope=positive-health-or-last-breath-enemy-draw-range countParity=partial "
          "grenadeRequested=%d grenadeCandidates=%lu grenadePosition=%lu grenadeOnscreen=%lu "
          "grenadeClassKnown=%d gameStateClassKnown=%d grenadeTyped=%lu grenadeCountdowns=%lu grenadeLifecycleSuppressed=%lu grenadeActorWorldMismatch=%lu grenadeClockKnown=%d grenadeClockStatus=%u "
          "grenadeTimer=target-server-clock-clamped grenadeRadius=unproven grenadeAnimation=local-prediction-partial "
@@ -2031,6 +2104,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         (unsigned long)coreHealthRead, (unsigned long)coreHealthPass,
         (unsigned long)coreRootValid, (unsigned long)coreMeshValid,
         (unsigned long)coreAIRead, (unsigned long)coreAccepted,
+        (unsigned long)targetFallbackAccepted,
         localInActorArray, localInActorArrayAfter, wantedObserved,
         (unsigned long)classObserved, (unsigned long)classMatched,
         (unsigned long)classMismatched, (unsigned long)classReadFailed,

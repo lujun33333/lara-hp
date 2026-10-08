@@ -60,7 +60,7 @@ static CSKernelTarget CSResolveKernelTarget(bool forceRefresh) {
     pthread_mutex_lock(&CSProcessResolverLock);
     const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
     if (!forceRefresh && CSCachedKernelTargetAt > 0 &&
-        now - CSCachedKernelTargetAt >= 0 && now - CSCachedKernelTargetAt <= 0.25) {
+        now - CSCachedKernelTargetAt >= 0 && now - CSCachedKernelTargetAt <= 1.0) {
         CSKernelTarget cached = CSCachedKernelTarget;
         pthread_mutex_unlock(&CSProcessResolverLock);
         return cached;

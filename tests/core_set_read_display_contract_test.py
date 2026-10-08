@@ -92,8 +92,7 @@ class ReadDisplayContracts(unittest.TestCase):
 
     def test_warning_fallback_owner_selection_and_raw_reread_fail_closed(self) -> None:
         require_yaw_reread(self.collector)
-        self.assertLess(self.collector.index("++coreAccepted"),
-                        self.collector.index("CSClassTypeIsChildOf(session, generation, actorClass, wanted"))
+        self.assertIn("if (corePlayerProfile && wantedObserved)", self.collector)
         for missing in ("actor.address + 0x190,",
                         "CSReadCorePlayerState(session, generation, actor.address",
                         "actor.address + 0x2758, &warningYawRaw"):
@@ -177,8 +176,7 @@ class ReadDisplayContracts(unittest.TestCase):
         ordered = ("actor + 0x10bc", "if (actor == local) continue", "actor + 0xb78",
                    "actor + 0x1700", "coreState, &coreStateFlags", "actor + 0x3be0",
                    "actor + 0x1060", "actor + 0x1068", "actor + 0x260",
-                   "actor + 0x658", "actor + 0xb94", "++coreAccepted",
-                   "CSClassTypeIsChildOf(session, generation, actorClass, wanted")
+                   "actor + 0x658", "actor + 0xb94", "++coreAccepted")
         positions = [scan.index(token) for token in ordered]
         self.assertEqual(positions, sorted(positions))
         for declaration in ("float coreSpeed", "uint32_t team", "uint64_t coreState",
@@ -190,6 +188,9 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertNotIn("CSClassTypeIsChildOf", helper)
         self.assertIn("health <= maximum * 1.5f", self.collector)
         self.assertIn("fallback-semantic-unconfirmed localInActorArray=", self.collector)
+        self.assertIn("CSReadTargetFallbackPlayerState", self.collector)
+        self.assertIn("actorArraySource == CSActorArraySource::levelFallback", self.collector)
+        self.assertIn("targetFallbackAccepted", self.collector)
         self.assertIn("localInActorArrayAfter", self.collector)
         self.assertIn("no-renderable-output coreAccepted=", self.collector)
 
