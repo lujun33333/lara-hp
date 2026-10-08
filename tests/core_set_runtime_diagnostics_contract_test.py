@@ -122,6 +122,7 @@ for contract in (
     "_primary.level = 999998.0", "menu.level = 1000000.0", "draw.level = 999999.0",
     "RemoteCall", "remote_getClass", "doRemoteCallCheckedWithTimeout",
     'NSSelectorFromString(@"_contextId")', '[window.layer valueForKey:@"contextId"]',
+    "CSRemoteLoadImage", 'CSChecked(process, "dlopen", (void *)dlopen',
 ):
     assert contract in adapter, contract
 assert "CALayerHost" not in adapter

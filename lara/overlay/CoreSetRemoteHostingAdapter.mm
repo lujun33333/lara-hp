@@ -2,11 +2,15 @@
 #import "../kexploit/TaskRop/RemoteCall.h"
 #import <objc/message.h>
 #import <QuartzCore/QuartzCore.h>
+#include <dlfcn.h>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
-static NSString *const CSHostBuildMarker = @"sbs-springboard-remote-v2";
+static NSString *const CSHostBuildMarker = @"sbs-springboard-remote-load-v3";
+static const char *CSHostImage =
+    "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices";
 
 static BOOL CSChecked(RemoteCall *process, const char *label, void *function,
                       const uint64_t *arguments, NSUInteger count, uint64_t *value) {
@@ -34,6 +38,21 @@ static uint64_t CSClass(RemoteCall *process, const char *name) {
 
 static uint64_t CSSel(RemoteCall *process, const char *name) {
     return process && name ? remote_sel(process, name) : 0;
+}
+
+static uint64_t CSRemoteLoadImage(RemoteCall *process, const char *path) {
+    if (!process || !path) return 0;
+    const uint64_t remotePath = remote_alloc_str(process, path);
+    if (!remotePath) return 0;
+    const uint64_t arguments[] = {remotePath, RTLD_NOW | RTLD_GLOBAL};
+    uint64_t handle = 0;
+    const BOOL called = CSChecked(process, "dlopen", (void *)dlopen,
+                                  arguments, 2, &handle);
+    if (!process.trojanMemIsStackFallback) {
+        const uint64_t release[] = {remotePath};
+        (void)CSChecked(process, "free", (void *)free, release, 1, nullptr);
+    }
+    return called ? handle : 0;
 }
 
 static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t selector,
@@ -174,12 +193,17 @@ static uint32_t CSContext(UIWindow *window) {
 - (BOOL)registerSide:(CoreSetRemoteHostSide *)side {
     if (_cancelled.load() || !self.sessionIdentityReady || !side.context ||
         !std::isfinite(side.level)) return NO;
-    const uint64_t cls = CSClass(_process, "SBSAccessibilityWindowHostingController");
+    uint64_t cls = CSClass(_process, "SBSAccessibilityWindowHostingController");
+    uint64_t imageHandle = 0;
+    if (!cls) {
+        imageHandle = CSRemoteLoadImage(_process, CSHostImage);
+        cls = CSClass(_process, "SBSAccessibilityWindowHostingController");
+    }
     const uint64_t alloc = CSSel(_process, "alloc");
     const uint64_t init = CSSel(_process, "init");
     const uint64_t registerSelector = CSSel(_process, "registerWindowWithContextID:atLevel:");
-    NSLog(@"Core-SET: core17-sbs build=%@ stage=remote-class pid=%d context=%u class=%llu selector=%llu",
-          CSHostBuildMarker, _pid, side.context, cls, registerSelector);
+    NSLog(@"Core-SET: core17-sbs build=%@ stage=remote-class pid=%d context=%u image=%llu class=%llu selector=%llu",
+          CSHostBuildMarker, _pid, side.context, imageHandle, cls, registerSelector);
     uint64_t controller = 0, initialized = 0;
     if (!cls || !alloc || !init || !registerSelector ||
         !CSMessage(_process, cls, alloc, 0, 0, &controller) || !controller ||

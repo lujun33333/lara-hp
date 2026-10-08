@@ -62,7 +62,10 @@ for token in (
     "[CATransaction flush]",
     "_primary.context = CSContext(_primary.source)",
     "stage=context-capture primary=%u menu=%u draw=%u",
-    '@"sbs-springboard-remote-v2"',
+    '@"sbs-springboard-remote-load-v3"',
+    "CSRemoteLoadImage(_process, CSHostImage)",
+    'CSChecked(process, "dlopen", (void *)dlopen',
+    "RTLD_NOW | RTLD_GLOBAL",
     "stage=remote-class",
     "stage=remote-registered",
 ):
@@ -81,7 +84,7 @@ for token in (
     assert token in project + packaging, token
 assert "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard" in frontboard_stub
 assert "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices" in fbs_stub
-assert project.count("CURRENT_PROJECT_VERSION = 3;") == 2
+assert project.count("CURRENT_PROJECT_VERSION = 4;") == 2
 
 for token in (
     'UIImage imageNamed:@"CoreSetLoading"',
