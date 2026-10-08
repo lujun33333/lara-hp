@@ -5,7 +5,7 @@
 #include <cmath>
 
 // Match the source-window tier used by the working WZ dual-window host and
-// by the Core 1.7 application-process hosting controllers.
+// by the SpringBoard mirrors in CoreSetRemoteHostingAdapter.
 static const double kCoreSetHUDWindowLevel = 10000009.0;
 static BOOL CoreSetHostedOrientationValid(UIInterfaceOrientation value) {
     return value == UIInterfaceOrientationPortrait ||
@@ -758,7 +758,7 @@ static CGFloat CoreSetHostedOrientationAngle(UIInterfaceOrientation value) {
             return pending;
         }
         // Termination/disconnect disarms and hides immediately, then releases
-        // the application-process hosting controllers.
+        // the SpringBoard hosting controllers.
         [self stopHostedAsync:^(__unused CoreSetHUDStopResult result) {}];
         CoreSetHUDStopResult pending = {YES, NO, NO, NO};
         return pending;
@@ -820,7 +820,7 @@ static CGFloat CoreSetHostedOrientationAngle(UIInterfaceOrientation value) {
             host->_hostedAsyncStopPending = NO;
             if (!menuRemoved || !drawRemoved) {
                 host->_hostedCleanupFailed = YES;
-                [host fail:13 message:@"Core 1.7 context cleanup unconfirmed; handles retained" error:nil];
+                [host fail:13 message:@"SpringBoard cleanup unconfirmed; handles retained" error:nil];
                 CoreSetHUDStopResult incomplete = {YES, menuRemoved, drawRemoved, NO};
                 [host publishState];
                 NSArray *waiters = [host->_hostedAsyncStopWaiters copy];
@@ -828,7 +828,7 @@ static CGFloat CoreSetHostedOrientationAngle(UIInterfaceOrientation value) {
                 for (id waiter in waiters) ((void (^)(CoreSetHUDStopResult))waiter)(incomplete);
                 return;
             }
-            // Hosting controllers are gone. The existing local stop now
+            // Remote hosting controllers are gone. The existing local stop now
             // performs only UIKit detach.
             const CoreSetHUDStopResult result = [host stop];
             NSArray *waiters = [host->_hostedAsyncStopWaiters copy];

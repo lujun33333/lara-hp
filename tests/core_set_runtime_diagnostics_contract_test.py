@@ -120,11 +120,11 @@ for forbidden in ("BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation"):
 for contract in (
     "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
     "_primary.level = 999998.0", "menu.level = 1000000.0", "draw.level = 999999.0",
-    "objc_setAssociatedObject", "objc_getAssociatedObject",
+    "RemoteCall", "remote_getClass", "doRemoteCallCheckedWithTimeout",
+    'NSSelectorFromString(@"_contextId")', '[window.layer valueForKey:@"contextId"]',
 ):
     assert contract in adapter, contract
-for forbidden in ("RemoteCall", "remote_getClass", "doRemoteCall"):
-    assert forbidden not in adapter, forbidden
+assert "CALayerHost" not in adapter
 for contract in ("FBSceneManager", "-touchFloating", "-noTouchFloating"):
     assert contract in scenes, contract
 

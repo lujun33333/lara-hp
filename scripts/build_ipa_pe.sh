@@ -579,7 +579,7 @@ expected = {
     "CFBundleIdentifier": expected_bundle_identifier,
     "CFBundleShortVersionString": "1.7",
     "LSApplicationQueriesSchemes": ["tencentlaunch1106467070"],
-    "CFBundleVersion": "2",
+    "CFBundleVersion": "3",
     "MinimumOSVersion": "17.0",
     "UILaunchStoryboardName": "LaunchScreen",
     "UIApplicationSupportsIndirectInputEvents": True,
@@ -659,8 +659,7 @@ fi
 MAIN_DYLIB_LOADS="$(xcrun otool -L "$BIN" | tail -n +2 | awk '{print $1}')"
 for required_private_framework in \
     /System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard \
-    /System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices \
-    /System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices; do
+    /System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices; do
     grep -Fxq -- "$required_private_framework" <<<"$MAIN_DYLIB_LOADS" \
         || die "最终主 Mach-O 缺少 Core 1.7 固定依赖：$required_private_framework"
 done
@@ -679,7 +678,7 @@ if grep -q 'cmd LC_RPATH' <<<"$NORMALIZED_LOAD_COMMANDS"; then
     die "Swift runtime 规范化后主 Mach-O 仍包含 LC_RPATH"
 fi
 
-say "使用 Core 1.7 浮窗场景与 App 进程 SBS context 所需权限对 App bundle 做 ad-hoc codesign..."
+say "使用 Core 1.7 浮窗场景与 SpringBoard SBS context 所需权限对 App bundle 做 ad-hoc codesign..."
 # Info.plist 和全部 bundle 资源必须先固定，再由 codesign 同时签主 Mach-O、写入
 # 当前完整 entitlement 集并生成与最终资源匹配的 _CodeSignature/CodeResources。
 codesign --force --sign - --timestamp=none \

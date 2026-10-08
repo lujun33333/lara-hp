@@ -15,7 +15,6 @@ project = read("lara.xcodeproj/project.pbxproj")
 packaging = read("scripts/build_ipa_pe.sh")
 frontboard_stub = read("Config/PrivateFrameworkStubs/FrontBoard.framework/FrontBoard.tbd")
 fbs_stub = read("Config/PrivateFrameworkStubs/FrontBoardServices.framework/FrontBoardServices.tbd")
-sbs_stub = read("Config/PrivateFrameworkStubs/SpringBoardServices.framework/SpringBoardServices.tbd")
 metal = read("lara/overlay/CoreSetMetalRenderAdapter.mm")
 imgui = read("lara/third_party/imgui/imgui.h")
 
@@ -48,46 +47,41 @@ for token in (
     assert token in app, token
 
 for token in (
-    'NSClassFromString(@"SBSAccessibilityWindowHostingController")',
-    'NSSelectorFromString(@"registerWindowWithContextID:atLevel:")',
+    'CSClass(_process, "SBSAccessibilityWindowHostingController")',
+    'CSSel(_process, "registerWindowWithContextID:atLevel:")',
     "_primary.level = 999998.0",
     "menu.level = 1000000.0",
     "draw.level = 999999.0",
     "primaryReady && menuReady && drawReady",
-    "objc_setAssociatedObject(application, side.associationKey, controller",
-    "objc_getAssociatedObject(application, side.associationKey)",
+    "RemoteCall *_process",
+    "remote_getClass(process, name)",
+    "doRemoteCallCheckedWithTimeout:10000",
     'NSSelectorFromString(@"_contextId")',
     '[window.layer valueForKey:@"contextId"]',
     "[value unsignedIntValue]",
     "[CATransaction flush]",
     "_primary.context = CSContext(_primary.source)",
     "stage=context-capture primary=%u menu=%u draw=%u",
-    '@"sbs-explicit-load-v1"',
-    'SpringBoardServices.framework/SpringBoardServices"',
-    "RTLD_NOW | RTLD_GLOBAL",
-    "stage=image-load handle=%p class=%d error=%@",
+    '@"sbs-springboard-remote-v2"',
+    "stage=remote-class",
+    "stage=remote-registered",
 ):
     assert token in adapter, token
 for forbidden in (
-    "CALayerHost", "RemoteCall", "remote_getClass", "doRemoteCall",
-    "CSLoadCore17Frameworks", "menu.context == draw.context",
-    "menu.context == _primary.context", "draw.context == _primary.context",
+    "CALayerHost", "CSLoadCore17Frameworks",
 ):
     assert forbidden not in adapter, forbidden
 for token in (
     '"-Wl,-needed_framework,FrontBoard"',
     '"-Wl,-needed_framework,FrontBoardServices"',
-    '"-Wl,-needed_framework,SpringBoardServices"',
     '"-F$(SRCROOT)/Config/PrivateFrameworkStubs"',
     "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard",
     "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices",
-    "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices",
 ):
     assert token in project + packaging, token
 assert "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard" in frontboard_stub
 assert "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices" in fbs_stub
-assert "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices" in sbs_stub
-assert project.count("CURRENT_PROJECT_VERSION = 2;") == 2
+assert project.count("CURRENT_PROJECT_VERSION = 3;") == 2
 
 for token in (
     'UIImage imageNamed:@"CoreSetLoading"',
@@ -104,14 +98,14 @@ for forbidden in (
     assert forbidden not in owner, forbidden
 for token in (
     "CoreSetFloatingSceneManager.shared().createScenes",
-    "CoreSetCore17HostingAdapter(primaryWindow: primaryWindow)",
+    "CoreSetRemoteHostingAdapter(remoteCall: process, primaryWindow: primaryWindow)",
     "host.startHosted(menuScene: touchScene, drawScene: drawScene",
     "hosting mode=core17-floating-scenes registered=1",
 ):
     assert token in owner, token
-for forbidden in ("prepareSpringBoardHosting", "rcinit(process: \"SpringBoard\"",
-                  "rebuildHostedWindows(process:"):
-    assert forbidden not in owner, forbidden
+for token in ("prepareSpringBoardHosting", 'rcinit(process: "SpringBoard"',
+              "rebuildHostedWindows(process:"):
+    assert token in owner, token
 
 assert '#define IMGUI_VERSION       "1.92.8"' in imgui
 for token in (

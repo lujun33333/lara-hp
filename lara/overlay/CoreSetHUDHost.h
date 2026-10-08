@@ -28,8 +28,9 @@ typedef NS_ENUM(NSInteger, CoreSetHostedPointerPhase) {
 @property(nonatomic, readonly) uint64_t hostedMenuRevision;
 @end
 
-// Core 1.7 registration is performed in the application process. A failed
-// registration must leave no retained controller or allow explicit cleanup.
+// Integration implements this with the application's existing RemoteCall.
+// Registration must return an observed result; a queued request is not success.
+// A failed registration must either leave no resource or allow cleanup retry.
 @protocol CoreSetHUDHostingAdapter <NSObject>
 - (void)registerBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
                          completion:(void (^)(BOOL observed, uint64_t generation))completion;
@@ -40,7 +41,7 @@ typedef NS_ENUM(NSInteger, CoreSetHostedPointerPhase) {
 - (void)prepareForHostGeneration:(uint64_t)generation;
 - (uint64_t)hostGeneration;
 - (BOOL)localSurfacesStillPublished;
-// Verifies the three local controller associations and source contexts.
+// Captures local UIKit contexts, then verifies the cached remote registration.
 - (void)observeBothSurfacesAsync:(void (^)(BOOL observed, uint64_t generation))completion;
 @end
 
