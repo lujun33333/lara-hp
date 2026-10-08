@@ -7,9 +7,10 @@ ROOT = Path(__file__).resolve().parents[1]
 paths = ["lara/views/app/CoreSetRuntimeCoordinator.swift", "lara/views/app/CoreSetMenuViewController.swift",
          "lara/views/app/ContentView.swift", "lara/overlay/CoreSetHUDHost.h", "lara/overlay/CoreSetHUDHost.mm",
          "lara/lara.swift", "lara/funcs/keepalive.swift", "lara/views/app/settings/SettingsView.swift",
-         "lara/lara-Bridging-Header.h", "lara.xcodeproj/project.pbxproj"]
+         "lara/lara-Bridging-Header.h", "lara.xcodeproj/project.pbxproj", "lara/classes/laramgr.swift",
+         "lara/kexploit/TaskRop/RemoteCall.m"]
 data = {name: (ROOT / name).read_text(encoding="utf-8-sig") for name in paths}
-coordinator, menu, launcher, header, host, app, audio, settings, bridge, project = [data[name] for name in paths]
+coordinator, menu, launcher, header, host, app, audio, settings, bridge, project, manager, remote_call = [data[name] for name in paths]
 
 
 def need(text, *tokens):
@@ -95,6 +96,12 @@ def validate_owner(text):
     need(release, "stopChannelsConfirmed", "stopWindowsConfirmed", "!host.cleanupPending",
          "Self.retained.removeValue(forKey: identity)")
     assert not re.search(r"\.wait\(|DispatchQueue\.main\.sync|semaphore", swift(owner, "stopAllForTermination"), re.I)
+    assert "static func stopAllForTermination(completion: @escaping () -> Void)" in owner
+    need(swift(owner, "stopAllForTermination"),
+         "terminationWaiters.append(completion)", "pollTerminationDrain()")
+    drain = swift(owner, "pollTerminationDrain")
+    need(drain, "$0.stopping", "!$0.stopReceiptsPending", "!$0.host.hostedCleanupInFlight",
+         ".milliseconds(10)", "waiters.forEach { $0() }")
     consumer = text.split("private final class CoreSetLocalHostConsumer:")[1]
     apply = swift(consumer, "apply")
     need(apply, "precondition(Thread.isMainThread)", "guard availability == .ready",
@@ -140,10 +147,22 @@ need(swift(app, "sceneDidBecomeActive"), "coreSetRuntime?.activate()")
 for name in ["sceneWillResignActive", "sceneDidEnterBackground"]:
     need(swift(app, name), "coreSetRuntime?.deactivate()")
 need(swift(app, "sceneDidDisconnect"), "coreSetRuntime?.stop()", "coreSetRuntime = nil")
-need(swift(app, "applicationWillTerminate"), "CoreSetRuntimeCoordinator.stopAllForTermination()")
+termination = swift(app, "applicationWillTerminate")
+need(termination, "CoreSetRuntimeCoordinator.stopAllForTermination {",
+     "laramgr.shared.terminateRemoteCallSession", "while !finished { CFRunLoopRun() }",
+     "CoreSetBackgroundAudio.shared.stop()", "shutdown stage=complete")
+assert termination.index("CoreSetRuntimeCoordinator.stopAllForTermination") < termination.index("terminateRemoteCallSession")
+assert termination.index("terminateRemoteCallSession") < termination.index("while !finished") < termination.index("CoreSetBackgroundAudio.shared.stop()")
+need(swift(manager, "terminateRemoteCallSession"), "rcdestroy(completion: completion)")
+for cache_contract in ("g_remote_selector_cache_key", "g_remote_class_cache_key",
+                       "objc_getAssociatedObject(proc, &g_remote_selector_cache_key)",
+                       "objc_getAssociatedObject(proc, &g_remote_class_cache_key)",
+                       "if (cached.unsignedLongLongValue) return cached.unsignedLongLongValue",
+                       "objc_setAssociatedObject(self, &g_remote_selector_cache_key, nil",
+                       "objc_setAssociatedObject(self, &g_remote_class_cache_key, nil"):
+    assert cache_contract in remote_call, cache_contract
 need(swift(app, "application"), "CoreSetBackgroundAudio.shared.start()")
 need(swift(app, "scene"), "CoreSetBackgroundAudio.shared.start()")
-need(swift(app, "applicationWillTerminate"), "CoreSetBackgroundAudio.shared.stop()")
 need(swift(coordinator, "stopAudioAfterSceneTeardownIfReady"),
      "Self.retained.values.allSatisfy", "!$0.stopReceiptsPending",
      "!$0.host.hostedCleanupInFlight", "CoreSetBackgroundAudio.shared.stop()")

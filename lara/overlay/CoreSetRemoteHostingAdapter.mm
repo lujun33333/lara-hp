@@ -459,6 +459,13 @@ static BOOL CSLocalInvoke(id controller, NSString *name, uint32_t context, doubl
 - (BOOL)createSide:(CoreSetRemoteHostSide *)side level:(double)level {
     if (![self identityValid] || !side.context ||
         !std::isfinite(level)) return NO;
+    // Resolve teardown selectors while the app is fully active. RemoteCall
+    // caches nonzero selectors, so termination never has to allocate selector
+    // strings in SpringBoard merely to remove these two surfaces.
+    for (const char *name : {"removeFromSuperlayer", "setHidden:",
+                             "superlayer", "isHidden", "release"}) {
+        if (!CSSel(_process, name)) return NO;
+    }
     uint64_t workspace = 0, scene = 0, clsWindow = CSClass(_process, "UIWindow");
     uint64_t clsHost = CSClass(_process, "CALayerHost");
     uint64_t clsWorkspace = CSClass(_process, "SBMainWorkspace");

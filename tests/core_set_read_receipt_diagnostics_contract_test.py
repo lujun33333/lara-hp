@@ -143,7 +143,7 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertIn("snapshot.captureStartedMonotonicSeconds = captureStartedAt", collector)
         inner_loop = collector.index("for (int32_t index = 0; index < batch; ++index)")
         inner_budget = collector.index("(index & 15) == 0 && captureBudgetExceeded()", inner_loop)
-        inner_actor = collector.index("uint64_t actor = pointers[index]", inner_loop)
+        inner_actor = collector.index("uint64_t actor = pointers[(size_t)index]", inner_loop)
         self.assertLess(inner_loop, inner_budget)
         self.assertLess(inner_budget, inner_actor)
         self.assertLess(collector.index('CSLastCaptureDiagnostic = "request-validation"'),

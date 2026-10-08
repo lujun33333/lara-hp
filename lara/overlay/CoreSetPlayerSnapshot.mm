@@ -30,6 +30,7 @@ static constexpr uint64_t CSEliteProjectileClassSlot = 0x11b3c458;
 static constexpr uint64_t CSGameStateClassSlot = 0x120a9590;
 static constexpr uint64_t CSServerClockImplementationRVA = 0xa529b68;
 static constexpr int32_t CSMaxActors = 50000;
+static constexpr int32_t CSActorPointerBatch = 8192; // Transport limit: 0x10000 bytes.
 static constexpr size_t CSMaxBoneActors = 256;
 static constexpr NSUInteger CSMaxRenderedMarks = 8192;
 static thread_local const char *CSLastCaptureDiagnostic = "not-attempted";
@@ -119,6 +120,17 @@ static bool CSClassIsChildOf(CoreSetReadSession *session, uint64_t generation,
     uint64_t type = 0;
     if (!CSReadValue(session, generation, actor + 0x10, &type)) return false;
     if (observedType) *observedType = type;
+    for (unsigned depth = 0; depth < 64 && type; ++depth) {
+        if (type == wanted) { *isChild = true; return true; }
+        if (!CSReadValue(session, generation, type + 0x30, &type)) return false;
+    }
+    if (type != 0) return false; // Cyclic or unexpectedly deep superclass chain.
+    *isChild = false;
+    return true;
+}
+
+static bool CSClassTypeIsChildOf(CoreSetReadSession *session, uint64_t generation,
+                                 uint64_t type, uint64_t wanted, bool *isChild) {
     for (unsigned depth = 0; depth < 64 && type; ++depth) {
         if (type == wanted) { *isChild = true; return true; }
         if (!CSReadValue(session, generation, type + 0x30, &type)) return false;
@@ -754,7 +766,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     NSUInteger boneUnavailable[6] = {};
     NSUInteger boneHeadKnownProfile = 0, boneHeadProjected = 0, boneHeadUnknownProfile = 0;
     NSUInteger nameRequested = 0, namePresent = 0, weaponRequested = 0, weaponKnown = 0;
-    uint64_t pointers[512];
+    std::vector<uint64_t> pointers(CSActorPointerBatch);
     struct ObservedActor {
         uint64_t address;
         CSVector position;
@@ -786,21 +798,43 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     };
     struct ObservedBone { uint64_t actor; CSBoneState state; NSUInteger markIndex; CGPoint fallbackHead; };
     std::vector<ObservedBone> observedBones;
-    for (int32_t start = 0; start < array.count; start += 512) {
+    std::unordered_map<uint64_t, bool> characterClassCache;
+    std::unordered_map<uint64_t, bool> grenadeClassCache;
+    NSUInteger nonzeroActors = 0;
+    auto logActorBudget = [&](int32_t scanned) {
+        NSLog(@"Core-SET: player-capture stage=budget reason=actor-scan source=%s actors=%d scanned=%d nonzero=%lu characterClasses=%lu grenadeClasses=%lu elapsed=%.3f",
+              actorArraySource == CSActorArraySource::primary ? "core17-primary" : "core17-level-a0-a8-fallback",
+              array.count, scanned, (unsigned long)nonzeroActors,
+              (unsigned long)characterClassCache.size(),
+              (unsigned long)grenadeClassCache.size(), CACurrentMediaTime() - captureStartedAt);
+    };
+    for (int32_t start = 0; start < array.count; start += CSActorPointerBatch) {
         if (captureBudgetExceeded()) {
+            logActorBudget(start);
             CSLastCaptureDiagnostic = "capture-budget-exceeded-actor-scan";
             return nil;
         }
-        int32_t batch = std::min<int32_t>(512, array.count - start);
+        int32_t batch = std::min<int32_t>(CSActorPointerBatch, array.count - start);
         if (!CSRead(session, generation, array.data + (uint64_t)start * 8,
-                    pointers, (size_t)batch * 8)) return nil;
+                    pointers.data(), (size_t)batch * 8)) {
+            // Core v1.7 falls back from its bulk pointer copy to individual
+            // elements. Preserve that semantic while keeping normal reads at
+            // the transport's maximum bounded chunk size.
+            for (int32_t index = 0; index < batch; ++index) {
+                if (!CSReadValue(session, generation,
+                                 array.data + (uint64_t)(start + index) * 8,
+                                 &pointers[(size_t)index])) return nil;
+            }
+        }
         for (int32_t index = 0; index < batch; ++index) {
             if ((index & 15) == 0 && captureBudgetExceeded()) {
+                logActorBudget(start + index);
                 CSLastCaptureDiagnostic = "capture-budget-exceeded-actor-scan";
                 return nil;
             }
-            uint64_t actor = pointers[index];
+            uint64_t actor = pointers[(size_t)index];
             if (!actor || actor == local) continue;
+            ++nonzeroActors;
             if (collectGrenades) {
                 uint32_t nameIndex = 0;
                 bool grenade = false;
@@ -827,7 +861,14 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                     bool timerObserved = false;
                     if (eliteProjectileClass) {
                         bool typed = false;
-                        if (!CSClassIsChildOf(session, generation, actor, eliteProjectileClass, &typed, &grenadeClass)) continue;
+                        if (!CSReadValue(session, generation, actor + 0x10, &grenadeClass) || !grenadeClass) continue;
+                        auto cached = grenadeClassCache.find(grenadeClass);
+                        if (cached != grenadeClassCache.end()) typed = cached->second;
+                        else {
+                            if (!CSClassTypeIsChildOf(session, generation, grenadeClass,
+                                                      eliteProjectileClass, &typed)) continue;
+                            grenadeClassCache.emplace(grenadeClass, typed);
+                        }
                         if (typed) {
                             ++grenadeTyped;
                             if (!CSReadValue(session, generation, actor + 0x20, &grenadeOuter) ||
@@ -879,7 +920,13 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             }
             bool character = false;
             uint64_t actorClass = 0;
-            if (!CSClassIsChildOf(session, generation, actor, wanted, &character, &actorClass)) continue;
+            if (!CSReadValue(session, generation, actor + 0x10, &actorClass) || !actorClass) continue;
+            auto cached = characterClassCache.find(actorClass);
+            if (cached != characterClassCache.end()) character = cached->second;
+            else {
+                if (!CSClassTypeIsChildOf(session, generation, actorClass, wanted, &character)) continue;
+                characterClassCache.emplace(actorClass, character);
+            }
             if (!character) continue;
             uint32_t team = 0;
             if (actor > UINT64_MAX - 0xb7c ||
@@ -1083,16 +1130,22 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     CSLastCaptureDiagnostic = "stability-actor-membership";
     std::unordered_set<uint64_t> currentActors;
     currentActors.reserve((size_t)arrayAfter.count);
-    for (int32_t start = 0; start < arrayAfter.count; start += 512) {
+    for (int32_t start = 0; start < arrayAfter.count; start += CSActorPointerBatch) {
         if (captureBudgetExceeded()) {
             CSLastCaptureDiagnostic = "capture-budget-exceeded-membership";
             return nil;
         }
-        int32_t batch = std::min<int32_t>(512, arrayAfter.count - start);
+        int32_t batch = std::min<int32_t>(CSActorPointerBatch, arrayAfter.count - start);
         if (!CSRead(session, generation, arrayAfter.data + (uint64_t)start * 8,
-                    pointers, (size_t)batch * 8)) return nil;
+                    pointers.data(), (size_t)batch * 8)) {
+            for (int32_t index = 0; index < batch; ++index) {
+                if (!CSReadValue(session, generation,
+                                 arrayAfter.data + (uint64_t)(start + index) * 8,
+                                 &pointers[(size_t)index])) return nil;
+            }
+        }
         for (int32_t index = 0; index < batch; ++index)
-            if (pointers[index]) currentActors.insert(pointers[index]);
+            if (pointers[(size_t)index]) currentActors.insert(pointers[(size_t)index]);
     }
     CSLastCaptureDiagnostic = "stability-player-actors";
     NSMutableIndexSet *invalidActorMarks = [NSMutableIndexSet indexSet];

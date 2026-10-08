@@ -165,6 +165,8 @@ final class CoreSetRuntimeCoordinator {
     static let userCancelledLaunchReason = "启动已取消，正在退出 HUD"
     static let sceneEndedLaunchReason = "窗口会话已结束，启动已取消"
     private static var retained: [UUID: CoreSetRuntimeCoordinator] = [:]
+    private static var terminationWaiters: [() -> Void] = []
+    private static var terminationPollScheduled = false
     private let identity = UUID()
     private weak var scene: UIWindowScene?
     private weak var launcher: CoreSetLauncherViewController?
@@ -1099,14 +1101,36 @@ final class CoreSetRuntimeCoordinator {
         return result
     }
 
-    static func stopAllForTermination() {
-        // UIApplication will not promise time for an async continuation here.
-        // Disarm/hide synchronously and enqueue remote cleanup; never wait for
-        // a worker callback or claim it completed before process termination.
+    private static func pollTerminationDrain() {
+        precondition(Thread.isMainThread)
+        let drained = retained.values.allSatisfy {
+            $0.stopping && !$0.stopReceiptsPending && !$0.host.hostedCleanupInFlight
+        }
+        guard drained else {
+            guard !terminationPollScheduled else { return }
+            terminationPollScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(10)) {
+                terminationPollScheduled = false
+                pollTerminationDrain()
+            }
+            return
+        }
+        terminationPollScheduled = false
+        let waiters = terminationWaiters
+        terminationWaiters.removeAll()
+        NSLog("Core-SET: shutdown stage=window-channel-drain complete=1 owners=%lu",
+              UInt(retained.count))
+        waiters.forEach { $0() }
+    }
+
+    static func stopAllForTermination(completion: @escaping () -> Void) {
+        precondition(Thread.isMainThread)
+        terminationWaiters.append(completion)
         for owner in Array(retained.values) {
             let result = owner.stop()
             if !result.complete.boolValue { NSLog("Core-SET: overlay cleanup remains unconfirmed") }
         }
+        pollTerminationDrain()
     }
 }
 

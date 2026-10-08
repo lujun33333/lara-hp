@@ -43,8 +43,21 @@ final class LaraAppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
-        CoreSetRuntimeCoordinator.stopAllForTermination()
+        NSLog("Core-SET: shutdown stage=begin")
+        var finished = false
+        CoreSetRuntimeCoordinator.stopAllForTermination {
+            laramgr.shared.terminateRemoteCallSession {
+                finished = true
+                NSLog("Core-SET: shutdown stage=remote-session-destroyed complete=1")
+                CFRunLoopStop(CFRunLoopGetMain())
+            }
+        }
+        // Match the working WZ exit contract: keep the main run loop alive so
+        // hosted-window callbacks finish before the process owning the active
+        // SpringBoard exception/RemoteCall session disappears.
+        while !finished { CFRunLoopRun() }
         CoreSetBackgroundAudio.shared.stop()
+        NSLog("Core-SET: shutdown stage=complete")
     }
 }
 

@@ -91,7 +91,7 @@ class ReadDisplayContracts(unittest.TestCase):
 
     def test_warning_fallback_owner_selection_and_raw_reread_fail_closed(self) -> None:
         require_yaw_reread(self.collector)
-        self.assertLess(self.collector.index("CSClassIsChildOf(session, generation, actor, wanted"),
+        self.assertLess(self.collector.index("CSClassTypeIsChildOf(session, generation, actorClass, wanted"),
                         self.collector.index("actor + 0x190, &warningFallbackRaw"))
         for missing in ("actor.address + 0x190,",
                         "actorClassAfter != actor.warningActorClass", "actor.address + 0x2758, &warningYawRaw"):
@@ -154,6 +154,19 @@ class ReadDisplayContracts(unittest.TestCase):
                        "clusterAfter != cluster", "arrayAfter.data != array.data"):
             self.assertIn(stable, self.collector)
         self.assertIn("actorArraySource=%s", self.collector)
+
+    def test_actor_scan_uses_transport_sized_bulk_fallback_and_class_cache(self) -> None:
+        for token in ("CSActorPointerBatch = 8192", "std::vector<uint64_t> pointers(CSActorPointerBatch)",
+                      "start += CSActorPointerBatch", "pointers.data()", "CSReadValue(session, generation,",
+                      "characterClassCache.find(actorClass)", "grenadeClassCache.find(grenadeClass)",
+                      "CSClassTypeIsChildOf", "player-capture stage=budget reason=actor-scan"):
+            self.assertIn(token, self.collector)
+        scan = self.collector[self.collector.index("for (int32_t start = 0; start < array.count;"):
+                              self.collector.index('CSLastCaptureDiagnostic = "stability-roots"')]
+        self.assertLess(scan.index("pointers.data()"),
+                        scan.index("for (int32_t index = 0; index < batch; ++index)"))
+        self.assertIn("array.data + (uint64_t)(start + index) * 8", scan)
+        self.assertIn("capture-budget-exceeded-actor-scan", scan)
 
     def test_zero_health_extension_is_count_only_and_has_lifecycle_reread(self) -> None:
         for scoped in ("CoreSet::playerCountEligible(health, maximum, countStatus)",

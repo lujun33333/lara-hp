@@ -919,4 +919,12 @@ final class laramgr: ObservableObject {
         }
     }
     #endif
+
+    func terminateRemoteCallSession(completion: @escaping () -> Void) {
+        #if !DISABLE_REMOTECALL
+        rcdestroy(completion: completion)
+        #else
+        completion()
+        #endif
+    }
 }
