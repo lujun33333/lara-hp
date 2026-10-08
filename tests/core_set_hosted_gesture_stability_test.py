@@ -62,6 +62,10 @@ for token in (
     "[CATransaction flush]",
     "_primary.context = CSContext(_primary.source)",
     "stage=context-capture primary=%u menu=%u draw=%u",
+    '@"sbs-explicit-load-v1"',
+    'SpringBoardServices.framework/SpringBoardServices"',
+    "RTLD_NOW | RTLD_GLOBAL",
+    "stage=image-load handle=%p class=%d error=%@",
 ):
     assert token in adapter, token
 for forbidden in (
@@ -83,6 +87,7 @@ for token in (
 assert "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard" in frontboard_stub
 assert "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices" in fbs_stub
 assert "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices" in sbs_stub
+assert project.count("CURRENT_PROJECT_VERSION = 2;") == 2
 
 for token in (
     'UIImage imageNamed:@"CoreSetLoading"',

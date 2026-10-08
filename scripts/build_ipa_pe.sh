@@ -579,7 +579,7 @@ expected = {
     "CFBundleIdentifier": expected_bundle_identifier,
     "CFBundleShortVersionString": "1.7",
     "LSApplicationQueriesSchemes": ["tencentlaunch1106467070"],
-    "CFBundleVersion": "1",
+    "CFBundleVersion": "2",
     "MinimumOSVersion": "17.0",
     "UILaunchStoryboardName": "LaunchScreen",
     "UIApplicationSupportsIndirectInputEvents": True,

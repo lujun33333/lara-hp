@@ -2,11 +2,33 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <QuartzCore/QuartzCore.h>
+#import <dlfcn.h>
 #include <cmath>
 
 static char CSPrimaryControllerKey;
 static char CSMenuControllerKey;
 static char CSDrawControllerKey;
+static NSString *const CSHostBuildMarker = @"sbs-explicit-load-v1";
+
+static Class CSHostingControllerClass(void) {
+    static void *springBoardServices = nullptr;
+    if (!springBoardServices) {
+        dlerror();
+        springBoardServices = dlopen(
+            "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices",
+            RTLD_NOW | RTLD_GLOBAL);
+        const char *rawError = dlerror();
+        NSString *error = rawError ? [NSString stringWithUTF8String:rawError] : @"none";
+        Class controllerClass = NSClassFromString(@"SBSAccessibilityWindowHostingController");
+        NSLog(@"Core-SET: core17-sbs build=%@ stage=image-load handle=%p class=%d error=%@",
+              CSHostBuildMarker, springBoardServices, controllerClass != Nil, error);
+        return controllerClass;
+    }
+    Class controllerClass = NSClassFromString(@"SBSAccessibilityWindowHostingController");
+    NSLog(@"Core-SET: core17-sbs build=%@ stage=image-loaded handle=%p class=%d",
+          CSHostBuildMarker, springBoardServices, controllerClass != Nil);
+    return controllerClass;
+}
 
 static uint32_t CSContext(UIWindow *window) {
     if (!window) return 0;
@@ -96,7 +118,7 @@ static uint32_t CSContext(UIWindow *window) {
               NSThread.isMainThread, side.context, side.level);
         return NO;
     }
-    Class controllerClass = NSClassFromString(@"SBSAccessibilityWindowHostingController");
+    Class controllerClass = CSHostingControllerClass();
     SEL registerSelector = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
     if (!controllerClass || ![controllerClass instancesRespondToSelector:registerSelector]) {
         NSLog(@"Core-SET: core17-sbs stage=class context=%u class=%d selector=%d ready=0",
