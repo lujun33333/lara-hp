@@ -21,6 +21,17 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             ? "目标写会话清理待确认" : writeBoundaryReason())
     }
     var supportedFields: Set<CoreSetField> { [] }
+    // All 25 reference UI points can retain typed desired configuration. This
+    // does not make any point live-supported and apply remains fail-closed.
+    var configurableFields: Set<CoreSetField> {
+        [.basicAimEnabled, .basicAimPoint, .basicAimPreaimCircle, .basicAimTrigger,
+         .basicAimDynamicCircle, .basicAimShowCircle, .basicAimConnectionLine,
+         .basicAimCircleSize, .basicAimExcludeKnocked, .basicAimIncludeBots,
+         .basicAimLockSameTarget, .basicAimMaximumDistance, .basicAimStrength,
+         .basicAimSmoothing, .basicAimConfirmationFrames, .basicAimScene,
+         .basicAimLockStrength, .basicAimHorizontalSpeed, .basicAimVerticalSpeed,
+         .basicAimPredictionMilliseconds, .basicAimLockThreshold, .basicAimTakeoverPause]
+    }
 
     func apply(_ request: CoreSetApplyRequest<State>,
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {

@@ -25,6 +25,14 @@ EXPECTED = {
     "FrameRate": {"framesPerSecond"},
     "AimDisplay": {"localAimCircle", "localAimCircleSize", "localAimPreviewLine", "localAimPreviewMarker",
                    "localAimDynamicCircle", "localAimPreviewBots", "localAimPreviewDistance"},
+    "Aim": {"basicAimEnabled", "basicAimPoint", "basicAimPreaimCircle", "basicAimTrigger",
+            "basicAimDynamicCircle", "basicAimShowCircle", "basicAimConnectionLine", "basicAimCircleSize",
+            "basicAimExcludeKnocked", "basicAimIncludeBots", "basicAimLockSameTarget",
+            "basicAimMaximumDistance", "basicAimStrength", "basicAimSmoothing", "basicAimConfirmationFrames",
+            "basicAimScene", "basicAimLockStrength", "basicAimHorizontalSpeed", "basicAimVerticalSpeed",
+            "basicAimPredictionMilliseconds", "basicAimLockThreshold", "basicAimTakeoverPause"},
+    "Recoil": {"recoilEnabled", "recoilStopWhenNotFiring", "recoilVerticalEnabled",
+               "recoilVerticalStrength", "recoilHorizontalEnabled", "recoilHorizontalStrength"},
 }
 
 
@@ -71,7 +79,7 @@ class ConsumerConfigurationContract(unittest.TestCase):
             for name in EXPECTED
         }
 
-    def test_inventory_61_fields_can_be_staged(self) -> None:
+    def test_inventory_89_fields_can_be_staged(self) -> None:
         all_fields: set[str] = set()
         for name, expected in EXPECTED.items():
             with self.subTest(consumer=name):
@@ -79,14 +87,19 @@ class ConsumerConfigurationContract(unittest.TestCase):
                 self.assertEqual(actual, expected)
                 self.assertTrue(all_fields.isdisjoint(actual))
                 all_fields.update(actual)
-        self.assertEqual(len(all_fields), 61)
+        self.assertEqual(len(all_fields), 89)
 
     def test_live_support_and_application_remain_gated(self) -> None:
         for name, source in self.sources.items():
             with self.subTest(consumer=name):
                 supported = body(source, "var supportedFields:")
-                self.assertIn("availability == .ready", supported)
-                require_live_apply(source)
+                if name in ("Aim", "Recoil"):
+                    self.assertRegex(supported, r"^\s*\[\]\s*$")
+                    self.assertIn(".notApplied(reason:", body(source, "func apply("))
+                    self.assertNotIn(".applied(observed:", body(source, "func apply("))
+                else:
+                    self.assertIn("availability == .ready", supported)
+                    require_live_apply(source)
         adjustment = body(self.sources["Adjustment"], "var supportedFields:")
         self.assertIn("playerStyleReady == true", adjustment)
         self.assertIn("materialStyleReady == true", adjustment)
@@ -118,12 +131,13 @@ class ConsumerConfigurationContract(unittest.TestCase):
         receipt = body(self.sources["Material"], "func consumed(")
         self.assertRegex(receipt, r"if settings\.enabled == true \|\| settings\.metroArmor == true\s*\{\s*refresh = Timer")
 
-    def test_target_writers_remain_unconfigurable(self) -> None:
+    def test_action_configuration_is_stageable_but_never_live_supported(self) -> None:
         for name in ("Aim", "Recoil"):
             source = (APP / f"CoreSet{name}Consumer.swift").read_text(encoding="utf-8")
-            self.assertNotIn("var configurableFields:", source)
+            self.assertGreater(len(configured_fields(source)), 0)
             self.assertRegex(body(source, "var supportedFields:"), r"^\s*\[\]\s*$")
             self.assertNotIn(".applied(observed:", body(source, "func apply("))
+            self.assertNotIn("writeControllerAction", source)
 
     def test_contract_rejects_ready_dependent_configuration_and_unchecked_apply(self) -> None:
         player = self.sources["Player"]

@@ -125,10 +125,12 @@ assert "configured=0 confirmed=0" in explain
 assert "updateDesired" not in explain and "applyGame" not in explain
 
 scene = body(menu, "private func scenePreview(")
-assert "controlAvailability(.basicAimScene" not in scene
+assert "aimConfigurationAvailable(.basicAimScene)" in scene
 assert "尚未生效" in scene
 start = body(menu, "@objc private func startBasicAim()")
-assert "guard canApply(featureState.aim)" in start
+assert "aimConfigurationAvailable(.basicAimEnabled)" in start
+assert "featureState.aim.updateDesired" in start
+assert r"editGame(\.aim)" not in start and r"applyGame(\.aim)" not in start
 for filename in ("CoreSetAimConsumer.swift", "CoreSetRecoilConsumer.swift"):
     consumer = (ROOT / "lara/views/app" / filename).read_text(encoding="utf-8")
     assert "var supportedFields: Set<CoreSetField> { [] }" in consumer
@@ -149,7 +151,8 @@ assert "selectedPage == 0" not in handler
 circle = body(menu, "@objc private func toggleLocalAimCircle(")
 assert "featureState.aimDisplay.desired.circleVisible" in circle
 preview = body(menu, "@objc private func toggleLocalAimPreviewField(")
-assert "let desired = featureState.aimDisplay.desired" in preview
+assert "let action = featureState.aim.desired" in preview
+assert "previewReady" in preview and "actionReady" in preview
 visible_aim_ranges = body(menu, "@objc private func configureBasicAimRange(")
 assert "editGame(\\.aimDisplay) { $0.circleSize.set" in visible_aim_ranges
 assert "editGame(\\.aimDisplay) { $0.maximumDistance.set" in visible_aim_ranges
@@ -193,12 +196,24 @@ assert "else if state.scene != nil" in aim_ui
 assert "case 9: $0.custom.predictionMilliseconds.set" in visible_aim_ranges
 assert "recordAimConfiguration" in visible_aim_ranges
 record = body(menu, "private func recordAimConfiguration(")
-assert "configured=1 confirmed=0" in record and "scope=local-configuration" in record
+assert "configured=1 confirmed=0" in record and "targetEffectsCreated=0" in record
 assert "prepareApply" not in record and "applyGame" not in record
 chest = body(menu, "@objc private func configureBasicAimPoint(")
-refusal = chest.split("if point == .chest", 1)[1].split("featureState.aim.updateDesired", 1)[0]
-assert "return" in refusal and "confirmed=0" in refusal
-assert "未修改期望或目标" in refusal
+assert "if point == .chest" not in chest
+assert "featureState.aim.updateDesired" in chest
+
+for signature, field in (("@objc private func toggleRecoilField(", "recoilStopWhenNotFiring"),
+                          ("@objc private func configureRecoilStrength(", "recoilVerticalStrength")):
+    action = body(menu, signature)
+    assert field in action
+    assert "featureState.recoil.updateDesired" in action
+    assert "recordRecoilConfiguration" in action
+    assert r"applyGame(\.recoil)" not in action
+home_run = body(menu, "@objc private func configureHomeRunMode(")
+home_cover = body(menu, "@objc private func configureHomeCoverMode(")
+assert "featureState.home.updateDesired" in home_run and "targetEffectsCreated=0" in home_run
+assert "selectCoverMode" in home_cover and "targetEffectsCreated=0" in home_cover
+assert "if mode != .off { retainedCoverMode = mode }" in state
 
 # Executable inventory: every point has reference, state, conversion, lifecycle,
 # consumer and receipt entries. Missing actions cannot silently become closed.

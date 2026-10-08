@@ -69,7 +69,8 @@ def require_matrix(menu, native, action):
 
 def require_action_source(source):
     assert re.fullmatch(r"\s*\[\]\s*", body(source, "var supportedFields:"))
-    assert "var configurableFields:" not in source
+    configured = body(source, "var configurableFields:")
+    assert configured.strip().startswith("[") and configured.count(".") >= 6
     apply = body(source, "func apply(")
     assert ".notApplied(reason:" in apply and ".applied(observed:" not in apply
     assert "producerLease=unissued" in apply and "gameThreadExclusive=0" in apply and "stopRestore=unverified" in apply

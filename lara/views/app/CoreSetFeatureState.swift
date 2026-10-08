@@ -38,9 +38,16 @@ enum CoreSetField: Hashable {
     case warningEnabled, warningIgnoreBots, warningRange, warningTextSize
     case localAimCircle, localAimCircleSize, localAimPreviewLine, localAimPreviewMarker
     case localAimDynamicCircle, localAimPreviewBots, localAimPreviewDistance
-    // The legacy HP aim consumer keeps this unavailable; the hosted menu uses
-    // the explicit field ID to avoid mistaking a visible selector for support.
-    case basicAimScene
+    // Action configuration IDs are deliberately separate from live support.
+    // A consumer may stage these fields while supportedFields remains empty.
+    case basicAimEnabled, basicAimPoint, basicAimPreaimCircle, basicAimTrigger
+    case basicAimDynamicCircle, basicAimShowCircle, basicAimConnectionLine, basicAimCircleSize
+    case basicAimExcludeKnocked, basicAimIncludeBots, basicAimLockSameTarget
+    case basicAimMaximumDistance, basicAimStrength, basicAimSmoothing, basicAimConfirmationFrames
+    case basicAimScene, basicAimLockStrength, basicAimHorizontalSpeed, basicAimVerticalSpeed
+    case basicAimPredictionMilliseconds, basicAimLockThreshold, basicAimTakeoverPause
+    case recoilEnabled, recoilStopWhenNotFiring, recoilVerticalEnabled, recoilVerticalStrength
+    case recoilHorizontalEnabled, recoilHorizontalStrength
 
     var diagnosticID: String {
         switch self {
@@ -78,6 +85,18 @@ enum CoreSetField: Hashable {
             return [.radarEnabled, .radarShowDistance, .radarDetectionDistance, .radarRadius,
                     .radarX, .radarY, .warningEnabled, .warningIgnoreBots, .warningRange,
                     .warningTextSize]
+        case .aimControl:
+            return [.basicAimEnabled, .basicAimPoint, .basicAimPreaimCircle, .basicAimTrigger,
+                    .basicAimDynamicCircle, .basicAimShowCircle, .basicAimConnectionLine,
+                    .basicAimCircleSize, .basicAimExcludeKnocked, .basicAimIncludeBots,
+                    .basicAimLockSameTarget, .basicAimMaximumDistance, .basicAimStrength,
+                    .basicAimSmoothing, .basicAimConfirmationFrames, .basicAimScene,
+                    .basicAimLockStrength, .basicAimHorizontalSpeed, .basicAimVerticalSpeed,
+                    .basicAimPredictionMilliseconds, .basicAimLockThreshold,
+                    .basicAimTakeoverPause]
+        case .recoilControl:
+            return [.recoilEnabled, .recoilStopWhenNotFiring, .recoilVerticalEnabled,
+                    .recoilVerticalStrength, .recoilHorizontalEnabled, .recoilHorizontalStrength]
         default: return []
         }
     }
@@ -451,12 +470,18 @@ enum CoreSetFloatingPalette: Int, CaseIterable {
 
 struct CoreSetHomeSettings: Equatable {
     var runMode: CoreSetRunMode?
-    var coverMode: CoreSetCoverMode?
+    private(set) var coverMode: CoreSetCoverMode?
+    private(set) var retainedCoverMode: CoreSetCoverMode?
     var theme: CoreSetTheme?
     private(set) var accent: CoreSetRGBA?
     var floatingPalette: CoreSetFloatingPalette?
     var framesPerSecond = CoreSetIntSetting(30...144) // Reference UI model; runtime uses frameRate channel.
     mutating func setAccent(_ color: CoreSetRGBA?) { accent = color?.referenceOpaque }
+    // Native "off" keeps the prior non-off selection for later restoration.
+    mutating func selectCoverMode(_ mode: CoreSetCoverMode) {
+        if mode != .off { retainedCoverMode = mode }
+        coverMode = mode
+    }
 }
 
 struct CoreSetFrameRateSettings: Equatable {

@@ -206,9 +206,9 @@
     },
     "missing_home": {
       "source": "lara/views/app/CoreSetMenuViewController.swift",
-      "producer": "unavailableReason/explainUnavailable",
-      "receipt": "no same-meaning action consumer/receipt",
-      "scope": "fail-closed; state observation is not action execution",
+      "producer": "typed run/cover configuration plus unavailableReason/explainUnavailable for actions",
+      "receipt": "run/cover configured=1 confirmed=0 targetEffectsCreated=0; no same-meaning action consumer/receipt",
+      "scope": "typed configuration only; fail-closed action; state observation is not action execution",
       "runtime_device_verified": false,
       "lifecycle": {
         "start": "NOT PROVIDED",
@@ -219,7 +219,7 @@
     "missing_aim": {
       "source": "lara/views/app/CoreSetAimConsumer.swift",
       "producer": "apply",
-      "receipt": "notApplied; supportedFields/configurableFields empty; no audited action consumer",
+      "receipt": "typed configurableFields retained; supportedFields empty; apply returns notApplied; no audited action consumer",
       "scope": "fail-closed original aim; local configuration/preview is not original effect",
       "runtime_device_verified": false,
       "lifecycle": {
@@ -232,7 +232,7 @@
     "missing_recoil": {
       "source": "lara/views/app/CoreSetRecoilConsumer.swift",
       "producer": "apply",
-      "receipt": "notApplied; supportedFields/configurableFields empty; no audited formula/action consumer",
+      "receipt": "typed configurableFields retained; supportedFields empty; apply returns notApplied; no audited formula/action consumer",
       "scope": "fail-closed original recoil",
       "runtime_device_verified": false,
       "lifecycle": {

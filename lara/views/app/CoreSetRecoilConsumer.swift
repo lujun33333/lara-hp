@@ -22,6 +22,12 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
             ? "压枪写会话清理待确认" : writeBoundaryReason())
     }
     var supportedFields: Set<CoreSetField> { [] }
+    // Preserve the six typed reference settings even while the target action
+    // owner/formula/restore receipt is unavailable.
+    var configurableFields: Set<CoreSetField> {
+        [.recoilEnabled, .recoilStopWhenNotFiring, .recoilVerticalEnabled,
+         .recoilVerticalStrength, .recoilHorizontalEnabled, .recoilHorizontalStrength]
+    }
 
     func apply(_ request: CoreSetApplyRequest<State>,
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
