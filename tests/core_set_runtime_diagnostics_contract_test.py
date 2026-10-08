@@ -38,11 +38,28 @@ for stage in (
 ):
     assert stage in connect, stage
 for gate in (
-    'strcmp(name, CSProcessName) != 0', "profileMatchesPath:path",
-    'dlsym(RTLD_DEFAULT, "task_read_for_pid")', "pid_for_task(task",
+    'strcmp(name, CSProcessName) != 0', "CSResolveKernelTarget(false)",
+    "profileMatchesPath:path", "CSAcquireTaskForPID(pid)", "pid_for_task(task",
     "findImageInTask:task", "identityStillValid:YES",
 ):
     assert gate in connect, gate
+for fallback in (
+    'procbyname(CSProcessName)', 'dlsym(RTLD_DEFAULT, "task_for_pid")',
+    'dlsym(RTLD_DEFAULT, "task_read_for_pid")',
+    'dlsym(RTLD_DEFAULT, "processor_set_tasks")',
+    '"kernel-allproc"', 'profileSource=%@ pidSource=%@ taskSource=%@',
+    '@"kernel-proc+mach-uuid"', 'candidate.kernelProc == 0',
+):
+    assert fallback in session, fallback
+resolver = body(session, "static CSKernelTarget CSResolveKernelTarget")
+assert "ds_address_usable(result.kernelProc)" in resolver
+assert "result.kernelProc <= UINT64_MAX - off_proc_p_pid" in resolver
+assert "ds_address_usable(result.kernelProc + off_proc_p_pid)" in resolver
+assert connect.index("proc_listallpids") < connect.index("CSResolveKernelTarget(false)")
+acquire = body(session, "static CSTaskAcquisition CSAcquireTaskForPID")
+assert acquire.index('{taskForPID, "task_for_pid"}') < acquire.index(
+    '{taskReadForPID, "task_read_for_pid"}'
+) < acquire.index("CSTaskFromProcessorSet")
 publish = body(session, "- (void)publishConnectDiagnostic:")
 assert "changed || !_lastLoggedDiagnostic || now - _lastDiagnosticLogTime >= 30.0" in publish
 assert "target-read lane=%@ stage=connect ready=%d" in publish
@@ -61,6 +78,29 @@ for relative, label in labels.items():
 assert '_readSession.diagnosticLabel = @"target-write"' in read(
     "lara/overlay/CoreSetTargetWriteSession.mm"
 )
+
+profile_header = read("lara/overlay/CoreSetKernelWriteProfile.h")
+profile_source = read("lara/overlay/CoreSetKernelWriteProfile.mm")
+assert "diagnosticSnapshot" in profile_header
+profile_diagnostic = body(profile_source, "+ (NSDictionary<NSString *, id> *)diagnosticSnapshot")
+for contract in (
+    "kernel_transport_not_ready", "audited_profile_not_installed",
+    "observedOffsetsAudited", "profileMatches", "failureReasons",
+):
+    assert contract in profile_diagnostic
+assert "ds_start" not in profile_diagnostic
+assert "installAuditedProfile" not in profile_diagnostic
+assert '@"observedOffsetsAudited": @NO' in profile_diagnostic
+assert '#import "overlay/CoreSetKernelWriteProfile.h"' in read("lara/lara-Bridging-Header.h")
+for name in ("Aim", "Recoil"):
+    action = read(f"lara/views/app/CoreSet{name}Consumer.swift")
+    reason = body(action, "private func writeBoundaryReason()")
+    assert "CoreSetKernelWriteProfileRegistry.diagnosticSnapshot()" in reason
+    assert 'snapshot["failureReasons"]' in reason
+    assert 'snapshot["profileMatches"]' in reason
+    assert "systemUptime" in reason and "< 5" in reason
+    assert "writeControllerAction" not in action
+    assert "supportedFields: Set<CoreSetField> { [] }" in action
 
 menu = read("lara/views/app/CoreSetMenuViewController.swift")
 explain = body(menu, "@objc private func explainUnavailable")

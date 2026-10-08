@@ -71,6 +71,13 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertNotIn("_readFailureSequence =", cleanup)
         self.assertIn("if (hadIdentity)", cleanup)
 
+    def test_kernel_pid_fallback_keeps_exact_uuid_as_identity_authority(self) -> None:
+        connect = body(self.session, "- (BOOL)connect")
+        self.assertIn("candidate.kernelProc == 0", connect)
+        self.assertIn('@"kernel-proc+mach-uuid"', connect)
+        self.assertIn("findImageInTask:task", connect)
+        self.assertIn("imageAt:_base task:_task", body(self.session, "- (BOOL)identityStillValid:"))
+
     def test_read_errors_have_current_generation_range_and_no_payload(self) -> None:
         diagnostic = body(self.session, "- (void)recordReadFailure:")
         for marker in ("++_readFailureSequence", "captureGeneration=%llu", "sessionGeneration=%llu",
@@ -144,7 +151,12 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
 
     def test_transport_and_writers_keep_the_audited_boundary(self) -> None:
         self.assertIn('dlsym(RTLD_DEFAULT, "task_read_for_pid")', self.session)
-        self.assertNotRegex(self.session, r"\b(?:task_for_pid|remoteRead|vmmapremotepage|ds_kread\w*)\s*\(")
+        self.assertIn('dlsym(RTLD_DEFAULT, "task_for_pid")', self.session)
+        self.assertIn('dlsym(RTLD_DEFAULT, "processor_set_tasks")', self.session)
+        self.assertIn("procbyname(CSProcessName)", self.session)
+        read_at = body(self.session, "- (BOOL)readAt:")
+        self.assertNotRegex(read_at, r"\b(?:task_for_pid|remoteRead|vmmapremotepage|ds_kread\w*)\s*\(")
+        self.assertNotIn("mach_vm_write", self.session)
         for name in ("Aim", "Recoil"):
             source = read(f"lara/views/app/CoreSet{name}Consumer.swift")
             apply = body(source, "func apply(")

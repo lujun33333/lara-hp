@@ -8,6 +8,8 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
     let capability = CoreSetCapability.recoilControl
     private let writer = CoreSetTargetWriteSession()
     private let inputProbe = CoreSetActionReadOnlyProbe(lane: "recoil")
+    private var cachedWriteBoundaryReason = "写 profile 尚未观察"
+    private var cachedWriteBoundaryAt = -Double.infinity
 
     init() {
         NSLog("Core-SET: target-write lane=recoil stage=capability ready=0 reason=audited-writer-or-receipt-unavailable localStateMachine=reference-c571c-valid-input localPostState=reference-c416c-valid-input callerMerge=reference-c2d34 postOwnerToken=object-pointer-not-generation controllerSlots=static-typed liveOwnerMapping=unverified lifecycleReceipt=unverified")
@@ -17,7 +19,7 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
     var availability: CoreSetAvailability {
         inputProbe.requestIfDue()
         return .unavailable(reason: writer.pendingCleanup
-            ? "压枪写会话清理待确认" : "压枪目标采样 owner、写权限与回读恢复未验证")
+            ? "压枪写会话清理待确认" : writeBoundaryReason())
     }
     var supportedFields: Set<CoreSetField> { [] }
 
@@ -43,5 +45,17 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
     func shutdownWriteSession() -> Bool {
         let probeClean = inputProbe.stopIfIdle()
         return writer.disconnect().complete && probeClean
+    }
+
+    private func writeBoundaryReason() -> String {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - cachedWriteBoundaryAt < 5 { return cachedWriteBoundaryReason }
+        let snapshot = CoreSetKernelWriteProfileRegistry.diagnosticSnapshot()
+        let reasons = (snapshot["failureReasons"] as? [String]) ?? []
+        let profile = (snapshot["profileMatches"] as? Bool) == true
+            ? "profile-match" : (reasons.isEmpty ? "profile-unverified" : reasons.joined(separator: ","))
+        cachedWriteBoundaryReason = "压枪采样 owner、回读恢复未验证；写 profile=\(profile)"
+        cachedWriteBoundaryAt = now
+        return cachedWriteBoundaryReason
     }
 }

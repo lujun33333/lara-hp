@@ -1,4 +1,7 @@
 #import "CoreSetReadSession.h"
+#import "../kexploit/darksword.h"
+#import "../kexploit/offsets.h"
+#import "../kexploit/utils.h"
 #import <dlfcn.h>
 #import <limits.h>
 #import <mach/mach.h>
@@ -12,6 +15,7 @@ extern "C" kern_return_t mach_vm_read_overwrite(vm_map_read_t, mach_vm_address_t
     mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
 extern "C" kern_return_t mach_vm_region_recurse(vm_map_read_t, mach_vm_address_t *,
     mach_vm_size_t *, natural_t *, vm_region_recurse_info_t, mach_msg_type_number_t *);
+extern "C" kern_return_t mach_vm_deallocate(task_t, mach_vm_address_t, mach_vm_size_t);
 extern "C" int proc_listallpids(void *, int);
 extern "C" int proc_name(int, void *, uint32_t);
 
@@ -23,6 +27,152 @@ static const uint8_t CSUUID[16] = {
     0x34, 0xb7, 0x85, 0xb2, 0x0d, 0xab, 0x39, 0x92,
     0x98, 0x5d, 0x35, 0x9e, 0x6b, 0xf4, 0x55, 0x85
 };
+
+typedef struct {
+    int pid;
+    uint64_t kernelProc;
+    const char *source;
+} CSProcessCandidate;
+
+typedef struct {
+    int pid;
+    uint64_t kernelProc;
+    bool attempted;
+} CSKernelTarget;
+
+typedef struct {
+    task_t task;
+    kern_return_t result;
+    const char *source;
+    bool mechanismAvailable;
+} CSTaskAcquisition;
+
+static pthread_mutex_t CSProcessResolverLock = PTHREAD_MUTEX_INITIALIZER;
+static CSKernelTarget CSCachedKernelTarget = {-1, 0, false};
+static CFAbsoluteTime CSCachedKernelTargetAt = 0;
+
+// WZ serializes target discovery around its global transport. Core-SET owns
+// several independent read sessions, so share a short-lived kernel proc lookup
+// rather than walking allproc once per lane every second.
+static CSKernelTarget CSResolveKernelTarget(bool forceRefresh) {
+    pthread_mutex_lock(&CSProcessResolverLock);
+    const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (!forceRefresh && CSCachedKernelTargetAt > 0 &&
+        now - CSCachedKernelTargetAt >= 0 && now - CSCachedKernelTargetAt <= 0.25) {
+        CSKernelTarget cached = CSCachedKernelTarget;
+        pthread_mutex_unlock(&CSProcessResolverLock);
+        return cached;
+    }
+
+    CSKernelTarget result = {-1, 0, false};
+    if (ds_is_ready() && off_proc_p_pid != 0) {
+        result.attempted = true;
+        result.kernelProc = procbyname(CSProcessName);
+        if (result.kernelProc != 0 && ds_address_usable(result.kernelProc) &&
+            result.kernelProc <= UINT64_MAX - off_proc_p_pid &&
+            ds_address_usable(result.kernelProc + off_proc_p_pid)) {
+            const uint32_t pid = ds_kread32(result.kernelProc + off_proc_p_pid);
+            if (pid > 0 && pid <= INT_MAX) result.pid = (int)pid;
+        } else {
+            result.kernelProc = 0;
+        }
+    }
+    CSCachedKernelTarget = result;
+    CSCachedKernelTargetAt = now;
+    pthread_mutex_unlock(&CSProcessResolverLock);
+    return result;
+}
+
+static task_t CSTaskFromProcessorSet(int wantedPID, kern_return_t *lastResult,
+                                     bool *mechanismAvailable) {
+    typedef kern_return_t (*processor_set_default_fn)(host_t, processor_set_name_t *);
+    typedef kern_return_t (*host_processor_set_priv_fn)(
+        host_priv_t, processor_set_name_t, processor_set_control_t *);
+    typedef kern_return_t (*processor_set_tasks_fn)(
+        processor_set_control_t, task_array_t *, mach_msg_type_number_t *);
+    static processor_set_default_fn processorSetDefault = NULL;
+    static host_processor_set_priv_fn hostProcessorSetPriv = NULL;
+    static processor_set_tasks_fn processorSetTasks = NULL;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        processorSetDefault = (processor_set_default_fn)dlsym(RTLD_DEFAULT, "processor_set_default");
+        hostProcessorSetPriv = (host_processor_set_priv_fn)dlsym(RTLD_DEFAULT, "host_processor_set_priv");
+        processorSetTasks = (processor_set_tasks_fn)dlsym(RTLD_DEFAULT, "processor_set_tasks");
+    });
+    const bool available = processorSetDefault && hostProcessorSetPriv && processorSetTasks;
+    if (mechanismAvailable) *mechanismAvailable = available;
+    if (!available) return MACH_PORT_NULL;
+
+    host_t host = mach_host_self();
+    processor_set_name_t setName = MACH_PORT_NULL;
+    processor_set_control_t setControl = MACH_PORT_NULL;
+    task_array_t tasks = NULL;
+    mach_msg_type_number_t taskCount = 0;
+    task_t selected = MACH_PORT_NULL;
+    kern_return_t kr = processorSetDefault(host, &setName);
+    if (kr == KERN_SUCCESS) kr = hostProcessorSetPriv(host, setName, &setControl);
+    if (kr == KERN_SUCCESS) kr = processorSetTasks(setControl, &tasks, &taskCount);
+    if (kr == KERN_SUCCESS && tasks) {
+        for (mach_msg_type_number_t index = 0; index < taskCount; ++index) {
+            int candidatePID = -1;
+            if (selected == MACH_PORT_NULL &&
+                pid_for_task(tasks[index], &candidatePID) == KERN_SUCCESS &&
+                candidatePID == wantedPID) {
+                selected = tasks[index];
+            } else if (tasks[index] != MACH_PORT_NULL) {
+                mach_port_deallocate(mach_task_self(), tasks[index]);
+            }
+        }
+        mach_vm_deallocate(mach_task_self(),
+            (mach_vm_address_t)(uintptr_t)tasks,
+            (mach_vm_size_t)taskCount * sizeof(task_t));
+    }
+    if (setControl != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), setControl);
+    if (setName != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), setName);
+    if (host != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), host);
+    if (selected == MACH_PORT_NULL && kr == KERN_SUCCESS) kr = KERN_FAILURE;
+    if (lastResult) *lastResult = selected != MACH_PORT_NULL ? KERN_SUCCESS : kr;
+    return selected;
+}
+
+static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
+    typedef kern_return_t (*task_for_pid_fn)(mach_port_t, int, mach_port_t *);
+    static task_for_pid_fn taskForPID = NULL;
+    static task_for_pid_fn taskReadForPID = NULL;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        taskForPID = (task_for_pid_fn)dlsym(RTLD_DEFAULT, "task_for_pid");
+        taskReadForPID = (task_for_pid_fn)dlsym(RTLD_DEFAULT, "task_read_for_pid");
+    });
+
+    CSTaskAcquisition result = {MACH_PORT_NULL, KERN_FAILURE, "none", false};
+    const struct {
+        task_for_pid_fn function;
+        const char *source;
+    } attempts[] = {
+        {taskForPID, "task_for_pid"},
+        {taskReadForPID, "task_read_for_pid"},
+    };
+    for (const auto &attempt : attempts) {
+        if (!attempt.function) continue;
+        result.mechanismAvailable = true;
+        task_t task = MACH_PORT_NULL;
+        result.result = attempt.function(mach_task_self(), pid, &task);
+        result.source = attempt.source;
+        if (result.result == KERN_SUCCESS && task != MACH_PORT_NULL) {
+            result.task = task;
+            return result;
+        }
+        if (task != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), task);
+    }
+
+    bool processorSetAvailable = false;
+    task_t task = CSTaskFromProcessorSet(pid, &result.result, &processorSetAvailable);
+    result.mechanismAvailable = result.mechanismAvailable || processorSetAvailable;
+    if (processorSetAvailable) result.source = "processor_set_tasks";
+    if (task != MACH_PORT_NULL) result.task = task;
+    return result;
+}
 
 @implementation CoreSetReadCleanupResult
 - (instancetype)initWithTaskPortReleased:(BOOL)released generationAdvanced:(BOOL)advanced {
@@ -48,6 +198,9 @@ static const uint8_t CSUUID[16] = {
     NSString *_lastCleanupDiagnostic;
     NSString *_lastLoggedCleanupKind;
     CFAbsoluteTime _lastCleanupLogTime;
+    NSString *_pidSource;
+    NSString *_taskSource;
+    NSString *_profileSource;
 }
 @end
 
@@ -204,20 +357,24 @@ static const uint8_t CSUUID[16] = {
 }
 
 - (BOOL)identityStillValid:(BOOL)verifyImage {
-    if (_task == MACH_PORT_NULL || _pid <= 0 || !_path || !_base) return NO;
+    if (_task == MACH_PORT_NULL || _pid <= 0 || !_base) return NO;
     int currentPID = -1;
     if (pid_for_task(_task, &currentPID) != KERN_SUCCESS || currentPID != _pid) return NO;
-    NSString *currentPath = [CoreSetReadSession pathForPID:_pid];
-    return [currentPath isEqualToString:_path] &&
-        (!verifyImage || ([CoreSetReadSession profileMatchesPath:currentPath] &&
-                          [CoreSetReadSession imageAt:_base task:_task]));
+    if (_path) {
+        NSString *currentPath = [CoreSetReadSession pathForPID:_pid];
+        if (![currentPath isEqualToString:_path] ||
+            (verifyImage && ![CoreSetReadSession profileMatchesPath:currentPath])) return NO;
+    }
+    return !verifyImage || [CoreSetReadSession imageAt:_base task:_task];
 }
 
 - (BOOL)connect {
     @synchronized (self) {
         if ([self identityStillValid:YES]) {
-            [self publishConnectDiagnostic:[NSString stringWithFormat:@"ready pid=%d base=0x%llx profile=1 uuid=1",
-                _pid, (unsigned long long)_base] ready:YES];
+            [self publishConnectDiagnostic:[NSString stringWithFormat:
+                @"ready pid=%d base=0x%llx uuid=1 profileSource=%@ pidSource=%@ taskSource=%@",
+                _pid, (unsigned long long)_base, _profileSource ?: @"unknown",
+                _pidSource ?: @"unknown", _taskSource ?: @"unknown"] ready:YES];
             return YES;
         }
         CoreSetReadCleanupResult *cleanup = [self disconnect];
@@ -225,45 +382,75 @@ static const uint8_t CSUUID[16] = {
             [self publishConnectDiagnostic:@"cleanup-or-generation-failed" ready:NO]; return NO;
         }
         int pids[4096] = {0};
-        int count = proc_listallpids(pids, sizeof(pids));
-        if (count <= 0) {
-            [self publishConnectDiagnostic:[NSString stringWithFormat:@"proc-list-failed count=%d", count]
-                                     ready:NO];
-            return NO;
-        }
-        count = MIN(count, (int)(sizeof(pids) / sizeof(pids[0])));
-        BOOL sawProcess = NO, sawPath = NO, sawProfile = NO, sawTask = NO, sawPID = NO;
-        BOOL readSymbolAvailable = NO;
-        kern_return_t lastTaskResult = KERN_FAILURE;
-        NSString *lastProfile = nil;
-        for (int index = 0; index < count; ++index) {
-            int pid = pids[index];
+        const int libprocResult = proc_listallpids(pids, sizeof(pids));
+        const int libprocCount = libprocResult > 0
+            ? MIN(libprocResult, (int)(sizeof(pids) / sizeof(pids[0]))) : 0;
+        CSProcessCandidate candidates[4097] = {};
+        int candidateCount = 0;
+        for (int index = 0; index < libprocCount; ++index) {
+            const int pid = pids[index];
             if (pid <= 0) continue;
             char name[64] = {0};
             if (proc_name(pid, name, sizeof(name)) <= 0 || strcmp(name, CSProcessName) != 0) continue;
+            candidates[candidateCount++] = {pid, 0, "libproc"};
+        }
+
+        const CSKernelTarget kernelTarget = CSResolveKernelTarget(false);
+        if (kernelTarget.pid > 0 && kernelTarget.kernelProc != 0) {
+            bool duplicate = false;
+            for (int index = 0; index < candidateCount; ++index) {
+                if (candidates[index].pid != kernelTarget.pid) continue;
+                candidates[index].kernelProc = kernelTarget.kernelProc;
+                candidates[index].source = "libproc+kernel-allproc";
+                duplicate = true;
+                break;
+            }
+            if (!duplicate && candidateCount < (int)(sizeof(candidates) / sizeof(candidates[0]))) {
+                candidates[candidateCount++] = {
+                    kernelTarget.pid, kernelTarget.kernelProc, "kernel-allproc"
+                };
+            }
+        }
+
+        BOOL sawProcess = NO, sawPath = NO, sawProfile = NO, sawTask = NO, sawPID = NO;
+        BOOL taskMechanismAvailable = NO, kernelIdentityChanged = NO;
+        kern_return_t lastTaskResult = KERN_FAILURE;
+        const char *lastTaskSource = "none";
+        NSString *lastProfile = nil;
+        for (int index = 0; index < candidateCount; ++index) {
+            const CSProcessCandidate candidate = candidates[index];
+            const int pid = candidate.pid;
             sawProcess = YES;
             NSString *path = [CoreSetReadSession pathForPID:pid];
-            if (!path) continue;
-            sawPath = YES;
-            NSString *appPath = [path stringByDeletingLastPathComponent];
-            NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:
-                [appPath stringByAppendingPathComponent:@"Info.plist"]];
-            lastProfile = [NSString stringWithFormat:@"bundle=%@ version=%@ build=%@",
-                info[@"CFBundleIdentifier"] ?: @"nil",
-                info[@"CFBundleShortVersionString"] ?: @"nil",
-                info[@"CFBundleVersion"] ?: @"nil"];
-            if (![CoreSetReadSession profileMatchesPath:path]) continue;
-            sawProfile = YES;
-            task_t task = MACH_PORT_NULL;
-            typedef kern_return_t (*task_read_for_pid_fn)(mach_port_t, int, mach_port_t *);
-            task_read_for_pid_fn readForPID = (task_read_for_pid_fn)dlsym(RTLD_DEFAULT, "task_read_for_pid");
-            readSymbolAvailable = readForPID != NULL;
-            kern_return_t kr = readForPID ? readForPID(mach_task_self(), pid, &task) : KERN_FAILURE;
-            lastTaskResult = kr;
-            if (kr != KERN_SUCCESS || task == MACH_PORT_NULL) {
-                if (task != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), task);
-                continue;
+            NSString *profileSource = nil;
+            if (path) {
+                sawPath = YES;
+                NSString *appPath = [path stringByDeletingLastPathComponent];
+                NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:
+                    [appPath stringByAppendingPathComponent:@"Info.plist"]];
+                lastProfile = [NSString stringWithFormat:@"bundle=%@ version=%@ build=%@",
+                    info[@"CFBundleIdentifier"] ?: @"nil",
+                    info[@"CFBundleShortVersionString"] ?: @"nil",
+                    info[@"CFBundleVersion"] ?: @"nil"];
+                if (![CoreSetReadSession profileMatchesPath:path]) continue;
+                sawProfile = YES;
+                profileSource = @"bundle-metadata+mach-uuid";
+            } else {
+                // WZ continues from a kernel-verified proc when the sandbox hides
+                // proc_pidpath. The exact main-executable UUID below remains the
+                // final identity authority; libproc-only candidates may not skip
+                // bundle metadata.
+                if (candidate.kernelProc == 0) continue;
+                sawPath = YES;
+                sawProfile = YES;
+                profileSource = @"kernel-proc+mach-uuid";
             }
+            const CSTaskAcquisition acquisition = CSAcquireTaskForPID(pid);
+            taskMechanismAvailable = taskMechanismAvailable || acquisition.mechanismAvailable;
+            lastTaskResult = acquisition.result;
+            lastTaskSource = acquisition.source;
+            task_t task = acquisition.task;
+            if (task == MACH_PORT_NULL) continue;
             sawTask = YES;
             int verifiedPID = -1;
             if (pid_for_task(task, &verifiedPID) != KERN_SUCCESS || verifiedPID != pid) {
@@ -272,23 +459,44 @@ static const uint8_t CSUUID[16] = {
             sawPID = YES;
             uint64_t base = [CoreSetReadSession findImageInTask:task];
             if (!base) { mach_port_deallocate(mach_task_self(), task); continue; }
+            if (candidate.kernelProc != 0) {
+                const CSKernelTarget current = CSResolveKernelTarget(true);
+                if (current.pid != pid || current.kernelProc != candidate.kernelProc) {
+                    kernelIdentityChanged = YES;
+                    mach_port_deallocate(mach_task_self(), task);
+                    continue;
+                }
+            }
             _task = task; _pid = pid; _base = base; _path = [path copy];
+            _pidSource = [NSString stringWithUTF8String:candidate.source ?: "unknown"];
+            _taskSource = [NSString stringWithUTF8String:acquisition.source ?: "unknown"];
+            _profileSource = profileSource;
             if ([self identityStillValid:YES]) {
                 ++_generation;
-                [self publishConnectDiagnostic:[NSString stringWithFormat:@"ready pid=%d base=0x%llx profile=1 uuid=1",
-                    _pid, (unsigned long long)_base] ready:YES];
+                [self publishConnectDiagnostic:[NSString stringWithFormat:
+                    @"ready pid=%d base=0x%llx uuid=1 profileSource=%@ pidSource=%@ taskSource=%@",
+                    _pid, (unsigned long long)_base, _profileSource, _pidSource, _taskSource] ready:YES];
                 return YES;
             }
             [self disconnect];
         }
         NSString *reason = nil;
-        if (!sawProcess) reason = @"process-not-found name=ShadowTrackerExtra";
+        if (!sawProcess && libprocResult <= 0 && !kernelTarget.attempted) {
+            reason = [NSString stringWithFormat:
+                @"process-discovery-unavailable libproc-count=%d kernel-ready=%d pid-offset=0x%x",
+                libprocResult, ds_is_ready() ? 1 : 0, off_proc_p_pid];
+        }
+        else if (!sawProcess) reason = [NSString stringWithFormat:
+            @"process-not-found name=ShadowTrackerExtra libproc-count=%d kernel-attempted=%d",
+            libprocResult, kernelTarget.attempted ? 1 : 0];
         else if (!sawPath) reason = @"process-path-unavailable";
         else if (!sawProfile) reason = [NSString stringWithFormat:@"profile-mismatch expected=1.38.12/15915 actual={%@}",
             lastProfile ?: @"unreadable"];
-        else if (!readSymbolAvailable) reason = @"task-read-symbol-missing";
-        else if (!sawTask) reason = [NSString stringWithFormat:@"task-read-denied kr=0x%x", lastTaskResult];
+        else if (!taskMechanismAvailable) reason = @"task-read-symbol-missing acquisition=task_for_pid/task_read_for_pid/processor_set_tasks";
+        else if (!sawTask) reason = [NSString stringWithFormat:@"task-read-denied source=%s kr=0x%x",
+            lastTaskSource, lastTaskResult];
         else if (!sawPID) reason = @"task-port-pid-verification-failed";
+        else if (kernelIdentityChanged) reason = @"kernel-proc-identity-changed-after-region-walk";
         else reason = @"main-image-or-uuid-not-found expected=34b785b2-0dab-3992-985d-359e6bf45585";
         [self publishConnectDiagnostic:reason ready:NO];
         return NO;
@@ -363,7 +571,7 @@ static const uint8_t CSUUID[16] = {
             released = releaseResult == KERN_SUCCESS;
         }
         if (released) _task = MACH_PORT_NULL;
-        _pid = -1; _base = 0; _path = nil;
+        _pid = -1; _base = 0; _path = nil; _pidSource = nil; _taskSource = nil; _profileSource = nil;
         // Failure sequence stays monotonic for in-flight capture attribution,
         // but old identity diagnostics must not survive a disconnected lease.
         if (hadIdentity) {

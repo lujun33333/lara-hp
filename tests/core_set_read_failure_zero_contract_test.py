@@ -53,7 +53,12 @@ def require_cleanup_contract(source: str) -> None:
 
 def require_permission_boundary(source: str) -> None:
     assert 'dlsym(RTLD_DEFAULT, "task_read_for_pid")' in source
-    assert not re.search(r"\b(?:task_for_pid|remoteRead|vmmapremotepage|ds_kread\w*|ds_kwrite\w*)\s*\(", source)
+    assert 'dlsym(RTLD_DEFAULT, "task_for_pid")' in source
+    assert 'dlsym(RTLD_DEFAULT, "processor_set_tasks")' in source
+    assert "procbyname(CSProcessName)" in source
+    read = body(source, "- (BOOL)readAt:")
+    assert not re.search(r"\b(?:task_for_pid|remoteRead|vmmapremotepage|ds_kread\w*|ds_kwrite\w*)\s*\(", read)
+    assert not re.search(r"\b(?:remoteRead|vmmapremotepage|ds_kwrite\w*)\s*\(", source)
     assert not re.search(r"(?:RemoteCall\s*\*|doRemoteCall|ReadTransportProvider|objc_msgSend)", source)
     assert not re.search(r"(?:mach_vm_write|VM_PROT_WRITE|initWithProcess:)", source)
 
@@ -107,8 +112,9 @@ class ReadFailureZeroContract(unittest.TestCase):
 
     def test_transport_permissions_are_unchanged(self) -> None:
         require_permission_boundary(self.source)
-        self.assertIn("there is no", self.header)
-        self.assertIn("RemoteCall or mapped-page fallback", self.header)
+        self.assertIn("There is no", self.header)
+        self.assertIn("RemoteCall or", self.header)
+        self.assertIn("mapped-page fallback", self.header)
 
     def test_write_or_broker_symbols_are_rejected(self) -> None:
         for forbidden in ("mach_vm_write", "VM_PROT_WRITE", "RemoteCall *broker",

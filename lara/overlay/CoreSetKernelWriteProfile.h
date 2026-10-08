@@ -18,6 +18,9 @@ NS_ASSUME_NONNULL_BEGIN
 @interface CoreSetKernelWriteProfileRegistry : NSObject
 + (BOOL)installAuditedProfile:(CoreSetKernelWriteProfile *)profile;
 + (BOOL)matchesCurrentKernel;
+// Read-only evidence for UI/runtime diagnostics. Observed offsets are never
+// promoted to an audited profile and this method does not start a transport.
++ (NSDictionary<NSString *, id> *)diagnosticSnapshot;
 @end
 
 NS_ASSUME_NONNULL_END

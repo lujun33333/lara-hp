@@ -44,8 +44,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, readonly) NSString *lastCleanupDiagnostic;
 
 // Only ShadowTrackerExtra 1.38.12/build 15915/LC_UUID 34b785b2... is accepted.
-// An unavailable task_read_for_pid port leaves this session unavailable; there is no
-// RemoteCall or mapped-page fallback.
+// PID discovery follows the WZ order: libproc first, then a kernel allproc lookup
+// after DarkSword is ready. Readable bundle metadata must match version/build;
+// when proc_pidpath is sandbox-hidden, only a kernel-verified proc plus the exact
+// main-executable UUID may replace that metadata gate. Target bytes still flow
+// only through a PID-verified Mach task acquired by audited system mechanisms.
+// There is no RemoteCall or mapped-page fallback and no target-write API.
 - (BOOL)connect;
 - (BOOL)readAt:(uint64_t)address to:(void *)destination length:(size_t)length
      generation:(uint64_t)generation completedBytes:(size_t *)completedBytes

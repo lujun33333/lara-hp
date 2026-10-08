@@ -20,6 +20,7 @@
 #import "RemoteCall.h"
 #import "overlay/CoreSetReadSession.h"
 #import "overlay/CoreSetTargetWriteSession.h"
+#import "overlay/CoreSetKernelWriteProfile.h"
 #import "overlay/CoreSetPlayerSnapshot.h"
 #import "overlay/CoreSetMaterialSnapshot.h"
 #import "overlay/CoreSetPerformanceSampler.h"

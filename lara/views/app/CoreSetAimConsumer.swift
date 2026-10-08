@@ -7,6 +7,8 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     let capability = CoreSetCapability.aimControl
     private let writer = CoreSetTargetWriteSession()
     private let inputProbe = CoreSetActionReadOnlyProbe(lane: "aim")
+    private var cachedWriteBoundaryReason = "写 profile 尚未观察"
+    private var cachedWriteBoundaryAt = -Double.infinity
 
     init() {
         NSLog("Core-SET: target-write lane=aim stage=capability ready=0 reason=audited-writer-or-receipt-unavailable controllerSlots=static-typed axisUnitRoute=unverified selector=unverified lifecycleReceipt=unverified")
@@ -16,7 +18,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     var availability: CoreSetAvailability {
         inputProbe.requestIfDue()
         return .unavailable(reason: writer.pendingCleanup
-            ? "目标写会话清理待确认" : "build15915 映射写能力与动作停止回执未验证")
+            ? "目标写会话清理待确认" : writeBoundaryReason())
     }
     var supportedFields: Set<CoreSetField> { [] }
 
@@ -42,5 +44,17 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     func shutdownWriteSession() -> Bool {
         let probeClean = inputProbe.stopIfIdle()
         return writer.disconnect().complete && probeClean
+    }
+
+    private func writeBoundaryReason() -> String {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - cachedWriteBoundaryAt < 5 { return cachedWriteBoundaryReason }
+        let snapshot = CoreSetKernelWriteProfileRegistry.diagnosticSnapshot()
+        let reasons = (snapshot["failureReasons"] as? [String]) ?? []
+        let profile = (snapshot["profileMatches"] as? Bool) == true
+            ? "profile-match" : (reasons.isEmpty ? "profile-unverified" : reasons.joined(separator: ","))
+        cachedWriteBoundaryReason = "build15915 动作 owner、恢复回执未验证；写 profile=\(profile)"
+        cachedWriteBoundaryAt = now
+        return cachedWriteBoundaryReason
     }
 }
