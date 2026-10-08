@@ -1,27 +1,11 @@
 #import "CoreSetRemoteHostingAdapter.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
-#import <dlfcn.h>
 #include <cmath>
 
 static char CSPrimaryControllerKey;
 static char CSMenuControllerKey;
 static char CSDrawControllerKey;
-
-static BOOL CSLoadCore17Frameworks(void) {
-    static dispatch_once_t once;
-    static BOOL loaded = NO;
-    dispatch_once(&once, ^{
-        void *frontBoard = dlopen(
-            "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard",
-            RTLD_NOW | RTLD_GLOBAL);
-        void *frontBoardServices = dlopen(
-            "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices",
-            RTLD_NOW | RTLD_GLOBAL);
-        loaded = frontBoard != nullptr && frontBoardServices != nullptr;
-    });
-    return loaded;
-}
 
 static uint32_t CSContext(UIWindow *window) {
     SEL selector = NSSelectorFromString(@"_contextId");
@@ -83,7 +67,7 @@ static uint32_t CSContext(UIWindow *window) {
 
 - (BOOL)registerSide:(CoreSetCore17HostSide *)side {
     if (!NSThread.isMainThread || !side || !side.context ||
-        !std::isfinite(side.level) || !CSLoadCore17Frameworks()) return NO;
+        !std::isfinite(side.level)) return NO;
     Class controllerClass = NSClassFromString(@"SBSAccessibilityWindowHostingController");
     SEL registerSelector = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
     if (!controllerClass || ![controllerClass instancesRespondToSelector:registerSelector]) return NO;
@@ -140,8 +124,7 @@ static uint32_t CSContext(UIWindow *window) {
     draw.context = CSContext(drawWindow);
     draw.level = 999999.0;
     draw.associationKey = &CSDrawControllerKey;
-    if (!menu.context || !draw.context || menu.context == draw.context ||
-        menu.context == _primary.context || draw.context == _primary.context) {
+    if (!menu.context || !draw.context) {
         dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, generation); });
         return;
     }

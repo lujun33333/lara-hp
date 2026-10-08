@@ -57,7 +57,11 @@ for token in (
     "objc_getAssociatedObject(application, side.associationKey)",
 ):
     assert token in adapter, token
-for forbidden in ("CALayerHost", "RemoteCall", "remote_getClass", "doRemoteCall"):
+for forbidden in (
+    "CALayerHost", "RemoteCall", "remote_getClass", "doRemoteCall",
+    "CSLoadCore17Frameworks", "menu.context == draw.context",
+    "menu.context == _primary.context", "draw.context == _primary.context",
+):
     assert forbidden not in adapter, forbidden
 for token in (
     '"-Wl,-needed_framework,FrontBoard"',
