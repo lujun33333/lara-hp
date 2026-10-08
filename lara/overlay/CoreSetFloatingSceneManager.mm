@@ -98,7 +98,7 @@ static void CSSetRect(id target, NSString *name, CGRect value) {
     id parameters = CSMsg1(CSClassObject(@"FBSMutableSceneParameters"),
                            @"parametersForSpecification:", specification);
     id settings = CSMsg0(CSClassObject(@"UIMutableApplicationSceneSettings"), @"new");
-    id screen = UIScreen.mainScreen;
+    UIScreen *screen = UIScreen.mainScreen;
     id displayConfiguration = CSMsg0(screen, @"displayConfiguration");
     if (!parameters || !settings || !displayConfiguration) return NO;
     CSVoid1(settings, @"setDisplayConfiguration:", displayConfiguration);
