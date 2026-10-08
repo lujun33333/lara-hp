@@ -25,6 +25,13 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private var expectedImageBase: UInt64?
     private var expectedCapturedAt: Double?
     private var lastCaptureFailure: String?
+    private var captureFailureStartedAt: Double?
+    private var captureLaneClearedForFailure = false
+    private var awaitingReceipt = false
+    private var awaitingReceiptSince: Double?
+    private var activeSessionGeneration: UInt64?
+    private var activeProcessID: Int32?
+    private var activeImageBase: UInt64?
     private var expectedReadSemanticDiagnostic: String?
     private var lastSemanticLogAt: Double = 0
     private var lastSemanticLogRevision: UInt64?
@@ -34,6 +41,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
         session.diagnosticLabel = "player"
+        NSLog("Core-SET: player-loop contract=core17-continuous-retry-v1 interval=0.15 freshness=0.5")
         probe = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
@@ -102,13 +110,84 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         settings = request.desired
         if settings.grenadeWarning != true { _ = grenadeMotion.clear() }
         activeToken = request.token
+        activeSessionGeneration = session.generation
+        activeProcessID = session.processID
+        activeImageBase = session.imageBase
+        captureFailureStartedAt = nil
+        captureLaneClearedForFailure = false
+        awaitingReceipt = false
+        awaitingReceiptSince = nil
         pendingApply = (request.token, completion)
+        armCaptureLoop()
         capture()
+    }
+
+    private func armCaptureLoop() {
+        precondition(Thread.isMainThread)
+        guard !stopped, activeToken != nil, refresh == nil else { return }
+        refresh = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            self?.capture()
+        }
+    }
+
+    private var activeSessionMatches: Bool {
+        session.ready && session.generation == activeSessionGeneration &&
+            session.processID == activeProcessID && session.imageBase == activeImageBase
+    }
+
+    private func finishUnavailable(_ reason: String, token: CoreSetRequestToken) {
+        precondition(Thread.isMainThread)
+        refresh?.invalidate(); refresh = nil
+        awaitingReceipt = false
+        awaitingReceiptSince = nil
+        let pending = pendingApply
+        pendingApply = nil
+        clearStaleLane(token: token, reason: reason)
+        if let pending, pending.0 == token {
+            pending.1(token, .unavailable(reason: reason))
+        }
+        coordinator?.refreshPlayerAvailability()
+    }
+
+    private func retryCapture(_ reason: String, token: CoreSetRequestToken) {
+        precondition(Thread.isMainThread)
+        guard activeSessionMatches else {
+            finishUnavailable("player-active-session-changed: \(reason)", token: token)
+            return
+        }
+        let now = CACurrentMediaTime()
+        if lastCaptureFailure != reason {
+            lastCaptureFailure = reason
+            NSLog("Core-SET: target-read lane=player stage=capture ready=0 retrying=1 reason=%@", reason)
+        }
+        if captureFailureStartedAt == nil { captureFailureStartedAt = now }
+        if !captureLaneClearedForFailure,
+           now - (captureFailureStartedAt ?? now) >= 0.5 {
+            captureLaneClearedForFailure = true
+            clearStaleLane(token: token, reason: reason,
+                           recordInvalidation: false, preserveRefresh: true)
+        }
+        armCaptureLoop()
+        coordinator?.refreshPlayerAvailability()
     }
 
     private func capture() {
         guard !stopped, !inFlight, let token = activeToken,
               let canvas = coordinator?.playerCanvas else { return }
+        if awaitingReceipt {
+            guard let since = awaitingReceiptSince,
+                  CACurrentMediaTime() - since >= 0.5 else { return }
+            awaitingReceipt = false; awaitingReceiptSince = nil
+            expectedSnapshot = nil; expectedGeneration = nil
+            expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
+            expectedCapturedAt = nil
+            retryCapture("player-renderer-receipt-timeout", token: token)
+            return
+        }
+        guard activeSessionMatches else {
+            finishUnavailable("player-active-session-changed-before-capture", token: token)
+            return
+        }
         inFlight = true
         let expectedRevision = revision
         let playerBones = settings.player.bones == true
@@ -155,25 +234,19 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                       snapshot.processID == self.session.processID,
                       snapshot.imageBase == self.session.imageBase,
                       captureAge >= 0, captureAge <= 0.5 else {
-                    if self.lastCaptureFailure != failureReason {
-                        self.lastCaptureFailure = failureReason
-                        NSLog("Core-SET: target-read lane=player stage=capture ready=0 reason=%@", failureReason)
-                    }
-                    self.clearStaleLane(token: token, reason: failureReason)
-                    if let pending = self.pendingApply, pending.0 == token {
-                        self.pendingApply = nil
-                        pending.1(token, .unavailable(reason: "玩家快照未确认：\(failureReason)"))
-                    }
-                    self.coordinator?.refreshPlayerAvailability()
+                    self.retryCapture(failureReason, token: token)
                     return
                 }
                 self.lastCaptureFailure = nil
+                self.captureFailureStartedAt = nil
+                self.captureLaneClearedForFailure = false
                 if includeGrenadeWarning {
                     self.grenadeMotion.decorate(snapshot, canvasSize: canvas.size,
                                                  nativeScale: Double(UIScreen.main.nativeScale))
                 } else { _ = self.grenadeMotion.clear() }
                 let id = UUID(uuidString: snapshot.snapshotID.uuidString) ?? UUID()
                 guard let commands = self.render(snapshot, on: canvas.size) else {
+                    self.refresh?.invalidate(); self.refresh = nil
                     self.clearStaleLane(token: token)
                     if let pending = self.pendingApply, pending.0 == token {
                         self.pendingApply = nil
@@ -185,6 +258,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                     configRevision: expectedRevision, snapshotID: id, requestToken: token,
                     canvasSize: canvas.size, commands: commands)
                 guard self.coordinator?.submitLane(input) == true else {
+                    self.refresh?.invalidate(); self.refresh = nil
                     self.clearStaleLane(token: token)
                     if let pending = self.pendingApply, pending.0 == token {
                         self.pendingApply = nil
@@ -200,15 +274,17 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.expectedCapturedAt = snapshot.captureStartedMonotonicSeconds
                 self.expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
                     " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog rayGeometry=reference-top-native-scale headAnchor=known-requested-bone-or-root-plus90"
+                self.awaitingReceipt = true
+                self.awaitingReceiptSince = CACurrentMediaTime()
             }
         }
     }
 
     private func clearStaleLane(token: CoreSetRequestToken, reason: String = "player-frame-invalidated",
-                                recordInvalidation: Bool = true) {
+                                recordInvalidation: Bool = true, preserveRefresh: Bool = false) {
         _ = grenadeMotion.clear()
         guard let canvas = coordinator?.playerCanvas, revision < UInt64.max - 1 else { return }
-        refresh?.invalidate(); refresh = nil
+        if !preserveRefresh { refresh?.invalidate(); refresh = nil }
         revision += 1
         let id = UUID()
         if recordInvalidation && pendingApply == nil && pendingStop == nil && activeToken == token {
@@ -468,27 +544,29 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         if let pending = pendingApply, pending.0 == receipt.requestToken,
            receipt.configRevision == revision, receipt.snapshotID == expectedSnapshot,
            receipt.hostGeneration == expectedGeneration {
+            awaitingReceipt = false
+            awaitingReceiptSince = nil
             let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
                 session.processID == expectedProcessID && session.imageBase == expectedImageBase
             let fresh = expectedCapturedAt.map {
                 CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
             } ?? false
-            pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
+            expectedSnapshot = nil; expectedGeneration = nil
             expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
             expectedCapturedAt = nil
             guard identityMatches && fresh else {
                 let reason = identityMatches ? "snapshot-stale stage=receipt" : "player-receipt-identity-lost"
                 NSLog("Core-SET: target-read lane=player stage=receipt confirmed=0 reason=%@", reason)
-                clearStaleLane(token: pending.0, reason: reason, recordInvalidation: false)
-                pending.1(pending.0, .unavailable(reason: reason))
+                retryCapture(reason, token: pending.0)
                 return
             }
             if receipt.acceptedByLocalRenderer {
+                pendingApply = nil
                 logReadSemanticReceipt(receipt)
                 pending.1(pending.0, .applied(observed: settings))
-                refresh?.invalidate()
-                refresh = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in self?.capture() }
             } else {
+                pendingApply = nil
+                refresh?.invalidate(); refresh = nil
                 pending.1(pending.0, .failed(reason: "玩家帧未被本地渲染器消费"))
             }
             return
@@ -496,18 +574,25 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         if activeToken == receipt.requestToken,
            receipt.configRevision == revision, receipt.snapshotID == expectedSnapshot,
            receipt.hostGeneration == expectedGeneration {
+            awaitingReceipt = false
+            awaitingReceiptSince = nil
             let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
                 session.processID == expectedProcessID && session.imageBase == expectedImageBase
             let fresh = expectedCapturedAt.map {
                 CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
             } ?? false
-            if !receipt.acceptedByLocalRenderer || !identityMatches || !fresh {
+            if !identityMatches || !fresh {
+                expectedSnapshot = nil; expectedGeneration = nil
+                expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
+                expectedCapturedAt = nil
+                retryCapture(!identityMatches ? "player-receipt-identity-lost" :
+                    "snapshot-stale stage=receipt", token: receipt.requestToken)
+            } else if !receipt.acceptedByLocalRenderer {
                 clearStaleLane(token: receipt.requestToken,
-                    reason: !identityMatches ? "player-receipt-identity-lost" :
-                        (!fresh ? "snapshot-stale stage=receipt" : "player-renderer-rejected"))
+                    reason: "player-renderer-rejected")
             } else { logReadSemanticReceipt(receipt) }
         } else if activeToken == receipt.requestToken && availability != .ready {
-            clearStaleLane(token: receipt.requestToken, reason: "player-receipt-session-unavailable")
+            finishUnavailable("player-receipt-session-unavailable", token: receipt.requestToken)
         }
     }
 
@@ -552,6 +637,10 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         probe?.invalidate(); probe = nil
         refresh?.invalidate(); refresh = nil
         activeToken = nil; pendingApply = nil
+        awaitingReceipt = false
+        awaitingReceiptSince = nil
+        activeSessionGeneration = nil; activeProcessID = nil; activeImageBase = nil
+        captureFailureStartedAt = nil; captureLaneClearedForFailure = false
         expectedReadSemanticDiagnostic = nil
         let motionClean = grenadeMotion.clear()
         CoreSetWeaponImageCatalog.stop()

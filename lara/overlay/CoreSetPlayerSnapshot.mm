@@ -66,6 +66,11 @@ static bool CSActorArraySpanValid(uint64_t data, int32_t count) {
         data <= 0x8000000000ULL - (uint64_t)count * sizeof(uint64_t);
 }
 
+static bool CSUserPointerValid(uint64_t value) {
+    return value >= 0x100000000ULL && value <= 0x8000000000ULL - sizeof(uint64_t) &&
+        (value & (alignof(uint64_t) - 1)) == 0;
+}
+
 static CSActorArraySource CSReadCoreActorArray(CoreSetReadSession *session, uint64_t generation,
                                                 uint64_t level, uint64_t *container,
                                                 CSActorArrayState *array,
@@ -696,9 +701,32 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
          namePool < 0x100000000ULL || namePool > 0x8000000000ULL - 0x1404 ||
          !CSReadValue(session, generation, namePool + 0x1400, &nameCount) ||
          !nameCount || nameCount > 0xa00000)) collectGrenades = false;
+    CSLastCaptureDiagnostic = "root-world-netdriver";
+    uint64_t driver = 0, connection = 0, controller = 0, local = 0, manager = 0;
+    if (!CSReadValue(session, generation, world + 0xc0, &driver) ||
+        !CSUserPointerValid(driver)) return nil;
+    CSLastCaptureDiagnostic = "root-netdriver-serverconnection";
+    if (!CSReadValue(session, generation, driver + 0x88, &connection) ||
+        !CSUserPointerValid(connection)) return nil;
+    CSLastCaptureDiagnostic = "root-connection-playercontroller";
+    if (!CSReadValue(session, generation, connection + 0x30, &controller) ||
+        !CSUserPointerValid(controller)) return nil;
+    // Core v1.7 resolves PlayerCameraManager before its local character.
+    CSLastCaptureDiagnostic = "root-controller-camera-manager";
+    if (!CSReadValue(session, generation, controller + 0x680, &manager) ||
+        !CSUserPointerValid(manager)) return nil;
+    CSLastCaptureDiagnostic = "root-controller-local-character";
+    if (!CSReadValue(session, generation, controller + 0x3540, &local) ||
+        !CSUserPointerValid(local)) return nil;
+    CSLastCaptureDiagnostic = "local-team";
+    uint32_t localTeam = 0;
+    if (local > UINT64_MAX - 0xb7c ||
+        !CSReadValue(session, generation, local + 0xb78, &localTeam) ||
+        localTeam < 1 || localTeam > 100) return nil;
     CSLastCaptureDiagnostic = "root-level";
     uint64_t level = 0, cluster = 0;
-    if (!CSReadValue(session, generation, world + 0xb8, &level) || !level) return nil;
+    if (!CSReadValue(session, generation, world + 0xb8, &level) ||
+        !CSUserPointerValid(level)) return nil;
     CSLastCaptureDiagnostic = "root-actor-array-core17-primary-or-level-fallback";
     CSActorArrayState array = {};
     const char *actorArrayFailure = nullptr;
@@ -708,13 +736,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         CSLastCaptureDiagnostic = actorArrayFailure;
         return nil;
     }
-    CSLastCaptureDiagnostic = "root-controller-local-camera-manager";
-    uint64_t driver = 0, connection = 0, controller = 0, local = 0, manager = 0;
-    if (!CSReadValue(session, generation, world + 0xc0, &driver) || !driver ||
-        !CSReadValue(session, generation, driver + 0x88, &connection) || !connection ||
-        !CSReadValue(session, generation, connection + 0x30, &controller) || !controller ||
-        !CSReadValue(session, generation, controller + 0x3540, &local) || !local ||
-        !CSReadValue(session, generation, controller + 0x680, &manager) || !manager) return nil;
     CSLastCaptureDiagnostic = "camera-candidate";
     CSCamera camera = {0};
     bool cameraFound = false;
@@ -730,11 +751,6 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     bool hasLocalPosition = false;
     if (!CSPosition(session, generation, base, local, &localPosition, &hasLocalPosition) ||
         !hasLocalPosition) return nil;
-    CSLastCaptureDiagnostic = "local-team";
-    uint32_t localTeam = 0;
-    if (local > UINT64_MAX - 0xb7c ||
-        !CSReadValue(session, generation, local + 0xb78, &localTeam) ||
-        localTeam < 1 || localTeam > 100) return nil;
     CSLastCaptureDiagnostic = "battle-input-initial";
     uint8_t localADS = 0, localFiring = 0;
     float controlRotation[2] = {0};

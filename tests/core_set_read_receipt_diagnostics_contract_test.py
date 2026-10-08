@@ -126,9 +126,11 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertIn("captureStartedMonotonicSeconds", header)
         stages = (
             "request-validation", "identity-initial", "root-world-character",
-            "root-level", "root-actor-array-core17-primary-or-level-fallback",
-            "root-controller-local-camera-manager",
-            "camera-candidate", "local-position", "local-team", "actor-scan",
+            "root-world-netdriver", "root-netdriver-serverconnection",
+            "root-connection-playercontroller", "root-controller-camera-manager",
+            "root-controller-local-character", "local-team", "root-level",
+            "root-actor-array-core17-primary-or-level-fallback",
+            "camera-candidate", "local-position", "actor-scan",
             "stability-roots", "stability-actor-membership", "stability-player-actors",
             "stability-count-actors", "stability-grenades", "stability-bones",
             "stability-battle-inputs", "identity-final", "capture-budget-exceeded-final", "ready",
@@ -149,6 +151,46 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertLess(collector.index('CSLastCaptureDiagnostic = "request-validation"'),
                         collector.index('CSLastCaptureDiagnostic = "ready"'))
 
+    def test_player_matches_core_continuous_retry_and_exact_controller_hops(self) -> None:
+        player = self.consumers["Player"]
+        collector = read("lara/overlay/CoreSetPlayerSnapshot.mm")
+        apply = body(player, "func apply(")
+        self.assertLess(apply.index("armCaptureLoop()"), apply.index("capture()"))
+        self.assertIn("player-loop contract=core17-continuous-retry-v1", player)
+        loop = body(player, "private func armCaptureLoop()")
+        self.assertIn("withTimeInterval: 0.15, repeats: true", loop)
+        retry = body(player, "private func retryCapture(")
+        for gate in ("guard activeSessionMatches", "captureFailureStartedAt",
+                     ">= 0.5", "recordInvalidation: false", "preserveRefresh: true",
+                     "armCaptureLoop()"):
+            self.assertIn(gate, retry)
+        capture = body(player, "private func capture()")
+        for gate in ("if awaitingReceipt", "CACurrentMediaTime() - since >= 0.5",
+                     'retryCapture("player-renderer-receipt-timeout", token: token)',
+                     "self.awaitingReceiptSince = CACurrentMediaTime()"):
+            self.assertIn(gate, capture)
+        self.assertIn("self.retryCapture(failureReason, token: token)", capture)
+        failed_capture = capture[capture.index("guard let snapshot,"):capture.index("self.lastCaptureFailure = nil")]
+        self.assertNotIn("pendingApply = nil", failed_capture)
+        self.assertIn("self.awaitingReceipt = true", capture)
+        receipt = body(player, "func consumed(")
+        self.assertGreaterEqual(receipt.count("awaitingReceipt = false"), 2)
+        self.assertIn("retryCapture(reason, token: pending.0)", receipt)
+        shutdown = body(player, "func shutdownReadSession()")
+        for reset in ("refresh?.invalidate(); refresh = nil", "awaitingReceipt = false",
+                      "awaitingReceiptSince = nil", "activeSessionGeneration = nil",
+                      "captureFailureStartedAt = nil"):
+            self.assertIn(reset, shutdown)
+        ordered = [collector.index(f'CSLastCaptureDiagnostic = "{stage}"') for stage in (
+            "root-world-netdriver", "root-netdriver-serverconnection",
+            "root-connection-playercontroller", "root-controller-camera-manager",
+            "root-controller-local-character")]
+        self.assertEqual(ordered, sorted(ordered))
+        self.assertLess(collector.index("controller + 0x680, &manager"),
+                        collector.index("controller + 0x3540, &local"))
+        self.assertLess(collector.index('CSLastCaptureDiagnostic = "root-world-netdriver"'),
+                        collector.index('CSLastCaptureDiagnostic = "root-level"'))
+
     def test_periodic_failure_invalidates_only_after_exact_clear_receipt(self) -> None:
         for name, source in self.consumers.items():
             with self.subTest(consumer=name):
@@ -159,7 +201,10 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
                 receipt = body(source, "func consumed(")
                 self.assertIn("expectedCapturedAt.map", receipt)
                 self.assertIn("CACurrentMediaTime() - $0 <= 0.5", receipt)
-                self.assertIn("recordInvalidation: false", receipt)
+                if name == "Player":
+                    self.assertIn("recordInvalidation: false", body(source, "private func retryCapture("))
+                else:
+                    self.assertIn("recordInvalidation: false", receipt)
                 self.assertIn("snapshot-stale stage=receipt", receipt)
         radar = body(self.consumers["Radar"], "func consumed(")
         self.assertIn("guard invalidationLanes == ownedLanes else { return }", radar)

@@ -108,7 +108,9 @@ for name in ("Player", "Material", "Radar", "Adjustment", "AimDisplay", "FrameRa
     if "revision += 1" in entry:
         assert entry.index(".notApplied(reason:") < entry.index("revision += 1"), name
     if name in ("Player", "Material", "Radar", "Adjustment", "AimDisplay"):
-        assert ".unavailable(reason:" in body(consumer, "func consumed("), name
+        receipt_owner = body(consumer, "private func finishUnavailable(") if name == "Player" \
+            else body(consumer, "func consumed(")
+        assert ".unavailable(reason:" in receipt_owner, name
 fps = body((ROOT / "lara/views/app/CoreSetFrameRateConsumer.swift").read_text(encoding="utf-8"), "func apply(")
 assert fps.index(".notApplied(reason:") < fps.index("coordinator?.applyFrameRate(value)") < fps.index(".unavailable(reason:")
 
