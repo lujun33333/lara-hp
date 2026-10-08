@@ -1,6 +1,7 @@
 #import "CoreSetRemoteHostingAdapter.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <QuartzCore/QuartzCore.h>
 #include <cmath>
 
 static char CSPrimaryControllerKey;
@@ -8,9 +9,33 @@ static char CSMenuControllerKey;
 static char CSDrawControllerKey;
 
 static uint32_t CSContext(UIWindow *window) {
+    if (!window) return 0;
+    uint32_t context = 0;
     SEL selector = NSSelectorFromString(@"_contextId");
-    return window && [window respondsToSelector:selector]
-        ? ((uint32_t (*)(id, SEL))objc_msgSend)(window, selector) : 0;
+    if ([window respondsToSelector:selector]) {
+        @try {
+            NSMethodSignature *signature = [window methodSignatureForSelector:selector];
+            if (signature && signature.methodReturnLength == sizeof(context)) {
+                NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
+                invocation.target = window;
+                invocation.selector = selector;
+                [invocation invoke];
+                [invocation getReturnValue:&context];
+            }
+        } @catch (__unused NSException *exception) {
+            context = 0;
+        }
+        if (context) return context;
+    }
+    @try {
+        id value = [window.layer valueForKey:@"contextId"];
+        if ([value respondsToSelector:@selector(unsignedIntValue)]) {
+            context = [value unsignedIntValue];
+        }
+    } @catch (__unused NSException *exception) {
+        context = 0;
+    }
+    return context;
 }
 
 @interface CoreSetCore17HostSide : NSObject
@@ -66,17 +91,30 @@ static uint32_t CSContext(UIWindow *window) {
 }
 
 - (BOOL)registerSide:(CoreSetCore17HostSide *)side {
-    if (!NSThread.isMainThread || !side || !side.context ||
-        !std::isfinite(side.level)) return NO;
+    if (!NSThread.isMainThread || !side || !side.context || !std::isfinite(side.level)) {
+        NSLog(@"Core-SET: core17-sbs stage=preflight main=%d context=%u level=%.0f ready=0",
+              NSThread.isMainThread, side.context, side.level);
+        return NO;
+    }
     Class controllerClass = NSClassFromString(@"SBSAccessibilityWindowHostingController");
     SEL registerSelector = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
-    if (!controllerClass || ![controllerClass instancesRespondToSelector:registerSelector]) return NO;
+    if (!controllerClass || ![controllerClass instancesRespondToSelector:registerSelector]) {
+        NSLog(@"Core-SET: core17-sbs stage=class context=%u class=%d selector=%d ready=0",
+              side.context, controllerClass != Nil,
+              controllerClass && [controllerClass instancesRespondToSelector:registerSelector]);
+        return NO;
+    }
     id controller = [[controllerClass alloc] init];
-    if (!controller) return NO;
+    if (!controller) {
+        NSLog(@"Core-SET: core17-sbs stage=init context=%u ready=0", side.context);
+        return NO;
+    }
     @try {
         ((void (*)(id, SEL, uint32_t, double))objc_msgSend)(
             controller, registerSelector, side.context, side.level);
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
+        NSLog(@"Core-SET: core17-sbs stage=invoke context=%u exception=%@ ready=0",
+              side.context, exception.name);
         return NO;
     }
     UIApplication *application = UIApplication.sharedApplication;
@@ -85,10 +123,13 @@ static uint32_t CSContext(UIWindow *window) {
     if (objc_getAssociatedObject(application, side.associationKey) != controller) {
         objc_setAssociatedObject(application, side.associationKey, nil,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        NSLog(@"Core-SET: core17-sbs stage=association context=%u ready=0", side.context);
         return NO;
     }
     side.controller = controller;
     side.registered = YES;
+    NSLog(@"Core-SET: core17-sbs stage=registered context=%u level=%.0f ready=1",
+          side.context, side.level);
     return YES;
 }
 
@@ -116,6 +157,8 @@ static uint32_t CSContext(UIWindow *window) {
     }
     CoreSetCore17HostSide *menu = [CoreSetCore17HostSide new];
     CoreSetCore17HostSide *draw = [CoreSetCore17HostSide new];
+    [CATransaction flush];
+    _primary.context = CSContext(_primary.source);
     menu.source = menuWindow;
     menu.context = CSContext(menuWindow);
     menu.level = 1000000.0;
@@ -124,6 +167,8 @@ static uint32_t CSContext(UIWindow *window) {
     draw.context = CSContext(drawWindow);
     draw.level = 999999.0;
     draw.associationKey = &CSDrawControllerKey;
+    NSLog(@"Core-SET: core17-sbs stage=context-capture primary=%u menu=%u draw=%u",
+          _primary.context, menu.context, draw.context);
     if (!menu.context || !draw.context) {
         dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, generation); });
         return;

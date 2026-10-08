@@ -55,6 +55,12 @@ for token in (
     "primaryReady && menuReady && drawReady",
     "objc_setAssociatedObject(application, side.associationKey, controller",
     "objc_getAssociatedObject(application, side.associationKey)",
+    'NSSelectorFromString(@"_contextId")',
+    '[window.layer valueForKey:@"contextId"]',
+    "[value unsignedIntValue]",
+    "[CATransaction flush]",
+    "_primary.context = CSContext(_primary.source)",
+    "stage=context-capture primary=%u menu=%u draw=%u",
 ):
     assert token in adapter, token
 for forbidden in (
