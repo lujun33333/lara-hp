@@ -27,6 +27,7 @@
 #import "overlay/CoreSetPerformanceSampler.h"
 #import "overlay/CoreSetMetalRenderAdapter.h"
 #import "overlay/CoreSetRemoteHostingAdapter.h"
+#import "overlay/CoreSetFloatingSceneManager.h"
 #import "decrypt.h"
 #import "persistence.h"
 #import "ota.h"

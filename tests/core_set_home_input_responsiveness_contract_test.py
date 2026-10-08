@@ -52,8 +52,10 @@ class HomeInputResponsivenessContract(unittest.TestCase):
 
     def test_periodic_refresh_is_lightweight_and_input_safe(self):
         require_responsive_contract(self.coordinator, self.telemetry, self.menu)
-        self.assertIn('"main-lifecycle-expired"', self.host)
-        self.assertIn("kExpirationInterval", self.host)
+        self.assertIn("UITapGestureRecognizer", self.host)
+        self.assertIn("UIPanGestureRecognizer", self.host)
+        self.assertNotIn("IOHIDEventSystemClient", self.host)
+        self.assertNotIn("BKSHID", self.host)
 
     def test_negative_mutants_fail_contract(self):
         mutants = (

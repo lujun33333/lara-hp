@@ -92,7 +92,7 @@ class ReadDisplayContracts(unittest.TestCase):
 
     def test_warning_fallback_owner_selection_and_raw_reread_fail_closed(self) -> None:
         require_yaw_reread(self.collector)
-        self.assertIn("if (corePlayerProfile && wantedObserved)", self.collector)
+        self.assertIn("if (wantedObserved)", self.collector)
         for missing in ("actor.address + 0x190,",
                         "CSReadCorePlayerState(session, generation, actor.address",
                         "actor.address + 0x2758, &warningYawRaw"):
@@ -187,10 +187,9 @@ class ReadDisplayContracts(unittest.TestCase):
         helper = body(self.collector, "static bool CSReadCorePlayerState(")
         self.assertNotIn("CSClassTypeIsChildOf", helper)
         self.assertIn("health <= maximum * 1.5f", self.collector)
-        self.assertIn("fallback-semantic-unconfirmed localInActorArray=", self.collector)
-        self.assertIn("CSReadTargetFallbackPlayerState", self.collector)
+        self.assertNotIn("CSReadTargetFallbackPlayerState", self.collector)
         self.assertIn("actorArraySource == CSActorArraySource::levelFallback", self.collector)
-        self.assertIn("targetFallbackAccepted", self.collector)
+        self.assertNotIn("targetFallbackAccepted", self.collector)
         self.assertIn("localInActorArrayAfter", self.collector)
         self.assertIn("no-renderable-output coreAccepted=", self.collector)
 

@@ -1,24 +1,44 @@
 #import "CoreSetMetalRenderAdapter.h"
-#import <CoreImage/CoreImage.h>
 #import <MetalKit/MetalKit.h>
 #import <QuartzCore/QuartzCore.h>
+#include "../third_party/imgui/imgui.h"
+#include "../third_party/imgui/backends/imgui_impl_metal.h"
+#include <algorithm>
+#include <cfloat>
 #include <cmath>
+#include <initializer_list>
 
 static NSError *CSMetalError(NSInteger code, NSString *message) {
     return [NSError errorWithDomain:@"CoreSetMetalRender" code:code
         userInfo:@{NSLocalizedDescriptionKey: message}];
 }
 
+static ImU32 CSImColor(UIColor *color) {
+    CGFloat r = 1, g = 1, b = 1, a = 1;
+    if (![color getRed:&r green:&g blue:&b alpha:&a]) {
+        CGFloat white = 1;
+        [color getWhite:&white alpha:&a];
+        r = g = b = white;
+    }
+    return IM_COL32((int)std::lround(r * 255.0), (int)std::lround(g * 255.0),
+                    (int)std::lround(b * 255.0), (int)std::lround(a * 255.0));
+}
+
+static ImVec2 CSPoint(CGPoint point) { return ImVec2((float)point.x, (float)point.y); }
+static ImVec2 CSRectMin(CGRect rect) { return ImVec2((float)CGRectGetMinX(rect), (float)CGRectGetMinY(rect)); }
+static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect), (float)CGRectGetMaxY(rect)); }
+
 @interface CoreSetMetalRenderAdapter () <MTKViewDelegate>
 @end
 
 @implementation CoreSetMetalRenderAdapter {
     MTKView *_metalView;
-    UIView *_rasterView;
-    CoreSetCoreAnimationConsumer *_raster;
     id<MTLCommandQueue> _queue;
-    CIContext *_ciContext;
-    CGImageRef _lastImage;
+    MTKTextureLoader *_textureLoader;
+    NSMutableDictionary<NSString *, id<MTLTexture>> *_textures;
+    CoreSetRenderFrame *_frame;
+    ImGuiContext *_imgui;
+    ImFont *_font;
     BOOL _visible;
     BOOL _hasVisibleCommands;
     BOOL _lastDrawSucceeded;
@@ -28,8 +48,7 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
 
 - (CoreSetHUDBackend)backend { return CoreSetHUDBackendMetal; }
 - (BOOL)renderSurfaceReady {
-    return NSThread.isMainThread && _metalView != nil && _metalView.window != nil &&
-        _queue != nil && _ciContext != nil;
+    return NSThread.isMainThread && _metalView.window != nil && _queue != nil && _imgui != nullptr;
 }
 
 - (void)attachToView:(UIView *)view {
@@ -39,12 +58,28 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     if (!device) return;
     _queue = [device newCommandQueue];
-    _ciContext = [CIContext contextWithMTLDevice:device];
-    if (!_queue || !_ciContext) { _queue = nil; _ciContext = nil; return; }
+    _textureLoader = [[MTKTextureLoader alloc] initWithDevice:device];
+    _textures = [NSMutableDictionary dictionary];
+    if (!_queue || !_textureLoader) { _queue = nil; _textureLoader = nil; return; }
+
+    _imgui = ImGui::CreateContext();
+    if (!_imgui) return;
+    ImGui::SetCurrentContext(_imgui);
+    ImGuiIO &io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.LogFilename = nullptr;
+    NSString *fontPath = [NSBundle.mainBundle pathForResource:@"OPPOSans-H" ofType:@"ttf"];
+    if (fontPath.length)
+        _font = io.Fonts->AddFontFromFileTTF(fontPath.UTF8String, 20.0f, nullptr,
+                                             io.Fonts->GetGlyphRangesChineseFull());
+    if (!_font) _font = io.Fonts->AddFontDefault();
+    if (!_font || !ImGui_ImplMetal_Init(device)) { [self detach]; return; }
+
     _metalView = [[MTKView alloc] initWithFrame:view.bounds device:device];
     _metalView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _metalView.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
-    _metalView.framebufferOnly = NO;
+    _metalView.depthStencilPixelFormat = MTLPixelFormatInvalid;
+    _metalView.framebufferOnly = YES;
     _metalView.opaque = NO;
     _metalView.layer.opaque = NO;
     _metalView.clearColor = MTLClearColorMake(0, 0, 0, 0);
@@ -54,99 +89,189 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
     _requestedFPS = MIN(60, MAX(30, view.window.screen.maximumFramesPerSecond ?: 60));
     _metalView.preferredFramesPerSecond = _requestedFPS;
     [view addSubview:_metalView];
-    _rasterView = [[UIView alloc] initWithFrame:view.bounds];
-    _rasterView.opaque = NO;
-    _raster = [CoreSetCoreAnimationConsumer new];
-    [_raster attachToView:_rasterView];
     [self setVisible:NO];
 }
 
-- (BOOL)renderLastImage:(MTKView *)view {
-    if (!NSThread.isMainThread || !_visible || !_lastImage || !view.window || !view.currentDrawable || !_queue || !_ciContext)
-        return NO;
-    id<CAMetalDrawable> drawable = view.currentDrawable;
-    id<MTLCommandBuffer> buffer = [_queue commandBuffer];
-    if (!drawable || !buffer) return NO;
-    const CGSize size = view.drawableSize;
-    if (!(size.width > 0 && size.height > 0) ||
-        !std::isfinite(size.width) || !std::isfinite(size.height)) return NO;
-    CIImage *image = [CIImage imageWithCGImage:_lastImage];
-    if (!image) return NO;
-    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-    [_ciContext render:image toMTLTexture:drawable.texture commandBuffer:buffer
-                 bounds:CGRectMake(0, 0, size.width, size.height) colorSpace:space];
-    CGColorSpaceRelease(space);
-    // Apple's presentedTime is zero for an unpresented/dropped drawable.
-    // Completion time and preferredFramesPerSecond are not measurement inputs.
-    const uint64_t presentationEpoch = _presentationCadence.epoch();
-    __weak CoreSetMetalRenderAdapter *weakSelf = self;
-    [drawable addPresentedHandler:^(id<MTLDrawable> presentedDrawable) {
-        const CFTimeInterval presentedTime = presentedDrawable.presentedTime;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            CoreSetMetalRenderAdapter *owner = weakSelf;
-            if (!owner || !owner->_visible || !owner->_metalView.window || owner->_metalView.paused) return;
-            (void)owner->_presentationCadence.accept(presentationEpoch, presentedTime, CACurrentMediaTime());
-        });
-    }];
-    [buffer presentDrawable:drawable];
-    [buffer commit];
-    [buffer waitUntilCompleted];
-    const BOOL completed = buffer.status == MTLCommandBufferStatusCompleted && buffer.error == nil;
-    if (!completed) _presentationCadence.reset();
-    return completed;
+- (BOOL)validateFrame:(CoreSetRenderFrame *)frame {
+    const CGSize size = frame.canvasSize;
+    if (!frame || !std::isfinite(size.width) || !std::isfinite(size.height) ||
+        size.width <= 0 || size.height <= 0 || frame.commands.count > 8192) return NO;
+    for (CoreSetRenderCommand *command in frame.commands) {
+        const CGRect r = command.rect;
+        if (![command isKindOfClass:CoreSetRenderCommand.class] ||
+            command.kind < CoreSetRenderKindLine || command.kind > CoreSetRenderKindBackGlyph ||
+            !std::isfinite(r.origin.x) || !std::isfinite(r.origin.y) ||
+            !std::isfinite(r.size.width) || !std::isfinite(r.size.height) ||
+            r.size.width < 0 || r.size.height < 0 ||
+            !std::isfinite(command.endpoint.x) || !std::isfinite(command.endpoint.y) ||
+            !std::isfinite(command.lineWidth) || command.lineWidth < 0 || command.lineWidth > 1024 ||
+            !std::isfinite(command.fontSize) || command.fontSize <= 0 || command.fontSize > 512 ||
+            !command.color) return NO;
+        if (command.kind == CoreSetRenderKindText && command.text.length > 4096) return NO;
+        if (command.kind == CoreSetRenderKindImage && command.weaponID == 0 &&
+            ![command.localImageName isEqualToString:@"CoreSetLoading.png"]) return NO;
+        if (command.kind == CoreSetRenderKindBackGlyph &&
+            (command.glyphStyle < 0 || command.glyphStyle > 5 ||
+             !std::isfinite(command.glyphAngle))) return NO;
+    }
+    return YES;
+}
+
+- (id<MTLTexture>)textureForCommand:(CoreSetRenderCommand *)command {
+    NSString *key = command.weaponID ? [NSString stringWithFormat:@"weapon-%u", command.weaponID]
+                                     : command.localImageName;
+    id<MTLTexture> texture = _textures[key];
+    if (texture) return texture;
+    UIImage *image = command.weaponID ? [CoreSetWeaponImageCatalog imageForWeaponID:command.weaponID]
+                                      : [UIImage imageNamed:command.localImageName];
+    if (!image.CGImage) return nil;
+    NSError *error = nil;
+    texture = [_textureLoader newTextureWithCGImage:image.CGImage
+        options:@{MTKTextureLoaderOptionSRGB: @NO, MTKTextureLoaderOptionOrigin: MTKTextureLoaderOriginTopLeft}
+        error:&error];
+    if (texture && !error) _textures[key] = texture;
+    return texture;
+}
+
+- (void)addBackGlyph:(CoreSetRenderCommand *)command to:(ImDrawList *)draw {
+    CGRect rect = command.rect;
+    ImU32 color = CSImColor(command.color);
+    ImU32 black = IM_COL32(0, 0, 0, 255);
+    float outline = std::max(1.0f, (float)rect.size.width / 80.0f * 1.35f);
+    ImVec2 center((float)CGRectGetMidX(rect), (float)CGRectGetMidY(rect));
+    auto transform = [&](float x, float y) {
+        float px = (float)rect.origin.x + x * (float)rect.size.width;
+        float py = (float)CGRectGetMidY(rect) + y * (float)rect.size.height;
+        float dx = px - center.x, dy = py - center.y;
+        float c = std::cos((float)command.glyphAngle), s = std::sin((float)command.glyphAngle);
+        return ImVec2(center.x + dx * c - dy * s, center.y + dx * s + dy * c);
+    };
+    auto polygon = [&](std::initializer_list<ImVec2> source, ImU32 fill, bool border) {
+        ImVector<ImVec2> points;
+        for (const ImVec2 &p : source) points.push_back(transform(p.x, p.y));
+        if (border) draw->AddPolyline(points.Data, points.Size, black, ImDrawFlags_Closed, outline * 2.0f);
+        if (fill) draw->AddConvexPolyFilled(points.Data, points.Size, fill);
+    };
+    switch (command.glyphStyle) {
+        case 0: polygon({{0,0},{.42f,-.5f},{.42f,-.19f},{1,-.19f},{1,.19f},{.42f,.19f},{.42f,.5f}}, color, true); break;
+        case 1: polygon({{0,0},{.38f,-.5f},{.34f,-.26f},{1,-.26f},{.76f,0},{1,.26f},{.34f,.26f},{.38f,.5f}}, color, true); break;
+        case 2:
+            polygon({{0,0},{.48f,-.5f},{.48f,.5f}}, color, false);
+            polygon({{.48f,-.5f},{1,0},{.48f,.5f}}, color & 0x75FFFFFFu, false);
+            polygon({{0,0},{.48f,-.5f},{1,0},{.48f,.5f}}, 0, true);
+            break;
+        default:
+            polygon({{0,0},{.53f,-.22f},{.53f,.22f}}, color, true);
+            draw->AddCircle(transform(.68f, 0), std::max(1.0f, (float)rect.size.height * .14f), color, 18, outline);
+            break;
+    }
+}
+
+- (void)buildDrawListForFrame:(CoreSetRenderFrame *)frame {
+    ImDrawList *draw = ImGui::GetBackgroundDrawList();
+    for (CoreSetRenderCommand *command in frame.commands) {
+        const ImU32 color = CSImColor(command.color);
+        switch (command.kind) {
+            case CoreSetRenderKindLine:
+                draw->AddLine(CSRectMin(command.rect), CSPoint(command.endpoint), color,
+                              std::max(1.0f, (float)command.lineWidth));
+                break;
+            case CoreSetRenderKindRectangle:
+                if (command.filled) draw->AddRectFilled(CSRectMin(command.rect), CSRectMax(command.rect), color);
+                else draw->AddRect(CSRectMin(command.rect), CSRectMax(command.rect), color, 0, 0,
+                                   std::max(1.0f, (float)command.lineWidth));
+                break;
+            case CoreSetRenderKindEllipse: {
+                ImVec2 center((float)CGRectGetMidX(command.rect), (float)CGRectGetMidY(command.rect));
+                ImVec2 radius((float)command.rect.size.width * .5f, (float)command.rect.size.height * .5f);
+                if (command.filled) draw->AddEllipseFilled(center, radius, color);
+                else draw->AddEllipse(center, radius, color, 0, 0,
+                                      std::max(1.0f, (float)command.lineWidth));
+                break;
+            }
+            case CoreSetRenderKindText: {
+                const char *utf8 = command.text.UTF8String ?: "";
+                ImVec2 pos = CSRectMin(command.rect);
+                if (command.horizontallyCenteredText) {
+                    ImVec2 measured = _font->CalcTextSizeA((float)command.fontSize, FLT_MAX, 0, utf8);
+                    pos.x = (float)CGRectGetMidX(command.rect) - measured.x * .5f;
+                }
+                draw->AddText(_font, (float)command.fontSize, pos, color, utf8);
+                break;
+            }
+            case CoreSetRenderKindImage: {
+                id<MTLTexture> texture = [self textureForCommand:command];
+                if (texture) draw->AddImage(ImTextureRef((ImTextureID)(uintptr_t)(__bridge void *)texture),
+                                            CSRectMin(command.rect), CSRectMax(command.rect));
+                break;
+            }
+            case CoreSetRenderKindBackGlyph:
+                [self addBackGlyph:command to:draw];
+                break;
+        }
+    }
 }
 
 - (void)drawInMTKView:(MTKView *)view {
-    if (view != _metalView) return;
-    _lastDrawSucceeded = [self renderLastImage:view];
+    _lastDrawSucceeded = NO;
+    if (view != _metalView || !_visible || !_frame || !_queue || !_imgui ||
+        !view.window || !view.currentRenderPassDescriptor || !view.currentDrawable) return;
+    ImGui::SetCurrentContext(_imgui);
+    const CGSize canvas = _frame.canvasSize;
+    const CGSize drawable = view.drawableSize;
+    ImGuiIO &io = ImGui::GetIO();
+    io.DisplaySize = ImVec2((float)canvas.width, (float)canvas.height);
+    io.DisplayFramebufferScale = ImVec2((float)(drawable.width / canvas.width),
+                                        (float)(drawable.height / canvas.height));
+    io.DeltaTime = 1.0f / (float)MAX(1, _requestedFPS);
+    MTLRenderPassDescriptor *pass = view.currentRenderPassDescriptor;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+    ImGui_ImplMetal_NewFrame(pass);
+    ImGui::NewFrame();
+    [self buildDrawListForFrame:_frame];
+    ImGui::Render();
+    id<MTLCommandBuffer> buffer = [_queue commandBuffer];
+    id<MTLRenderCommandEncoder> encoder = [buffer renderCommandEncoderWithDescriptor:pass];
+    if (!buffer || !encoder) return;
+    ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), buffer, encoder);
+    [encoder endEncoding];
+    const uint64_t presentationEpoch = _presentationCadence.epoch();
+    __weak CoreSetMetalRenderAdapter *weakSelf = self;
+    [view.currentDrawable addPresentedHandler:^(id<MTLDrawable> drawableValue) {
+        CFTimeInterval presented = drawableValue.presentedTime;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            CoreSetMetalRenderAdapter *owner = weakSelf;
+            if (owner && owner->_visible && owner->_metalView.window)
+                (void)owner->_presentationCadence.accept(presentationEpoch, presented, CACurrentMediaTime());
+        });
+    }];
+    [buffer presentDrawable:view.currentDrawable];
+    [buffer commit];
+    _lastDrawSucceeded = YES;
 }
+
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
     (void)view; (void)size;
-    // Never stretch coordinates from an old drawable into a new geometry.
-    [self clear];
+    _presentationCadence.reset();
 }
 
 - (BOOL)consumeFrame:(CoreSetRenderFrame *)frame error:(NSError **)error {
-    if (!NSThread.isMainThread || !_visible || !_metalView || !_metalView.window ||
-        !_raster || !_queue || !_ciContext) {
-        if (error) *error = CSMetalError(1, @"Metal surface or drawable is unavailable");
+    if (!NSThread.isMainThread || !_visible || !_metalView.window || !_queue || !_imgui) {
+        if (error) *error = CSMetalError(1, @"ImGui Metal surface is unavailable");
         return NO;
     }
-    const CGSize drawable = _metalView.drawableSize;
-    if (drawable.width <= 0 || drawable.height <= 0 ||
-        !std::isfinite(drawable.width) || !std::isfinite(drawable.height) ||
-        drawable.width > 8192 || drawable.height > 8192) {
-        if (error) *error = CSMetalError(2, @"Invalid drawable dimensions");
+    if (![self validateFrame:frame]) {
+        if (error) *error = CSMetalError(2, @"Invalid render frame");
         return NO;
     }
-    _rasterView.frame = CGRectMake(0, 0, frame.canvasSize.width, frame.canvasSize.height);
-    NSError *rasterError = nil;
-    if (![_raster consumeFrame:frame error:&rasterError]) {
-        if (error) *error = rasterError ?: CSMetalError(3, @"Command rasterization failed");
-        return NO;
-    }
-    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
-    format.opaque = NO;
-    format.scale = 1;
-    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc]
-        initWithSize:drawable format:format];
-    UIImage *bitmap = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
-        CGContextRef cg = context.CGContext;
-        CGContextScaleCTM(cg, drawable.width / frame.canvasSize.width,
-                               drawable.height / frame.canvasSize.height);
-        [self->_rasterView.layer renderInContext:cg];
-    }];
-    if (!bitmap.CGImage) {
-        if (error) *error = CSMetalError(4, @"Bitmap rasterization failed");
-        return NO;
-    }
-    if (_lastImage) CGImageRelease(_lastImage);
-    _lastImage = CGImageRetain(bitmap.CGImage);
+    _frame = frame;
     _hasVisibleCommands = frame.commands.count > 0;
+    _metalView.paused = !_visible || !_hasVisibleCommands;
     _lastDrawSucceeded = NO;
     [_metalView draw];
-    _metalView.paused = !_visible || !_hasVisibleCommands;
-    if (!_lastDrawSucceeded && error) *error = CSMetalError(5, @"Metal command buffer completion was not confirmed");
+    if (!_lastDrawSucceeded && error) *error = CSMetalError(3, @"ImGui Metal submission failed");
     return _lastDrawSucceeded;
 }
 
@@ -154,23 +279,21 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
     if (_visible != (visible && _metalView != nil)) _presentationCadence.reset();
     _visible = visible && _metalView != nil;
     _metalView.hidden = !_visible;
-    // An empty compositor frame needs one explicit clear, not a permanent
-    // drawable loop. Non-empty local frames keep the configured scheduler.
     _metalView.paused = !_visible || !_hasVisibleCommands;
 }
 - (NSInteger)observedRenderFPS {
-    if (!NSThread.isMainThread || !_visible || !_metalView || !_metalView.window ||
-        _metalView.paused || _metalView.hidden || !_lastDrawSucceeded) return 0;
+    if (!NSThread.isMainThread || !_visible || !_metalView.window ||
+        _metalView.paused || !_lastDrawSucceeded) return 0;
     return _metalView.preferredFramesPerSecond;
 }
 - (CoreSetPresentationCadenceSample)observedPresentationCadence {
-    if (!NSThread.isMainThread || !_visible || !_metalView.window || _metalView.paused || _metalView.hidden)
+    if (!NSThread.isMainThread || !_visible || !_metalView.window || _metalView.paused)
         return CoreSetPresentationCadenceSample{};
     return _presentationCadence.observe(CACurrentMediaTime());
 }
 - (BOOL)setPreferredRenderFPS:(NSInteger)fps {
-    if (!NSThread.isMainThread || !_visible || !_metalView || !_metalView.window ||
-        fps < 30 || fps > 144 || fps > _metalView.window.screen.maximumFramesPerSecond) return NO;
+    if (!NSThread.isMainThread || !_visible || !_metalView.window || fps < 30 || fps > 144 ||
+        fps > _metalView.window.screen.maximumFramesPerSecond) return NO;
     if (_metalView.preferredFramesPerSecond != fps) _presentationCadence.reset();
     _metalView.preferredFramesPerSecond = fps;
     _requestedFPS = fps;
@@ -178,22 +301,28 @@ static NSError *CSMetalError(NSInteger code, NSString *message) {
 }
 - (void)clear {
     _presentationCadence.reset();
-    [_raster clear];
-    if (_lastImage) { CGImageRelease(_lastImage); _lastImage = nil; }
+    _frame = nil;
     _hasVisibleCommands = NO;
     _lastDrawSucceeded = NO;
     _metalView.paused = YES;
-    [_metalView setNeedsDisplay];
 }
 - (void)detach {
     [self clear];
-    _metalView.paused = YES;
     _metalView.delegate = nil;
     [_metalView removeFromSuperview];
     _metalView = nil;
-    [_raster detach]; _raster = nil; _rasterView = nil;
-    _queue = nil; _ciContext = nil;
-    _visible = NO; _hasVisibleCommands = NO; _requestedFPS = 0;
+    if (_imgui) {
+        ImGui::SetCurrentContext(_imgui);
+        ImGui_ImplMetal_Shutdown();
+        ImGui::DestroyContext(_imgui);
+        _imgui = nullptr;
+    }
+    _font = nullptr;
+    [_textures removeAllObjects];
+    _textures = nil;
+    _textureLoader = nil;
+    _queue = nil;
+    _visible = NO;
+    _requestedFPS = 0;
 }
-- (void)dealloc { if (_lastImage) CGImageRelease(_lastImage); }
 @end

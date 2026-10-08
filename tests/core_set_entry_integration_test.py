@@ -71,7 +71,7 @@ for implicit in ["views/app/CoreSetMenuViewController.swift", "views/app/Content
 need(project, "PBXFileSystemSynchronizedRootGroup", "QuartzCore.framework in Frameworks", 'SWIFT_OBJC_BRIDGING_HEADER = "lara/lara-Bridging-Header.h"')
 assert bridge.count('#import "overlay/CoreSetHUDHost.h"') == 1
 need(header, "NS_SWIFT_NAME(startLocal(in:menuController:))", "NS_SWIFT_NAME(startHosted(in:menuController:completion:))", "NS_SWIFT_NAME(applyLocalMenu(visible:colors:))")
-start_host = objc(host[host.index("@implementation CoreSetHUDHost {"):], "startPreparedInScene")
+start_host = objc(host[host.index("@implementation CoreSetHUDHost {"):], "startPreparedInMenuScene")
 assert start_host.index("_drawWindow.hidden = NO; _menuWindow.hidden = NO;") < start_host.index("[CATransaction flush];") < start_host.index("registerBothSurfacesAsync:menuWindow")
 
 
@@ -149,7 +149,8 @@ need(app, "private var coreSetRuntime: CoreSetRuntimeCoordinator?", "coreSetRunt
 need(swift(app, "sceneDidBecomeActive"), "coreSetRuntime?.activate()")
 for name in ["sceneWillResignActive", "sceneDidEnterBackground"]:
     need(swift(app, name), "coreSetRuntime?.deactivate()")
-need(swift(app, "sceneDidDisconnect"), "coreSetRuntime?.stop()", "coreSetRuntime = nil")
+main_scene_delegate = app.split("final class LaraSceneDelegate", 1)[1]
+need(swift(main_scene_delegate, "sceneDidDisconnect"), "coreSetRuntime?.stop()", "coreSetRuntime = nil")
 termination = swift(app, "applicationWillTerminate")
 need(termination, "CoreSetRuntimeCoordinator.stopAllForTermination {",
      "laramgr.shared.terminateRemoteCallSession", "while !finished { CFRunLoopRun() }",
@@ -165,7 +166,7 @@ for cache_contract in ("g_remote_selector_cache_key", "g_remote_class_cache_key"
                        "objc_setAssociatedObject(self, &g_remote_class_cache_key, nil"):
     assert cache_contract in remote_call, cache_contract
 need(swift(app, "application"), "CoreSetBackgroundAudio.shared.start()")
-need(swift(app, "scene"), "CoreSetBackgroundAudio.shared.start()")
+need(swift(main_scene_delegate, "scene"), "CoreSetBackgroundAudio.shared.start()")
 need(swift(coordinator, "stopAudioAfterSceneTeardownIfReady"),
      "Self.retained.values.allSatisfy", "!$0.stopReceiptsPending",
      "!$0.host.hostedCleanupInFlight", "CoreSetBackgroundAudio.shared.stop()")
@@ -229,22 +230,19 @@ need(stop_body, "[self invalidateFrames]", "_drawRegistered = NO; _menuRegistere
 assert stop_body.index("_drawWindow.hidden = YES; _menuWindow.hidden = YES;") < stop_body.index("[CATransaction flush];")
 assert stop_body.index("[CATransaction flush];") < stop_body.index("_drawWindow.rootViewController = nil; _menuWindow.rootViewController = nil;")
 assert stop_body.index("_drawWindow.rootViewController = nil; _menuWindow.rootViewController = nil;") < stop_body.index("if (!_drawCleanupNeeded) _drawWindow = nil;")
-need(start_host, "_drawWindow = [[CoreSetDrawWindow alloc] initWithWindowScene:scene]",
-     "_menuWindow = [[CoreSetMenuWindow alloc] initWithWindowScene:scene]", "[self invalidateFrames]")
+need(start_host, "_drawWindow = [[CoreSetDrawWindow alloc] initWithWindowScene:drawScene]",
+     "_menuWindow = [[CoreSetMenuWindow alloc] initWithWindowScene:menuScene]", "[self invalidateFrames]")
 assert start_host.index("[self invalidateFrames]") < start_host.index("_drawWindow = [[CoreSetDrawWindow alloc]")
 assert "ForegroundTouchCalibration" not in launch
 assert launch.index("axDeviceSupportStatus()") < launch.index("init_offsets()") < launch.index("offsets_init()") < launch.index("manager.run") < launch.index("prepareKernelOffsets")
 kernel_offsets = swift(coordinator, "prepareKernelOffsets")
-need(kernel_offsets, "fetchkcache()", "fetched && dlkcache()", "manager.hasOffsets = loaded", "prepareLocalHosting", ".seconds(180)")
-assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && dlkcache()") < kernel_offsets.index("manager.hasOffsets = loaded") < kernel_offsets.index("guard loaded else") < kernel_offsets.rindex("prepareLocalHosting")
-local = swift(coordinator, "prepareLocalHosting")
-need(local, "CoreSetLocalHostingAdapter()", "adapter.available", "installHostedWindows(adapter: adapter, localMode: true")
+need(kernel_offsets, "fetchkcache()", "fetched && dlkcache()", "manager.hasOffsets = loaded", "prepareSpringBoardHosting", ".seconds(180)")
+assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && dlkcache()") < kernel_offsets.index("manager.hasOffsets = loaded") < kernel_offsets.index("guard loaded else") < kernel_offsets.rindex("prepareSpringBoardHosting")
 remote = swift(coordinator, "rebuildHostedWindows")
-need(remote, "host.transition(toRemoteHostingAdapter: adapter)", "installHostedWindows(adapter: adapter, localMode: false")
-assert "stopHostedAsync" not in swift(coordinator, "fallbackToSpringBoardAfterLocalFailure")
-hosting = swift(coordinator, "installHostedWindows")
-need(hosting, "suspendActionConsumers", "host.attach(adapter)", "verifyHostedWindows")
-assert "host.stop()" not in hosting and "suspendMenuHostConsumer" not in hosting
+need(remote, "CoreSetFloatingSceneManager.shared().createScenes", "host.startHosted(menuScene: touchScene, drawScene: drawScene",
+     "CoreSetRemoteHostingAdapter(remoteCall: process, primaryWindow: primaryWindow)")
+for forbidden in ("CoreSetLocalHostingAdapter", "verifyHostedWindows", "confirmHostedReadbackAsync"):
+    assert forbidden not in coordinator
 action_stop = swift(menu, "suspendActionConsumers")
 need(action_stop, "stop(\\.aim)", "stop(\\.recoil)", "group.notify(queue: .main)")
 need(swift(menu, "resumeActionConsumers"), "featureState.aim.resume()", "featureState.recoil.resume()")
@@ -257,12 +255,8 @@ need(transition, "unregisterBothSurfacesAsync:menu drawWindow:draw", "host->_ada
      "registerBothSurfacesAsync:menu drawWindow:draw")
 assert transition.index("unregisterBothSurfacesAsync:") < transition.index("registerBothSurfacesAsync:")
 assert "alloc] initWithWindowScene" not in transition
-verify = swift(coordinator, "verifyHostedWindows")
-need(verify, "host.confirmHostedReadbackAsync", ".milliseconds(1200)",
-     "self.host.confirmHostedReadbackAsync", "guard observed else")
-assert verify.index("host.confirmHostedReadbackAsync") < verify.index("self.showHostedMenuAndOpenGame")
 need(swift(coordinator, "showHostedMenuAndOpenGame"),
-     "stage=menu-visible confirmed=%d panel=%d hosted=%d")
+     "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication")
 exit_hud = swift(coordinator, "exitHostedHUD")
 need(exit_hud, "returnToLocalPending = true", "if gameLaunchPending",
      "gameLaunchEpoch &+= 1", "gameLaunchPending = false",
@@ -281,16 +275,12 @@ need(swift(launcher, "launchApplication"),
      "error != CoreSetRuntimeCoordinator.userCancelledLaunchReason",
      "error != CoreSetRuntimeCoordinator.sceneEndedLaunchReason")
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
-need(remote_adapter, "kCoreSetRemoteDrawLevel = 10000009.0", "kCoreSetRemoteMenuLevel = 10000010.0",
-     "registerBothSurfacesAsync:", "createSide:menu level:kCoreSetRemoteMenuLevel",
-     "createSide:draw level:kCoreSetRemoteDrawLevel")
-assert "createSide:side level:window.windowLevel" not in remote_adapter
+need(remote_adapter, "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
+     "_primary.level = 999998.0", "menu.level = 1000000.0", "draw.level = 999999.0")
+assert "CALayerHost" not in remote_adapter
 open_game = swift(coordinator, "showHostedMenuAndOpenGame")
-need(open_game, "host.hostedRegistrationReceipt", "requestMenuVisibility(true)",
-     "guard confirmed, panelVisible, hosted",
-     "CoreSetGameTarget.openApplication", "self.host.confirmHostedReadbackAsync")
-assert open_game.count("gameLaunchCurrent(epoch)") >= 3, "late open/readback callbacks must not revive cancelled launch"
-assert open_game.index("host.hostedRegistrationReceipt") < open_game.index("CoreSetGameTarget.openApplication") < open_game.index("self.host.confirmHostedReadbackAsync")
+need(open_game, "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication")
+assert "confirmHostedReadbackAsync" not in open_game
 assert "CoreSetGameTarget.openApplication" not in swift(launcher, "launchApplication")
 need(swift(launcher, "launchApplication"), "coreSetRuntime.launchGame")
 print("PASS: D1 project/owner/host contracts and game launch gated by observed dual-window hosting; source only")

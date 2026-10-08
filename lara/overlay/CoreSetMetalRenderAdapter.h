@@ -2,9 +2,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-// Generic immutable-frame renderer. The existing application-neutral CA
-// primitives rasterize to an image; Metal presents that image to a drawable.
-// A successful consumeFrame means the command buffer completed locally, not
+// Core 1.7-compatible Dear ImGui 1.92.8 renderer backed directly by Metal.
+// A successful consumeFrame means the command buffer was submitted locally, not
 // that a cross-application surface or a device pixel was observed.
 @interface CoreSetMetalRenderAdapter : NSObject <CoreSetFrameConsumer>
 @end

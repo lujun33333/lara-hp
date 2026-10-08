@@ -41,7 +41,7 @@ class LocalObservationReceiptContract(unittest.TestCase):
         self.assertIn("palette.referenceColors", colors)
         self.assertNotIn("/ 255", colors)
         observe = body(self.host, "- (NSArray<UIColor *> *)observedFloatingColors")
-        for gate in ("self.floatingControlReady", "_floatingGradient.superlayer != _floating.layer", "_floatingGradient.colors"):
+        for gate in ("self.floatingControlReady", "_floating.tintColor"):
             self.assertIn(gate, observe)
 
     def test_palette_negative_generation_and_model_only_mutants(self):
@@ -67,10 +67,10 @@ class LocalObservationReceiptContract(unittest.TestCase):
         self.assertIn("persisted-palette-retained=1", stop)
 
     def test_actual_present_timestamps_not_requested_or_completed_time(self):
-        render = body(self.metal, "- (BOOL)renderLastImage:")
+        render = body(self.metal, "- (void)drawInMTKView:")
         self.assertIn("addPresentedHandler", render)
-        self.assertIn("presentedDrawable.presentedTime", render)
-        self.assertIn("accept(presentationEpoch, presentedTime, CACurrentMediaTime())", render)
+        self.assertIn("drawableValue.presentedTime", render)
+        self.assertIn("accept(presentationEpoch, presented, CACurrentMediaTime())", render)
         self.assertLess(render.index("addPresentedHandler"), render.index("[buffer presentDrawable:"))
         observation = body(self.metal, "- (CoreSetPresentationCadenceSample)observedPresentationCadence")
         self.assertNotIn("preferredFramesPerSecond", observation)

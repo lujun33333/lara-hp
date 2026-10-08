@@ -61,18 +61,11 @@ typedef struct CoreSetHUDStopResult {
 @property(atomic, readonly) uint64_t renderGeneration;
 @property(nonatomic, readonly) BOOL localSurfacesReady;
 @property(nonatomic, readonly) CGSize logicalCanvasSize;
-// Cached registration receipt: generation, source context and process identity
-// remain structurally valid. A separate async remote readback is mandatory
-// during launch and after openURL; external remote destruction is not observed
-// until such a readback or an explicit local invalidation.
+// Cached receipt from the Core 1.7 SBS registration call.
 @property(nonatomic, readonly) BOOL hostedRegistrationReceipt;
 // Registration only, not a physical-touch or UIKit action receipt.
 @property(nonatomic, readonly) BOOL hostedInputMonitorArmed;
-// Uses the next serialized background readback when the current receipt is
-// stale. Completion is on the main thread and tied to this host generation.
-- (void)confirmHostedReadbackAsync:(void (^)(BOOL observed))completion;
-// Lifecycle teardown waits for a serialized remote readback worker to leave
-// its process lock; this method itself never performs RemoteCall.
+// Compatibility boundary; Core 1.7 has no extra readback worker.
 - (void)whenHostedReadbackIdle:(dispatch_block_t)completion;
 // Cached local state only. Does not call the remote readback gate.
 - (NSString *)hostingDiagnosticSnapshot;
@@ -122,6 +115,10 @@ typedef struct CoreSetHUDStopResult {
 - (BOOL)startHostedInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
                 completion:(void (^)(BOOL observed))completion
     NS_SWIFT_NAME(startHosted(in:menuController:completion:));
+- (BOOL)startHostedInMenuScene:(UIWindowScene *)menuScene drawScene:(UIWindowScene *)drawScene
+                menuController:(UIViewController *)menuController
+                     completion:(void (^)(BOOL observed))completion
+    NS_SWIFT_NAME(startHosted(menuScene:drawScene:menuController:completion:));
 - (BOOL)applyLocalMenuVisible:(BOOL)visible colors:(NSArray<UIColor *> *)colors
     NS_SWIFT_NAME(applyLocalMenu(visible:colors:));
 - (BOOL)setMetalConsumer:(nullable id<CoreSetFrameConsumer>)consumer
@@ -131,15 +128,13 @@ typedef struct CoreSetHUDStopResult {
     NS_SWIFT_NAME(installLocalMetalConsumer(_:));
 - (void)setPanelVisible:(BOOL)visible;
 - (void)setApplicationActive:(BOOL)active;
-// A passive HID observer: it does not intercept or consume the game's touches.
-// Must be armed on the main thread after both SpringBoard surfaces are observed.
+// Core 1.7 uses UIKit interaction in the touchFloating scene; no HID replay.
 - (BOOL)armHostedInput;
 - (void)setFloatingColors:(NSArray<UIColor *> *)colors;
 // May be called from any thread. Frames are immutable; old generations and
 // non-increasing sequence numbers are discarded on the main thread.
 - (void)submitFrame:(CoreSetRenderFrame *)frame;
-// Core Animation's event-driven consumer is intentionally unavailable here.
-// A scheduled Metal adapter must return an actual scheduler readback.
+// The scheduled ImGui/Metal adapter must return an actual scheduler readback.
 - (NSInteger)observedRenderFPS;
 // Actual drawable present-time window; not the configured scheduler property.
 - (CoreSetPresentationCadenceSample)observedPresentationCadence;

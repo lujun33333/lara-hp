@@ -113,17 +113,17 @@ for result in ("applied", "notApplied:", "unavailable:", "failed:"):
     assert result in apply_menu
 
 host = read("lara/overlay/CoreSetHUDHost.mm")
-implementation = host[host.index("@implementation CoreSetHUDHost {"):]
-receive = body(implementation, "- (void)receiveHostedHIDEvent:")
+adapter = read("lara/overlay/CoreSetRemoteHostingAdapter.mm")
+scenes = read("lara/overlay/CoreSetFloatingSceneManager.mm")
+for forbidden in ("BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation"):
+    assert forbidden not in host
 for contract in (
-    "IOHIDEventGetChildren", "CFArrayGetCount", "digitizerChildren",
-    "ax-child-recover", "eventType=%u children=%ld",
+    "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
+    "_primary.level = 999998.0", "menu.level = 1000000.0", "draw.level = 999999.0",
 ):
-    assert contract in host if contract == "IOHIDEventGetChildren" else contract in receive
-monitor = body(implementation, "- (BOOL)startInputMonitor")
-assert monitor.index("if (registerBK)") < monitor.index("if (create && reg && schedule)")
-assert "preferred=BKSHID fallback=IOHID" in monitor
-assert "_inputArmed.store(true)" in monitor
+    assert contract in adapter, contract
+for contract in ("FBSceneManager", "-touchFloating", "-noTouchFloating"):
+    assert contract in scenes, contract
 
 build = read("scripts/build_ipa_pe.sh")
 for contract in (
@@ -134,12 +134,12 @@ for contract in (
 ):
     assert contract in build, contract
 
-# Negative controls: silently removing a target boundary or preferring the
-# observed-broken IOHID path must make this test logic reject the source.
-for missing in ("task-read-denied", "main-image-or-uuid-not-found", "ax-child-recover"):
-    combined = session + host
+# Negative controls: silently removing a target or host boundary must make this
+# test logic reject the source.
+for missing in ("task-read-denied", "main-image-or-uuid-not-found", "SBSAccessibilityWindowHostingController"):
+    combined = session + adapter
     assert missing in combined
     assert missing not in combined.replace(missing, "REMOVED", 1)
 
-print("PASS: target read stages, consumer labels, truthful manifest, BK-first and child-event diagnostics")
+print("PASS: target read stages, consumer labels, truthful manifest and Core 1.7 scene/SBS diagnostics")
 print("LIMIT: source contract only; requires a fresh device log for runtime closure")

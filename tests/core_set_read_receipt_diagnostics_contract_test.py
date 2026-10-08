@@ -154,7 +154,7 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertIn("final-reprojection-stale age=", collector)
         for counter in ("speedMatched=%lu", "enemyTeam=%lu", "stateBit20Clear=%lu",
                         "lifecyclePass=%lu", "healthPass=%lu", "rootValid=%lu",
-                        "meshValid=%lu", "coreAccepted=%lu", "targetFallbackAccepted=%lu", "producedPlayers=%lu",
+                        "meshValid=%lu", "coreAccepted=%lu", "producedPlayers=%lu",
                         "producedBots=%lu"):
             self.assertIn(counter, collector)
         self.assertNotIn("captureBudgetExceeded", collector)

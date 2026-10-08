@@ -13,9 +13,14 @@
 		C05E71000000000000000008 /* CoreSetRenderCommands.mm in Sources */ = {isa = PBXBuildFile; fileRef = C05E71000000000000000007; };
 		C05E72000000000000000002 /* CoreSetMetalRenderAdapter.mm in Sources */ = {isa = PBXBuildFile; fileRef = C05E72000000000000000001; };
 		C05E72000000000000000005 /* CoreSetRemoteHostingAdapter.mm in Sources */ = {isa = PBXBuildFile; fileRef = C05E72000000000000000004; };
+		C05E74000000000000000002 /* CoreSetFloatingSceneManager.mm in Sources */ = {isa = PBXBuildFile; fileRef = C05E74000000000000000001; };
+		C05E74000000000000000012 /* imgui.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C05E74000000000000000011; };
+		C05E74000000000000000014 /* imgui_draw.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C05E74000000000000000013; };
+		C05E74000000000000000016 /* imgui_tables.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C05E74000000000000000015; };
+		C05E74000000000000000018 /* imgui_widgets.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C05E74000000000000000017; };
+		C05E7400000000000000001A /* imgui_impl_metal.mm in Sources */ = {isa = PBXBuildFile; fileRef = C05E74000000000000000019; };
 		C05E72000000000000000008 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C05E72000000000000000007; };
 		C05E7200000000000000000A /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C05E72000000000000000009; };
-		C05E7200000000000000000C /* CoreImage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C05E7200000000000000000B; };
 		C05E7100000000000000000E /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C05E7100000000000000000D; };
 		C05E73000000000000000002 /* ImageIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C05E73000000000000000001; };
 		A1285EC00000000000000002 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1285EC00000000000000001 /* Security.framework */; };
@@ -52,9 +57,15 @@
 		C05E72000000000000000003 /* CoreSetMetalRenderAdapter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = CoreSetMetalRenderAdapter.h; path = lara/overlay/CoreSetMetalRenderAdapter.h; sourceTree = SOURCE_ROOT; };
 		C05E72000000000000000004 /* CoreSetRemoteHostingAdapter.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = CoreSetRemoteHostingAdapter.mm; path = lara/overlay/CoreSetRemoteHostingAdapter.mm; sourceTree = SOURCE_ROOT; };
 		C05E72000000000000000006 /* CoreSetRemoteHostingAdapter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = CoreSetRemoteHostingAdapter.h; path = lara/overlay/CoreSetRemoteHostingAdapter.h; sourceTree = SOURCE_ROOT; };
+		C05E74000000000000000001 /* CoreSetFloatingSceneManager.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = CoreSetFloatingSceneManager.mm; path = lara/overlay/CoreSetFloatingSceneManager.mm; sourceTree = SOURCE_ROOT; };
+		C05E74000000000000000003 /* CoreSetFloatingSceneManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = CoreSetFloatingSceneManager.h; path = lara/overlay/CoreSetFloatingSceneManager.h; sourceTree = SOURCE_ROOT; };
+		C05E74000000000000000011 /* imgui.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = imgui.cpp; path = lara/third_party/imgui/imgui.cpp; sourceTree = SOURCE_ROOT; };
+		C05E74000000000000000013 /* imgui_draw.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = imgui_draw.cpp; path = lara/third_party/imgui/imgui_draw.cpp; sourceTree = SOURCE_ROOT; };
+		C05E74000000000000000015 /* imgui_tables.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = imgui_tables.cpp; path = lara/third_party/imgui/imgui_tables.cpp; sourceTree = SOURCE_ROOT; };
+		C05E74000000000000000017 /* imgui_widgets.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = imgui_widgets.cpp; path = lara/third_party/imgui/imgui_widgets.cpp; sourceTree = SOURCE_ROOT; };
+		C05E74000000000000000019 /* imgui_impl_metal.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = imgui_impl_metal.mm; path = lara/third_party/imgui/backends/imgui_impl_metal.mm; sourceTree = SOURCE_ROOT; };
 		C05E72000000000000000007 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		C05E72000000000000000009 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
-		C05E7200000000000000000B /* CoreImage.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreImage.framework; path = System/Library/Frameworks/CoreImage.framework; sourceTree = SDKROOT; };
 		C05E7100000000000000000D /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		C05E73000000000000000001 /* ImageIO.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ImageIO.framework; path = System/Library/Frameworks/ImageIO.framework; sourceTree = SDKROOT; };
 		A1285EC00000000000000001 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
@@ -106,6 +117,9 @@
 				overlay/CoreSetMetalRenderAdapter.h,
 				overlay/CoreSetRemoteHostingAdapter.mm,
 				overlay/CoreSetRemoteHostingAdapter.h,
+				overlay/CoreSetFloatingSceneManager.mm,
+				overlay/CoreSetFloatingSceneManager.h,
+				third_party,
 				CoreSetAssets,
 				CoreSetLoading.png,
 				Info.plist,
@@ -145,7 +159,6 @@
 				C05E73000000000000000002 /* ImageIO.framework in Frameworks */,
 				C05E72000000000000000008 /* MetalKit.framework in Frameworks */,
 				C05E7200000000000000000A /* Metal.framework in Frameworks */,
-				C05E7200000000000000000C /* CoreImage.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -166,8 +179,23 @@
 				C05E72000000000000000003 /* CoreSetMetalRenderAdapter.h */,
 				C05E72000000000000000004 /* CoreSetRemoteHostingAdapter.mm */,
 				C05E72000000000000000006 /* CoreSetRemoteHostingAdapter.h */,
+				C05E74000000000000000001 /* CoreSetFloatingSceneManager.mm */,
+				C05E74000000000000000003 /* CoreSetFloatingSceneManager.h */,
+				C05E74000000000000000010 /* Dear ImGui 1.92.8 */,
 			);
 			name = CoreSetRuntime;
+			sourceTree = "<group>";
+		};
+		C05E74000000000000000010 /* Dear ImGui 1.92.8 */ = {
+			isa = PBXGroup;
+			children = (
+				C05E74000000000000000011 /* imgui.cpp */,
+				C05E74000000000000000013 /* imgui_draw.cpp */,
+				C05E74000000000000000015 /* imgui_tables.cpp */,
+				C05E74000000000000000017 /* imgui_widgets.cpp */,
+				C05E74000000000000000019 /* imgui_impl_metal.mm */,
+			);
+			name = "Dear ImGui 1.92.8";
 			sourceTree = "<group>";
 		};
 		15F023F42FBB9510004BD090 /* Dock */ = {
@@ -306,7 +334,6 @@
 				C05E7100000000000000000D /* QuartzCore.framework */,
 				C05E72000000000000000007 /* MetalKit.framework */,
 				C05E72000000000000000009 /* Metal.framework */,
-				C05E7200000000000000000B /* CoreImage.framework */,
 				CC6842DF2F8311C300B08EB0 /* libSystem.B.tbd */,
 			);
 			name = Frameworks;
@@ -401,6 +428,12 @@
 				C05E71000000000000000008 /* CoreSetRenderCommands.mm in Sources */,
 				C05E72000000000000000002 /* CoreSetMetalRenderAdapter.mm in Sources */,
 				C05E72000000000000000005 /* CoreSetRemoteHostingAdapter.mm in Sources */,
+				C05E74000000000000000002 /* CoreSetFloatingSceneManager.mm in Sources */,
+				C05E74000000000000000012 /* imgui.cpp in Sources */,
+				C05E74000000000000000014 /* imgui_draw.cpp in Sources */,
+				C05E74000000000000000016 /* imgui_tables.cpp in Sources */,
+				C05E74000000000000000018 /* imgui_widgets.cpp in Sources */,
+				C05E7400000000000000001A /* imgui_impl_metal.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -546,6 +579,8 @@
 					"$(inherited)",
 					"$(SRCROOT)/lara",
 					"$(SRCROOT)/lara/kexploit",
+					"$(SRCROOT)/lara/third_party/imgui",
+					"$(SRCROOT)/lara/third_party/imgui/backends",
 				);
 				INFOPLIST_FILE = lara/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
@@ -595,6 +630,8 @@
 					"$(inherited)",
 					"$(SRCROOT)/lara",
 					"$(SRCROOT)/lara/kexploit",
+					"$(SRCROOT)/lara/third_party/imgui",
+					"$(SRCROOT)/lara/third_party/imgui/backends",
 				);
 				INFOPLIST_FILE = lara/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
