@@ -51,6 +51,56 @@ template <typename T> static bool CSReadValue(CoreSetReadSession *session, uint6
     return address <= UINT64_MAX - sizeof(T) && CSRead(session, generation, address, value, sizeof(T));
 }
 
+struct CSActorArrayState {
+    uint64_t data = 0;
+    int32_t count = 0;
+    int32_t capacity = 0; // Core v1.7 does not read Max; mirror Num for bounded local loops.
+};
+
+enum class CSActorArraySource : uint8_t { unavailable = 0, primary = 1, levelFallback = 2 };
+
+static bool CSActorArraySpanValid(uint64_t data, int32_t count) {
+    return count > 0 && count < CSMaxActors &&
+        (data & (alignof(uint64_t) - 1)) == 0 && data >= 0x100000000ULL &&
+        data <= 0x8000000000ULL - (uint64_t)count * sizeof(uint64_t);
+}
+
+static CSActorArraySource CSReadCoreActorArray(CoreSetReadSession *session, uint64_t generation,
+                                                uint64_t level, uint64_t *container,
+                                                CSActorArrayState *array,
+                                                const char **failureDiagnostic) {
+    *container = 0;
+    *array = {};
+    *failureDiagnostic = "root-actor-array-core17-unavailable";
+    uint64_t primaryContainer = 0, data = 0;
+    int32_t count = 0;
+    if (CSReadValue(session, generation, level + 0xe0, &primaryContainer) &&
+        primaryContainer >= 0x100000000ULL &&
+        primaryContainer <= 0x8000000000ULL - 0x34 &&
+        (primaryContainer & (alignof(uint64_t) - 1)) == 0 &&
+        CSReadValue(session, generation, primaryContainer + 0x28, &data) &&
+        CSReadValue(session, generation, primaryContainer + 0x30, &count) &&
+        CSActorArraySpanValid(data, count)) {
+        *container = primaryContainer;
+        array->data = data; array->count = count; array->capacity = count;
+        return CSActorArraySource::primary;
+    }
+    data = 0; count = 0;
+    const bool fallbackDataRead = CSReadValue(session, generation, level + 0xa0, &data);
+    const bool fallbackCountRead = CSReadValue(session, generation, level + 0xa8, &count);
+    if (fallbackDataRead && fallbackCountRead && CSActorArraySpanValid(data, count)) {
+        array->data = data; array->count = count; array->capacity = count;
+        return CSActorArraySource::levelFallback;
+    }
+    if (!fallbackDataRead || !fallbackCountRead)
+        *failureDiagnostic = "root-actor-array-core17-fallback-read-failed";
+    else if (count <= 0 || count >= CSMaxActors)
+        *failureDiagnostic = "root-actor-array-core17-fallback-count-invalid";
+    else
+        *failureDiagnostic = "root-actor-array-core17-fallback-data-invalid";
+    return CSActorArraySource::unavailable;
+}
+
 static bool CSFinite(CSVector v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) &&
            std::fabs(v.x) < 1.0e9f && std::fabs(v.y) < 1.0e9f && std::fabs(v.z) < 1.0e9f;
@@ -634,14 +684,18 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
          namePool < 0x100000000ULL || namePool > 0x8000000000ULL - 0x1404 ||
          !CSReadValue(session, generation, namePool + 0x1400, &nameCount) ||
          !nameCount || nameCount > 0xa00000)) collectGrenades = false;
-    CSLastCaptureDiagnostic = "root-level-actor-array";
+    CSLastCaptureDiagnostic = "root-level";
     uint64_t level = 0, cluster = 0;
-    if (!CSReadValue(session, generation, world + 0xb8, &level) || !level ||
-        !CSReadValue(session, generation, level + 0xe0, &cluster) || !cluster) return nil;
-    struct { uint64_t data; int32_t count; int32_t capacity; } array = {0};
-    if (!CSRead(session, generation, cluster + 0x28, &array, sizeof(array)) ||
-        array.count < 0 || array.count > CSMaxActors || array.capacity < array.count ||
-        array.capacity > CSMaxActors || (array.count && !array.data)) return nil;
+    if (!CSReadValue(session, generation, world + 0xb8, &level) || !level) return nil;
+    CSLastCaptureDiagnostic = "root-actor-array-core17-primary-or-level-fallback";
+    CSActorArrayState array = {};
+    const char *actorArrayFailure = nullptr;
+    const CSActorArraySource actorArraySource =
+        CSReadCoreActorArray(session, generation, level, &cluster, &array, &actorArrayFailure);
+    if (actorArraySource == CSActorArraySource::unavailable) {
+        CSLastCaptureDiagnostic = actorArrayFailure;
+        return nil;
+    }
     CSLastCaptureDiagnostic = "root-controller-local-camera-manager";
     uint64_t driver = 0, connection = 0, controller = 0, local = 0, manager = 0;
     if (!CSReadValue(session, generation, world + 0xc0, &driver) || !driver ||
@@ -977,14 +1031,31 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     CSCamera cameraAfter = {0};
     CSVector localPositionAfter = {0};
     bool hasLocalPositionAfter = false;
-    decltype(array) arrayAfter = {0};
+    CSActorArrayState arrayAfter = {};
+    CSActorArraySource actorArraySourceAfter = CSActorArraySource::unavailable;
+    const char *actorArrayFailureAfter = nullptr;
     if (!CSReadValue(session, generation, base + CSWorldSlot, &worldAfter) || worldAfter != world ||
-        !CSReadValue(session, generation, world + 0xb8, &levelAfter) || levelAfter != level ||
-        !CSReadValue(session, generation, level + 0xe0, &clusterAfter) || clusterAfter != cluster ||
-        !CSRead(session, generation, cluster + 0x28, &arrayAfter, sizeof(arrayAfter)) ||
-        arrayAfter.data != array.data || arrayAfter.count < 0 || arrayAfter.count > CSMaxActors ||
-        arrayAfter.capacity < arrayAfter.count || arrayAfter.capacity > CSMaxActors ||
-        (arrayAfter.count && !arrayAfter.data) ||
+        !CSReadValue(session, generation, world + 0xb8, &levelAfter) || levelAfter != level) return nil;
+    actorArraySourceAfter = CSReadCoreActorArray(session, generation, levelAfter,
+                                                 &clusterAfter, &arrayAfter,
+                                                 &actorArrayFailureAfter);
+    if (actorArraySourceAfter == CSActorArraySource::unavailable) {
+        if (std::strcmp(actorArrayFailureAfter,
+                        "root-actor-array-core17-fallback-read-failed") == 0)
+            CSLastCaptureDiagnostic = "stability-actor-array-core17-fallback-read-failed";
+        else if (std::strcmp(actorArrayFailureAfter,
+                             "root-actor-array-core17-fallback-count-invalid") == 0)
+            CSLastCaptureDiagnostic = "stability-actor-array-core17-fallback-count-invalid";
+        else if (std::strcmp(actorArrayFailureAfter,
+                             "root-actor-array-core17-fallback-data-invalid") == 0)
+            CSLastCaptureDiagnostic = "stability-actor-array-core17-fallback-data-invalid";
+        else
+            CSLastCaptureDiagnostic = "stability-actor-array-core17-unavailable";
+        return nil;
+    }
+    if (actorArraySourceAfter != actorArraySource ||
+        (actorArraySource == CSActorArraySource::primary && clusterAfter != cluster) ||
+        arrayAfter.data != array.data ||
         !CSReadValue(session, generation, connection + 0x30, &controllerAfter) ||
         controllerAfter != controller || !session.ready || session.generation != generation ||
         !CSReadValue(session, generation, base + CSCharacterClassSlot, &classAfter) || classAfter != wanted ||
@@ -1308,7 +1379,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     snapshot.observedPlayerCount = observedPlayerCount;
     snapshot.observedBotCount = observedBotCount;
     snapshot.readSemanticDiagnostic = [NSString stringWithFormat:
-        @"candidateCounts=capture-pass displayFields=initial-sample-validated-at-end detailCounters=initial-observation marks=final-after-degradation actors=%d marks=%lu players=%lu bots=%lu zeroHealthLastBreath=%lu countScope=positive-health-or-last-breath-enemy-draw-range countParity=partial "
+        @"candidateCounts=capture-pass actorArraySource=%s displayFields=initial-sample-validated-at-end detailCounters=initial-observation marks=final-after-degradation actors=%d marks=%lu players=%lu bots=%lu zeroHealthLastBreath=%lu countScope=positive-health-or-last-breath-enemy-draw-range countParity=partial "
          "grenadeRequested=%d grenadeCandidates=%lu grenadePosition=%lu grenadeOnscreen=%lu "
          "grenadeClassKnown=%d gameStateClassKnown=%d grenadeTyped=%lu grenadeCountdowns=%lu grenadeLifecycleSuppressed=%lu grenadeActorWorldMismatch=%lu grenadeClockKnown=%d grenadeClockStatus=%u "
          "grenadeTimer=target-server-clock-clamped grenadeRadius=unproven grenadeAnimation=local-prediction-partial "
@@ -1318,6 +1389,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
          "boneHeadKnownProfile=%lu boneHeadProjected=%lu boneHeadUnknownProfile=%lu headScope=requested-bones-only headParity=partial "
          "networkFreshness=unproven captureStability=stable-identity-plus-bounded-dynamic-reread grenadeAnimationScope=local-position-history grenadeRadiusGap=no-verified-elite-blast-field "
          "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationLayout=local-subset informationGap=native-font-icons-and-anchors",
+        actorArraySource == CSActorArraySource::primary ? "core17-primary" : "core17-level-a0-a8-fallback",
         array.count, (unsigned long)marks.count, (unsigned long)observedPlayerCount,
         (unsigned long)observedBotCount, (unsigned long)observedZeroHealthLastBreath,
         includeGrenadeWarning, (unsigned long)grenadeCandidates,

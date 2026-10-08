@@ -129,6 +129,32 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertIn("collectGrenades = false", optional_roots)
         self.assertNotIn("return nil", optional_roots)
 
+    def test_actor_array_matches_core17_data_count_and_level_fallback(self) -> None:
+        helper = body(self.collector, "static CSActorArraySource CSReadCoreActorArray(")
+        for token in ("level + 0xe0", "primaryContainer + 0x28", "primaryContainer + 0x30",
+                      "level + 0xa0", "level + 0xa8", "CSActorArraySource::primary",
+                      "CSActorArraySource::levelFallback", "CSActorArraySpanValid"):
+            self.assertIn(token, helper)
+        self.assertNotIn("primaryContainer + 0x34", helper)
+        self.assertIn("array->capacity = count", helper)
+        self.assertLess(helper.index("primaryContainer + 0x28"), helper.index("level + 0xa0"))
+        span = body(self.collector, "static bool CSActorArraySpanValid(")
+        self.assertIn("count > 0 && count < CSMaxActors", span)
+        self.assertIn("data & (alignof(uint64_t) - 1)", span)
+        for diagnostic in ("root-actor-array-core17-fallback-read-failed",
+                           "root-actor-array-core17-fallback-count-invalid",
+                           "root-actor-array-core17-fallback-data-invalid",
+                           "stability-actor-array-core17-fallback-read-failed",
+                           "stability-actor-array-core17-fallback-count-invalid",
+                           "stability-actor-array-core17-fallback-data-invalid",
+                           "stability-actor-array-core17-unavailable"):
+            self.assertIn(diagnostic, self.collector)
+        self.assertIn("std::strcmp(actorArrayFailureAfter", self.collector)
+        for stable in ("actorArraySourceAfter != actorArraySource",
+                       "clusterAfter != cluster", "arrayAfter.data != array.data"):
+            self.assertIn(stable, self.collector)
+        self.assertIn("actorArraySource=%s", self.collector)
+
     def test_zero_health_extension_is_count_only_and_has_lifecycle_reread(self) -> None:
         for scoped in ("CoreSet::playerCountEligible(health, maximum, countStatus)",
                        "count.address + 0x3be0, &status", "type != count.type", "zeroHealthLastBreath=%lu",

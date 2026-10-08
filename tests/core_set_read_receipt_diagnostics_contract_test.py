@@ -126,7 +126,8 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertIn("captureStartedMonotonicSeconds", header)
         stages = (
             "request-validation", "identity-initial", "root-world-character",
-            "root-level-actor-array", "root-controller-local-camera-manager",
+            "root-level", "root-actor-array-core17-primary-or-level-fallback",
+            "root-controller-local-camera-manager",
             "camera-candidate", "local-position", "local-team", "actor-scan",
             "stability-roots", "stability-actor-membership", "stability-player-actors",
             "stability-count-actors", "stability-grenades", "stability-bones",
