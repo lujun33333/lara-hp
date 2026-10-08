@@ -3,6 +3,21 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@class CoreSetReadSession, CoreSetPlayerSnapshot;
+
+// Strictly read-only, non-atomic diagnostic observation. Complete means the
+// existing captured lease/identity/freshness stayed valid for these two reads,
+// never action/slot authority or a target-effect/stop restoration receipt.
+@interface CoreSetActionInputObservation : NSObject
+@property(nonatomic, readonly) BOOL complete;
+@property(nonatomic, readonly) uint64_t inputFingerprint;
+@property(nonatomic, readonly) uint64_t controlBeforeFingerprint;
+@property(nonatomic, readonly) uint64_t controlAfterFingerprint;
+@property(nonatomic, readonly) double completedMonotonicSeconds;
+@property(nonatomic, copy, readonly) NSString *reason;
++ (instancetype)capture:(CoreSetReadSession *)session snapshot:(CoreSetPlayerSnapshot *)snapshot;
+@end
+
 typedef NS_ENUM(uint8_t, CoreSetTargetWriteLane) {
     CoreSetTargetWriteLaneAim = 1, CoreSetTargetWriteLaneRecoil = 2
 };

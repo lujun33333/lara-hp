@@ -9,7 +9,7 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
     private let inputProbe = CoreSetActionReadOnlyProbe(lane: "recoil")
 
     init() {
-        NSLog("Core-SET: target-write lane=recoil stage=capability ready=0 reason=audited-writer-or-receipt-unavailable formula=unverified controllerSlots=static-typed axisUnitRoute=unverified lifecycleReceipt=unverified")
+        NSLog("Core-SET: target-write lane=recoil stage=capability ready=0 reason=audited-writer-or-receipt-unavailable localStateMachine=reference-c571c-valid-input callerMerge=unverified controllerSlots=static-typed axisUnitRoute=unverified lifecycleReceipt=unverified")
         inputProbe.requestIfDue()
     }
 
@@ -24,7 +24,7 @@ final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
                completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
         NSLog("Core-SET: target-write lane=recoil stage=request-denied committed=0 reason=audited-writer-or-receipt-unavailable request=%@", request.token.requestID.uuidString)
         inputProbe.requestIfDue()
-        NSLog("Core-SET: target-write lane=recoil stage=planner-boundary pointIDs=v17-131..136 postStateFlag=verticalEnabled-and-storedContinue rawFire=separate slotChoice=full-predecessor-required producerLease=unissued stopRestore=unverified committed=0")
+        NSLog("Core-SET: target-write lane=recoil stage=planner-boundary pointIDs=v17-131..136 postStateFlag=verticalEnabled-and-storedContinue rawFire=separate directMergeSlots=reference-closed upstreamRouteAuthority=unissued localStateMachine=reference-c571c-valid-input callerMerge=unverified producerLease=unissued stopRestore=unverified committed=0")
         completion(request.token, .notApplied(reason: "压枪公式未闭合，未执行目标写入"))
     }
 

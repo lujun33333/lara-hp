@@ -27,6 +27,9 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
     private var expectedImageBase: UInt64?
     private var expectedCapturedAt: Double?
     private var lastCaptureFailure: String?
+    private var expectedReadSemanticDiagnostic: String?
+    private var lastSemanticLogAt: Double = 0
+    private var lastSemanticLogRevision: UInt64?
     private var pendingInvalidation: (token: CoreSetRequestToken, snapshot: UUID,
         generation: UInt64, revision: UInt64, reason: String)?
 
@@ -101,6 +104,7 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
               let canvas = coordinator?.playerCanvas else { return }
         let expectedRevision = revision
         if settings.enabled != true && settings.metroArmor != true {
+            expectedReadSemanticDiagnostic = "materials=disabled metro=disabled commands=0"
             submit([], token: token, revision: expectedRevision, canvas: canvas,
                    snapshotID: UUID(), sessionGeneration: session.generation,
                    processID: session.processID, imageBase: session.imageBase,
@@ -121,7 +125,7 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
                 includeCrateLevel: includeCrateLevel, includeVehicleStatus: includeVehicleStatus,
                 includeMetroArmor: includeMetroArmor,
                 includeHideOpenedCrates: includeHideOpenedCrates)
-            let capturedAt = CACurrentMediaTime()
+            let capturedAt = snapshot?.captureCompletedMonotonicSeconds ?? CACurrentMediaTime()
             let captureFailure = self.session.readFailureSequence != failureSequence
                 ? self.session.lastReadDiagnostic
                 : "snapshot-validation-or-identity-failed transport-errors=0"
@@ -163,6 +167,8 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
                     return
                 }
                 let id = UUID(uuidString: snapshot.snapshotID.uuidString) ?? UUID()
+                self.expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
+                    " commands=\(commands.count) materialDistance=truncate-mi vehiclePercent=round metroFont=14-independent layout=local-subset"
                 self.submit(commands, token: token, revision: expectedRevision, canvas: canvas,
                     snapshotID: id, sessionGeneration: snapshot.sessionGeneration,
                     processID: snapshot.processID, imageBase: snapshot.imageBase,
@@ -319,6 +325,7 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
                 return
             }
             if receipt.acceptedByLocalRenderer {
+                logReadSemanticReceipt(receipt)
                 pending.1(pending.0, .applied(observed: settings))
                 refresh?.invalidate(); refresh = nil
                 if settings.enabled == true || settings.metroArmor == true {
@@ -341,10 +348,20 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
                 clearStaleLane(token: receipt.requestToken,
                     reason: !identityMatches ? "material-receipt-identity-lost" :
                         (!fresh ? "snapshot-stale stage=receipt" : "material-renderer-rejected"))
-            }
+            } else { logReadSemanticReceipt(receipt) }
         } else if activeToken == receipt.requestToken && availability != .ready {
             clearStaleLane(token: receipt.requestToken, reason: "material-receipt-session-unavailable")
         }
+    }
+
+    private func logReadSemanticReceipt(_ receipt: CoreSetLocalFrameReceipt) {
+        guard let diagnostic = expectedReadSemanticDiagnostic else { return }
+        let now = CACurrentMediaTime()
+        guard lastSemanticLogRevision != receipt.configRevision || now - lastSemanticLogAt >= 30 else { return }
+        lastSemanticLogRevision = receipt.configRevision; lastSemanticLogAt = now
+        NSLog("Core-SET: read-semantic lane=materials stage=receipt confirmed=1 evidence=local-renderer-frame parity=partial session=%llu pid=%d host=%llu revision=%llu snapshot=%@ scope=%@",
+              session.generation, session.processID, receipt.hostGeneration, receipt.configRevision,
+              receipt.snapshotID.uuidString, diagnostic)
     }
 
     func stop(_ token: CoreSetRequestToken,
@@ -374,6 +391,7 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
         probe?.invalidate(); probe = nil
         refresh?.invalidate(); refresh = nil
         activeToken = nil; pendingApply = nil
+        expectedReadSemanticDiagnostic = nil
         let cleanup = worker.sync { session.disconnect() }
         return cleanup.taskPortReleased && cleanup.generationAdvanced
     }

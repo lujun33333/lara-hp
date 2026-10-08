@@ -22,7 +22,7 @@ enum CoreSetHomeProbePoint: Int, CaseIterable {
         case .kernelAction: return "4f00 gates; submitted task versus completed result; task generation; error/cancel/cleanup result"
         case .informationAction: return "538c host gate; info status 1/2/3; target identity; completed/failed result and cleanup"
         case .pageProgress: return "2fd1c acquire snapshot; executing/cancel/phase; UInt64 completed/total pages; request/generation/sequence"
-        case .firmwareProgress: return "QXA107 qx307 snapshot; stage/inFlight/ready/errorCode; downloaded/total UInt64 bytes; generation/cancel result"
+        case .firmwareProgress: return "QXA107 qm571 call ff24 -> bfc0; progress callbacks cac0/cbd4/d6dc; qm543 -> qx307 stage/inFlight/ready/errorCode; downloaded/total UInt64 bytes; native generation raw bits including sentinel; cancel generation+1 and stopped/error result; URL/path/client presence or digest only"
         }
     }
 }
@@ -92,6 +92,17 @@ final class CoreSetHomeTelemetrySource {
         if let previous = probeEvents[event.point], previous.producerEpoch == event.producerEpoch,
            previous.requestID == event.requestID {
             guard event.sequence > previous.sequence, event.phase.canFollow(previous.phase) else { return rejected("stale-sequence-or-invalid-transition") }
+            if let old = previous.nativeGeneration, let new = event.nativeGeneration, old != new {
+                // Native QXA107.cancel explicitly increments generation. This
+                // diagnostic exception cannot promote action/progress proof.
+                let cancelledGenerationStep = event.point == .firmwareProgress &&
+                    [.cancelled, .stopping, .stopped].contains(event.phase) &&
+                    old < UInt64.max && new == old + 1
+                guard cancelledGenerationStep else { return rejected("native-generation-changed-within-request") }
+            }
+            if let old = previous.requestedOption, let new = event.requestedOption, old != new {
+                return rejected("requested-option-changed-within-request")
+            }
             if let old = previous.completedCount, let new = event.completedCount, new < old { return rejected("count-regressed") }
             if let old = previous.totalCount, let new = event.totalCount, new != old { return rejected("denominator-changed") }
         } else {

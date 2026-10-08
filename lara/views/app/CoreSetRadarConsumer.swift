@@ -25,6 +25,9 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
     private var expectedImageBase: UInt64?
     private var expectedCapturedAt: Double?
     private var lastCaptureFailure: String?
+    private var expectedReadSemanticDiagnostic: String?
+    private var lastSemanticLogAt: Double = 0
+    private var lastSemanticLogRevision: UInt64?
     private var pendingInvalidation: (token: CoreSetRequestToken, snapshot: UUID,
         generation: UInt64, revision: UInt64, reason: String)?
     private var invalidationLanes: Set<CoreSetRenderLane> = []
@@ -100,6 +103,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
               let canvas = coordinator?.playerCanvas else { return }
         let expectedRevision = revision
         if settings.enabled != true && settings.warningEnabled != true {
+            expectedReadSemanticDiagnostic = "radar=disabled warning=disabled commands=0"
             submit([], warning: [], token: token, revision: expectedRevision, canvas: canvas,
                    snapshotID: UUID(), sessionGeneration: session.generation,
                    processID: session.processID, imageBase: session.imageBase,
@@ -114,8 +118,8 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
             let snapshot = CoreSetPlayerCollector.capture(self.session, canvasSize: canvas.size,
                 playerBones: false, botBones: false, boneDistanceLimit: 0,
                 includeOffscreen: false, includeRadar: true, includeBattleInputs: false,
-                playerWeaponText: false, botWeaponText: false, includeGrenadeWarning: false,
-                includeCounts: false, playerInformation: false, botInformation: false,
+                playerWeaponText: includeWarningYaw, botWeaponText: includeWarningYaw, includeGrenadeWarning: false,
+                includeCounts: false, playerInformation: includeWarningYaw, botInformation: includeWarningYaw,
                 includeWarningYaw: includeWarningYaw)
             let captureFailure = self.session.readFailureSequence != failureSequence
                 ? self.session.lastReadDiagnostic
@@ -159,6 +163,8 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                     return
                 }
                 let id = UUID(uuidString: snapshot.snapshotID.uuidString) ?? UUID()
+                self.expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
+                    " radarCommands=\(commands.count) warningCommands=\(warning.count) warningText=name-weapon-rounded-m warningLayout=local-subset yawFreshness=capture-stable-only"
                 self.submit(commands, warning: warning, token: token,
                     revision: expectedRevision, canvas: canvas,
                     snapshotID: id, sessionGeneration: snapshot.sessionGeneration,
@@ -185,7 +191,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
             }
             return
         }
-        if pendingApply?.0 == token { confirmedLanes.removeAll() }
+        confirmedLanes.removeAll() // Each frame requires both exact lane receipts.
         expectedSnapshot = snapshotID
         expectedGeneration = canvas.generation
         expectedSessionGeneration = sessionGeneration
@@ -279,17 +285,18 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                   mark.distanceUnitsDividedBy100 >= 0,
                   mark.distanceUnitsDividedBy100 <= Double(range) else { return false }
             return CoreSetWarningAngleMatches(mark.radarCameraDelta, yaw)
-        }.sorted { $0.distanceUnitsDividedBy100 < $1.distanceUnitsDividedBy100 }
+        } // Core's warning vector preserves actor traversal order, not nearest-first order.
         var result: [CoreSetRenderCommand] = []
         for mark in hits.prefix(32) {
             let y = CGFloat(12 + result.count * (textSize + 4))
             let height = CGFloat(textSize + 4)
             if y + height > size.height { break }
-            let meters = Int(mark.distanceUnitsDividedBy100.rounded(.toNearestOrAwayFromZero))
+            guard let text = CoreSetReferenceWarningText(mark.playerName, mark.bot, mark.weaponName,
+                                                        mark.weaponID, mark.distanceUnitsDividedBy100) else { return nil }
             result.append(CoreSetRenderCommand(kind: .text,
                 rect: CGRect(x: 12, y: y, width: max(0, size.width - 24), height: height),
                 endpoint: .zero, color: .systemRed, lineWidth: 0, filled: false,
-                text: "被瞄预警 \(meters)m",
+                text: text,
                 fontSize: CGFloat(textSize)))
         }
         return result
@@ -357,6 +364,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
             }
             confirmedLanes.insert(receipt.lane)
             if confirmedLanes == ownedLanes {
+                logReadSemanticReceipt(receipt)
                 pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
                 confirmedLanes.removeAll()
                 expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
@@ -381,10 +389,23 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                 clearStaleLanes(token: receipt.requestToken,
                     reason: !identityMatches ? "radar-receipt-identity-lost" :
                         (!fresh ? "snapshot-stale stage=receipt" : "radar-renderer-rejected"))
+            } else {
+                confirmedLanes.insert(receipt.lane)
+                if confirmedLanes == ownedLanes { logReadSemanticReceipt(receipt) }
             }
         } else if activeToken == receipt.requestToken && availability != .ready {
             clearStaleLanes(token: receipt.requestToken, reason: "radar-receipt-session-unavailable")
         }
+    }
+
+    private func logReadSemanticReceipt(_ receipt: CoreSetLocalFrameReceipt) {
+        guard let diagnostic = expectedReadSemanticDiagnostic else { return }
+        let now = CACurrentMediaTime()
+        guard lastSemanticLogRevision != receipt.configRevision || now - lastSemanticLogAt >= 30 else { return }
+        lastSemanticLogRevision = receipt.configRevision; lastSemanticLogAt = now
+        NSLog("Core-SET: read-semantic lane=radar-warning stage=receipt confirmed=1 evidence=local-renderer-frame parity=partial session=%llu pid=%d host=%llu revision=%llu snapshot=%@ scope=%@",
+              session.generation, session.processID, receipt.hostGeneration, receipt.configRevision,
+              receipt.snapshotID.uuidString, diagnostic)
     }
 
     func stop(_ token: CoreSetRequestToken,
@@ -419,6 +440,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
         probe?.invalidate(); probe = nil
         refresh?.invalidate(); refresh = nil
         activeToken = nil; pendingApply = nil
+        expectedReadSemanticDiagnostic = nil
         let cleanup = worker.sync { session.disconnect() }
         return cleanup.taskPortReleased && cleanup.generationAdvanced
     }

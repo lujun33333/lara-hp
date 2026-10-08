@@ -27,6 +27,7 @@ ROOTS = {
     "pages_worker": 0x1000336B8, "pages_control": 0x100030124,
     "pages_reset": 0x10002F9F8, "firmware_shared": 0x100009DA8,
     "firmware_download": 0x10000BFC0, "firmware_cancel": 0x100010FCC,
+    "firmware_workflow_block": 0x10000F8F0,
     "configuration_get": 0x1000122A4, "configuration_set": 0x100012E34,
 }
 PROOF_SITES = [0x100004278, 0x100004284, 0x1000042C0, 0x1000042D0,
@@ -35,7 +36,10 @@ PROOF_SITES = [0x100004278, 0x100004284, 0x1000042C0, 0x1000042D0,
                0x100005474, 0x10000568C, 0x1000056C0, 0x1000D3EC4,
                0x1000D3EF4, 0x1000D3F24, 0x1000D3F28,
                0x1000111B8, 0x1000111C8, 0x1000337B4, 0x1000337C0,
-               0x100033BE8, 0x100033C28, 0x1000124C8, 0x100012548]
+               0x100033BE8, 0x100033C28, 0x1000124C8, 0x100012548,
+               0x10000FF00, 0x10000FF08, 0x10000FF18, 0x10000FF24,
+               0x10000D45C, 0x10000D468, 0x10000CAB0, 0x10000CBD0,
+               0x10000D6CC, 0x10000D6D4, 0x10000A1A4, 0x10000A1BC]
 PAGES = {0x100C20280, 0x100C20281, 0x100C20284, 0x100C20288,
          0x100C20290, 0x100C20298, 0x100C202A0}
 CONFIG = {0x100C5839C, 0x100C5829F, 0x100C583A0}
@@ -169,6 +173,10 @@ def probe(core: CoreImage) -> dict:
             "firmware_class_reference": {"slot": "0x100bd5488", "class": class_name, "class_address": hex(class_reference)},
             "selector_stubs": [selector_stub(core, address) for address in
                                (0x10072CE60, 0x10072CDA0, 0x100729E80, 0x10072F780, 0x10072BA80, 0x1007324E0)],
+            "provider_selector_edges": [selector_stub(core, address) | {
+                "direct_call_sites": [core.proof_window(site, 4) for site in core.callers.get(address, [])],
+                "limit": "selector-bound direct callsite; receiver dispatch/runtime callback ownership still requires observation"}
+                for address in (0x10072C640, 0x10072C4A0, 0x10072C2C0)],
             "proof_windows": [core.proof_window(site) for site in PROOF_SITES],
             "progress_sources": {
                 "v17-009": {"path": ["4010", "4e2e4", "2fd1c"], "phase_global": "0x100c20284",
@@ -177,6 +185,11 @@ def probe(core: CoreImage) -> dict:
                 "v17-010": {"path": ["4010", "112d0", "+[QXA107 qx327]", "-[QXA107 qx307:]"],
                             "snapshot_size": 0x170, "counter_offsets": [0x10, 0x18], "unit": "bytes",
                             "update": "qm543 rejects a supplied generation unequal to current, except explicit -1 sentinel",
+                            "download_entry": "-[QXA107 qm571:fromURL:productType:buildVersion:boardConfig:client:generation:progress:error:] at0x10000bfc0",
+                            "download_callsite": "0x10000ff24 in authenticated-prologue candidate0x10000f8f0; call through selector stub0x10072c640",
+                            "callback_sites": ["0x10000cac0", "0x10000cbd4", "0x10000d6dc"],
+                            "total_update": "d458 obtains generation; d460 compares supplied generation; only equal branch d470 setOtaTotalBytes",
+                            "next_capture": "record request/epoch/sequence plus native generation raw bits; path/URL/product/build/board/client as presence or digest only; callback transferred byte count; qm543 stage/inFlight/ready/error and snapshot totalBytes; task return is not completed",
                             "limit": "current DarkSword or fetchkcache local copy is not this producer"}},
             "current_insertion_interface": "CoreSetRuntimeCoordinator.recordHomeProducerProbeEvent; diagnostics only, never FeatureChannel apply or UI progress"}
 

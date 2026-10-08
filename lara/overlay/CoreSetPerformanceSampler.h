@@ -7,14 +7,18 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) int32_t processID;
 @property(nonatomic, strong, readonly) NSDate *observedAt;
 @property(nonatomic, readonly) BOOL cpuValid;
-@property(nonatomic, readonly) BOOL memoryValid;
+@property(nonatomic, readonly) BOOL footprintValid;
+@property(nonatomic, readonly) BOOL peakValid;
+@property(nonatomic, readonly) BOOL fallbackCPUValid;
 @property(nonatomic, readonly) double cpuPercent;
-@property(nonatomic, readonly) double residentMiB;
-@property(nonatomic, readonly) double peakResidentMiB;
+@property(nonatomic, readonly) double footprintMiB;
+@property(nonatomic, readonly) double peakFootprintMiB;
+@property(nonatomic, readonly) double fallbackCPUPercent;
 @end
 
 @interface CoreSetPerformanceSampler : NSObject
-// Call serially. A missing system reading is represented by its validity flag.
+// Sampling is serialized. CPU, footprint and process-lifetime peak validity
+// are independent. RUSAGE fallback never confirms the primary CPU field.
 - (nullable CoreSetPerformanceSample *)sample;
 @end
 

@@ -99,7 +99,8 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         preview = read("lara/views/app/CoreSetAimPreviewConsumer.swift")
         self.assertIn("self.session.readFailureSequence != failureSequence", body(preview, "func capture("))
         material = body(self.consumers["Material"], "private func capture()")
-        self.assertLess(material.index("CoreSetMaterialCollector.capture("), material.index("let capturedAt = CACurrentMediaTime()"))
+        self.assertLess(material.index("CoreSetMaterialCollector.capture("),
+                        material.index("let capturedAt = snapshot?.captureCompletedMonotonicSeconds"))
 
     def test_periodic_failure_invalidates_only_after_exact_clear_receipt(self) -> None:
         for name, source in self.consumers.items():

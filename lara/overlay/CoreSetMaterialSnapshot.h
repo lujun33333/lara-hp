@@ -27,6 +27,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, readonly) NSUUID *snapshotID;
 @property(nonatomic, readonly) NSArray<CoreSetMaterialMark *> *marks;
 @property(nonatomic, readonly) NSArray<CoreSetMetroArmorMark *> *metroMarks;
+@property(nonatomic, readonly) double captureCompletedMonotonicSeconds;
+@property(nonatomic, copy, readonly) NSString *readSemanticDiagnostic;
 @end
 
 @interface CoreSetMaterialCollector : NSObject

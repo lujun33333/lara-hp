@@ -240,6 +240,8 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
     selected = native_map["points"][106:137]
     assert [point["id"] for point in selected] == [f"v17-{number:03}" for number in range(106, 137)]
     assert native_map["reference_image_sha256"] == IMAGE_SHA
+    from core_set_action_selection_probe import static_edges
+    selection_edges = static_edges(core)
     anchors = [(0x1000C1A78, 32), (0x1000C22A0, 0x80), (0x1000C3278, 64),
                (0x1000C1378, 0x180), (0x1000C1664, 0x180), (0x1000C4854, 0x160),
                (0x1000C5AD8, 0x100), (0x1000C6730, 0x64), (0x1000C2E24, 64),
@@ -250,8 +252,7 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
         raw = core.raw(va, count * 4)
         tables.append({"address": hex(va), "file_offset": hex(core.file_offset(va)),
                        "bytes": raw.hex(), "int32_values": list(struct.unpack(f"<{count}i", raw))})
-    common_edges = ["candidate/publishedKey/controller generation → trusted current request/snapshot authority",
-                    "all c2e24 predecessors including c3914/c3988 → slot65/66 choice",
+    common_edges = ["candidate/publishedKey/controller generation + upstream route predicates/feedback → trusted current request/snapshot authority",
                     "checked-write result → current independent readback under game-thread concurrency",
                     "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"]
     points = []
@@ -262,12 +263,25 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
         if number in (106, 109): components.append("trigger-latch-valid-input-parity")
         if number in scene_points: components.append("six-scene-three-lock-parameter-parity")
         if number in (132, 133): components.append("post-state-w28-policy-parity")
+        closed = ["merge_slot", "geometry_clock", "candidate_publish", "stop_local_only"]
+        if number in (114, 115, 117): closed.append("raw_actor_gate")
+        if number == 107: closed.append("world_point")
+        if number in (108, 110, 111, 112, 113, 116): closed.append("screen_rank")
+        if number in (120, 129, 130): closed.append("takeover")
+        if number in (131, 133, 134): closed.append("recoil_raw_state")
+        if number in (116, 126, 127, 128): closed.append("candidate_motion")
         edge = ("c4af8/c571c prior-state/history/delta-time → same-cycle two-axis increment" if number >= 126 else
                 "candidate worldpoint/filter/sticky state → original selector/result observable")
         if number == 114:
             edge = "Core pawn-state bit19 producer/owner → build15915 PawnStateRepSyncData+1700 storage/knocked semantics"
         if number in (120, 129, 130):
-            edge = "lock threshold/confirmation count/pause → c416c result state and takeover lifetime"
+            edge = "c416c separate recoil/post-state consumer and takeover feedback → same-cycle input owner/readback"
+        if number == 107:
+            edge = "bone58 validity + anchor1e0/1ec actual producers → build15915 world bone owner/lifetime"
+        if number == 116:
+            edge = "sticky rank/publish → source record invalidation, target identity lease and live selector observable"
+        if number >= 131:
+            edge = "c571c caller binding/prior-aim lifetime + c416c horizontal/post-state + numeric merge → current two-axis action"
         points.append({"id": point["id"], "title": point["title"],
                        "evidence_key": "action-cycle/" + point["id"],
                        "prior_native_evidence_key": point["reference_evidence_key"],
@@ -275,14 +289,16 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
                        "core_self_storage": point["storage"], "control_sites": point["control_sites"],
                        "current_alternative_preview": point["alternative_preview"],
                        "component_parity_contracts": components,
+                       "closed_reference_edges": closed,
                        "next_exact_edges": [edge] + common_edges,
                        "original_runtime_receipt_verified": False, "one_to_one_complete": False})
-    return {"schema_version": 1, "reference_ipa_sha256": IPA_SHA,
+    return {"schema_version": 2, "reference_ipa_sha256": IPA_SHA,
             "reference_image_sha256": IMAGE_SHA, "reference_uuid": native_map["reference_uuid"],
             "scope": "static bytes + offline pure-CFG parity contracts; no target writer authority or original device action receipt",
             "point_count": len(points), "one_to_one_complete_count": 0,
             "reference_windows": [core.proof_window(va, size) for va, size in anchors],
             "reference_tables": tables, "target_static_evidence": target,
+            "selection_route_history_evidence": selection_edges,
             "function_edges": [
                 {"caller": "0x1000c1a04", "slice": "0x1000c22a0..0x1000c2318", "sink": "Core-self BSS 0x100c519b8",
                  "semantics": "valid-input mode 1=ADS/2=fire/0=either/3=both; match sets deadline=now+0.25; active iff enabled and now<deadline"},
@@ -303,8 +319,18 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
                                       "raw ADS/fire/capture completion monotonic time/age/transport diagnostic",
                                       "candidate key/bone producer/scene/predecessor/slot/axis/expected-old-new hashes only",
                                       "request token/effect epoch/readback cycle/producer drain/restoration verifier result"],
-            "current_probe_scope": "existing audited read session only; 30s bounded ADS/fire capture; synthetic-unit canvas; no selector/write/canvas receipt",
+            "current_probe_scope": "existing audited read session only; 30s bounded ADS/fire + typed controller two-pair observation; diagnostic fingerprints only; synthetic-unit canvas; no selector/write/canvas receipt",
+            "read_only_controller_observation": {"fields": {"ControlRotation": ["0x620", "0x624"], "RotationInput": ["0x828", "0x82c"]},
+                                                 "type": "two exact f32 pairs, eight bytes each",
+                                                 "profile": "1.38.12/build15915/34b785b20dab3992985d359e6bf45585 via existing audited ReadSession",
+                                                 "gates": ["same snapshotID/read generation/pid/imageBase/controller lease",
+                                                           "identity before/between/after reads", "exact completed length",
+                                                           "finite values", "capture completion local monotonic age 0..0.5s",
+                                                           "non-regressing local monotonic observation", "byte-exact ControlRotation vs snapshot"],
+                                                 "logs": "diagnostic FNV1a64 input/before/after summaries only; no raw target memory",
+                                                 "object_lifetime_atomic": False, "selects_slot_or_authorizes_writer": False},
             "reproduce": "python -B tests/core_set_action_cycle_contract_test.py --reference-ipa <exact-v1.7-ipa> --target-ipa <exact-1.38.12-ipa> --planner-exe tests/.action-cycle-build/core_set_action_cycle_plan_test.exe",
+            "reproduce_selection_state": "python -B tests/core_set_action_selection_contract_test.py --reference-ipa <exact-v1.7-ipa> --planner-exe tests/.action-cycle-build/core_set_action_selection_state_test.exe --read-contract-exe tests/.action-cycle-build/core_set_action_input_read_contract_test.exe",
             "points": points}
 
 

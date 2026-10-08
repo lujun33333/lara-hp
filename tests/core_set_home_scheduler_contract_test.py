@@ -104,6 +104,11 @@ class HomeSchedulerContract(unittest.TestCase):
                        "failure-without-error-code", "completed-without-exact-total", "stale-sequence-or-invalid-transition",
                        "count-regressed", "denominator-changed", "new-request-must-start-requested-or-refused"):
             self.assertIn(reason, record)
+        self.assertIn("native-generation-changed-within-request", record)
+        self.assertIn("requested-option-changed-within-request", record)
+        self.assertIn("event.point == .firmwareProgress", record)
+        self.assertIn("[.cancelled, .stopping, .stopped].contains(event.phase)", record)
+        self.assertIn("old < UInt64.max && new == old + 1", record)
 
     def test_home_refusals_preserve_option_and_no_action_execution(self):
         refuse = body(self.menu, "func explainUnavailable(")
@@ -148,6 +153,18 @@ def replay(path):
     assert names[("QXA107", "instance", "qx307:")] == "0x100009f68"
     assert names[("QXA105", "instance", "qx307:")] != names[("QXA107", "instance", "qx307:")]
     assert evidence["firmware_class_reference"]["class"] == "QXA107"
+    provider_edges = {edge["stub"]: edge for edge in evidence["provider_selector_edges"]}
+    download = provider_edges["0x10072c640"]
+    assert download["selector"] == "qm571:fromURL:productType:buildVersion:boardConfig:client:generation:progress:error:"
+    assert [site["address"] for site in download["direct_call_sites"]] == ["0x10000ff24"]
+    assert len(provider_edges["0x10072c4a0"]["direct_call_sites"]) == 22
+    for edge in provider_edges.values():
+        for site in edge["direct_call_sites"]:
+            word = site["instructions"][0]
+            assert word["instruction"] == "bl #" + edge["stub"]
+            assert core.raw(int(site["address"], 16), 4).hex() == word["bytes"]
+    assert evidence["functions"]["firmware_workflow_block"]["entry"] == "0x10000f8f0"
+    assert "digest only" in evidence["progress_sources"]["v17-010"]["next_capture"]
     selectors = {stub["stub"]: stub["selector"] for stub in evidence["selector_stubs"]}
     assert selectors == {"0x10072ce60": "qx327", "0x10072cda0": "qx307:",
                          "0x100729e80": "generation", "0x10072f780": "setGeneration:",

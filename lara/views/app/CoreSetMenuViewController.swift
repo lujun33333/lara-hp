@@ -91,14 +91,29 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private var appearanceChannel: CoreSetFeatureChannel<CoreSetMenuAppearance>?
     private var directoryChannel: CoreSetFeatureChannel<CoreSetDirectoryPresentation>?
 
-    private let themeKey = "core-set.menu.light"
+    private let themeKey = CoreSetReferenceMenuAppearance.themeKey
+    private let legacyThemeKey = "core-set.menu.light"
     private let referenceSize = CGSize(width: 838, height: 535)
     // v1.7 custom child: visual top extends 23; requested child height trims 7.
     private let cardBodyOffset: CGFloat = 23
     private let cardBodyTrim: CGFloat = 7
-    private let defaultAccent = UIColor(red: 56 / 255, green: 139 / 255, blue: 155 / 255, alpha: 1)
+    private var defaultAccent: UIColor { uiColor(CoreSetReferenceMenuAppearance.preset(6)) }
     private var accent: UIColor { featureState.home.desired.accent.map(uiColor) ?? defaultAccent }
-    private let accentKey = "core-set.menu.accent-rgba"
+    private let accentKey = CoreSetReferenceMenuAppearance.accentKey
+    private let legacyAccentKey = "core-set.menu.accent-rgba"
+    private func storedTheme() -> CoreSetTheme {
+        if let number = UserDefaults.standard.object(forKey: themeKey) as? NSNumber {
+            let value = number.intValue // Native NSNumber integerValue, then accepts only 0/1.
+            return value == 1 ? .light : .dark
+        }
+        if UserDefaults.standard.object(forKey: themeKey) != nil { return .dark }
+        return UserDefaults.standard.bool(forKey: legacyThemeKey) ? .light : .dark
+    }
+    private func storedPackedAccent() -> UInt32? {
+        guard let number = UserDefaults.standard.object(forKey: accentKey) as? NSNumber else { return nil }
+        guard number.doubleValue.isFinite else { return nil }
+        return number.uint32Value // Native unsignedIntValue width/truncation; no Swift overflow cast.
+    }
     private enum ColorRole: String, CaseIterable, Hashable {
         case name = "名称颜色", ray = "射线颜色", distance = "距离颜色", bone = "骨骼颜色", team = "队伍颜色"
     }
@@ -107,6 +122,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         case theme, player(ColorRole), bot(ColorRole), material(Int)
     }
     private final class ColorButton: UIButton { var colorTarget: ColorTarget? }
+    private final class MaterialGroupButton: UIButton { var observedSelection = CoreSetGroupSelection.unknown }
     private final class UnavailableInfoButton: UIButton { weak var explainedView: UIView? }
     private var editingColorTarget: ColorTarget?
     private let floatingThemeKey = "DSESPThemeColorV1"
@@ -146,8 +162,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             featureState.performanceSnapshot = CoreSetPerformanceSnapshot(
                 processID: sample.processID, observedAt: sample.observedAt as Date,
                 cpuPercent: sample.cpuValid ? sample.cpuPercent : nil,
-                residentMiB: sample.memoryValid ? sample.residentMiB : nil,
-                peakResidentMiB: sample.memoryValid ? sample.peakResidentMiB : nil)
+                footprintMiB: sample.footprintValid ? sample.footprintMiB : nil,
+                peakFootprintMiB: sample.peakValid ? sample.peakFootprintMiB : nil)
         } else { featureState.performanceSnapshot = nil }
         if isViewLoaded && selectedPage == 0 { refreshPerformanceLabels() }
     }
@@ -314,7 +330,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         let storedAccent = storedColor(forKey: accentKey).flatMap(rgba)
         let storedPalette = CoreSetFloatingPalette(rawValue: storedFloatingThemeValue())
         featureState.home.updateDesired {
-            if $0.theme == nil { $0.theme = UserDefaults.standard.bool(forKey: themeKey) ? .light : .dark }
+            if $0.theme == nil { $0.theme = storedTheme() }
             if $0.accent == nil { $0.setAccent(storedAccent ?? rgba(defaultAccent)) }
             if $0.floatingPalette == nil { $0.floatingPalette = storedPalette }
         }
@@ -1096,13 +1112,30 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         }
         stop(\.home); stop(\.frameRate); stop(\.player); stop(\.materials); stop(\.adjustments)
         stop(\.radar); stop(\.aim); stop(\.aimDisplay); stop(\.recoil)
+        func stopLocal<Value: Equatable>(
+            _ path: ReferenceWritableKeyPath<CoreSetMenuViewController, CoreSetFeatureChannel<Value>?>,
+            consumer: CoreSetMenuConsumer<Value>?) {
+            self[keyPath: path]?.suspend()
+            guard let token = self[keyPath: path]?.pendingStop, let consumer else { return }
+            group.enter()
+            var received = false
+            consumer.stop(token) { [weak self] token, outcome in
+                DispatchQueue.main.async {
+                    guard !received, let self, self[keyPath: path]?.receiveStop(token, outcome: outcome) == true else { return }
+                    received = true; group.leave()
+                }
+            }
+        }
+        stopLocal(\.appearanceChannel, consumer: appearanceConsumer)
+        stopLocal(\.directoryChannel, consumer: directoryConsumer)
         group.notify(queue: .main) { [weak self] in
             guard let self else { completion(false); return }
             let states = [self.featureState.home.restoration, self.featureState.frameRate.restoration,
                 self.featureState.player.restoration,
                 self.featureState.materials.restoration, self.featureState.adjustments.restoration,
                 self.featureState.radar.restoration, self.featureState.aim.restoration,
-                self.featureState.aimDisplay.restoration, self.featureState.recoil.restoration]
+                self.featureState.aimDisplay.restoration, self.featureState.recoil.restoration,
+                self.appearanceChannel?.restoration ?? .notNeeded, self.directoryChannel?.restoration ?? .notNeeded]
             self.rebuildMenu()
             completion(states.allSatisfy { $0 == .notNeeded || $0 == .confirmed })
         }
@@ -1134,7 +1167,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     @discardableResult
     func resumeGameConsumers() -> Bool {
         precondition(Thread.isMainThread)
-        let results = [featureState.home.resume(), featureState.frameRate.resume(),
+        let appearanceResumed = appearanceChannel?.suspended == true ? (appearanceChannel?.resume() ?? false) : true
+        let directoryResumed = directoryChannel?.suspended == true ? (directoryChannel?.resume() ?? false) : true
+        let results = [appearanceResumed, directoryResumed, featureState.home.resume(), featureState.frameRate.resume(),
             featureState.player.resume(), featureState.materials.resume(),
             featureState.adjustments.resume(), featureState.radar.resume(),
             featureState.aim.resume(), featureState.aimDisplay.resume(), featureState.recoil.resume()]
@@ -1231,15 +1266,26 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         let stop: (CoreSetRequestToken, @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) -> Void = { [weak self] token, complete in
             guard let self else { complete(token, .failed(reason: "Local menu released")); return }
             self.editingColorTarget = nil
+            self.dismissHostedColorEditor()
+            let observedStop = {
+                let cleared = self.editingColorTarget == nil && self.hostedColorOverlay == nil &&
+                    !(self.presentedViewController is UIColorPickerViewController)
+                NSLog("Core-SET: local-menu stage=stop token=%@/%@/%@ confirmed=%d persisted-config-retained=1 scope=local-editor-lifecycle",
+                      token.generation.uuidString, token.consumerID.uuidString, token.requestID.uuidString, cleared ? 1 : 0)
+                complete(token, cleared ? .restored : .failed(reason: "Local editor dismissal did not match"))
+            }
             if self.presentedViewController is UIColorPickerViewController {
-                self.dismiss(animated: false) { complete(token, .restored) }
-            } else { complete(token, .restored) }
+                self.dismiss(animated: false, completion: observedStop)
+            } else { observedStop() }
         }
         appearanceConsumer = CoreSetMenuConsumer(capability: .localRendering, readiness: readiness, apply: { [weak self] request, complete in
             guard let self, self.viewIfLoaded?.window != nil else { complete(request.token, .notApplied(reason: "Local menu is not attached")); return }
             let value = request.desired
-            UserDefaults.standard.set(value.theme == .light, forKey: self.themeKey)
-            UserDefaults.standard.set([value.accent.red, value.accent.green, value.accent.blue, 1], forKey: self.accentKey)
+            UserDefaults.standard.set(value.theme == .light ? 1 : 0, forKey: self.themeKey)
+            UserDefaults.standard.set(UInt64(value.accent.referencePackedRGBA), forKey: self.accentKey)
+            // Preserve old-build compatibility only on an explicit user edit.
+            UserDefaults.standard.set(value.theme == .light, forKey: self.legacyThemeKey)
+            UserDefaults.standard.set([value.accent.red, value.accent.green, value.accent.blue, 1], forKey: self.legacyAccentKey)
             UserDefaults.standard.set(value.floatingPalette.rawValue, forKey: self.floatingThemeKey)
             self.rebuildMenu()
             // Observe actual view properties and local preference readback. This
@@ -1271,8 +1317,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
               let brand = sidebar.subviews.compactMap({ $0 as? UILabel }).first(where: { $0.attributedText?.string == "CORE SET" }),
               let drawnAccent = brand.attributedText?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
               let color = rgba(drawnAccent),
-              let saved = storedColor(forKey: accentKey).flatMap(rgba), saved == color else { return nil }
-        let light = UserDefaults.standard.bool(forKey: themeKey)
+              let saved = storedPackedAccent(), saved == color.referencePackedRGBA else { return nil }
+        let light = storedTheme() == .light
         let background = UIColor(white: (light ? 250.0 : 26.0) / 255.0, alpha: 1)
         guard panel.backgroundColor?.isEqual(background) == true,
               let palette = CoreSetFloatingPalette(rawValue: storedFloatingThemeValue()) else { return nil }
@@ -1282,18 +1328,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private func observeDirectory() -> CoreSetDirectoryPresentation? {
         guard materialGrid.window != nil,
               let category = CoreSetMaterialCategory(rawValue: previewMaterialCategory) else { return nil }
-        let buttons = materialGridItems.subviews.compactMap { $0 as? UIButton }.sorted { $0.tag < $1.tag }
+        let buttons = materialGridItems.subviews.compactMap { $0 as? MaterialGroupButton }.sorted { $0.tag < $1.tag }
         guard buttons.count == featureState.materials.desired.categories[category.rawValue].groups.count else { return nil }
-        let selections: [CoreSetGroupSelection] = buttons.map {
-            switch $0.accessibilityValue {
-            case "本地全选": return .all
-            case "本地部分选择": return .partial
-            case "本地未选": return .none
-            default: return .unknown
-            }
-        }
+        guard buttons.map({ $0.currentTitle ?? "" }) == materialCatalog[category.rawValue] else { return nil }
+        let selections = buttons.map(\.observedSelection)
         guard let selectedTab = pageViews.flatMap({ $0.subviews }).flatMap({ $0.subviews })
             .compactMap({ $0 as? UIButton }).first(where: { $0.accessibilityIdentifier == "material.category.\(category.rawValue)" }),
+              selectedTab.accessibilityTraits.contains(.selected),
               let drawnColor = selectedTab.backgroundColor.flatMap(rgba) else { return nil }
         return CoreSetDirectoryPresentation(category: category, selections: selections, tint: drawnColor)
     }
@@ -1306,7 +1347,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         consumer.apply(request) { [weak self] token, outcome in
             DispatchQueue.main.async {
                 guard let self, self.appearanceChannel?.receive(token, outcome: outcome) == true else { return }
-                NSLog("Core-SET: hosted input stage=actual control=%@ capability=localRendering confirmed=%d scope=local-ui-appearance v17-effect-verified=0",
+                NSLog("Core-SET: hosted input stage=actual control=%@ capability=localRendering confirmed=%d scope=same-meaning-local-theme-and-persistence floating-effect-confirmed=0 device-effect-verified=0",
                       hostedSource, self.appearanceChannel?.isDesiredConfirmed == true ? 1 : 0)
                 self.rebuildMenu()
                 if self.appearanceChannel?.desired != request.desired,
@@ -1322,7 +1363,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         consumer.apply(request) { [weak self] token, outcome in
             DispatchQueue.main.async {
                 guard let self, self.directoryChannel?.receive(token, outcome: outcome) == true else { return }
-                NSLog("Core-SET: hosted input stage=actual control=%@ capability=directoryPreview confirmed=%d scope=local-candidate-directory v17-effect-verified=0",
+                NSLog("Core-SET: hosted input stage=actual control=%@ capability=directoryPreview confirmed=%d scope=same-meaning-local-category-navigation target-material-effect-confirmed=0 device-effect-verified=0",
                       hostedSource, self.directoryChannel?.isDesiredConfirmed == true ? 1 : 0)
                 self.rebuildMenu()
                 if self.directoryChannel?.desired != request.desired,
@@ -2272,7 +2313,10 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     }
 
     private func storedColor(forKey key: String) -> UIColor? {
-        guard let values = UserDefaults.standard.array(forKey: key) as? [Double],
+        guard key == accentKey else { return nil }
+        if let packed = storedPackedAccent() { return uiColor(CoreSetRGBA.referenceOpaque(packed: packed)) }
+        if UserDefaults.standard.object(forKey: accentKey) != nil { return nil }
+        guard let values = UserDefaults.standard.array(forKey: legacyAccentKey) as? [Double],
               values.count == 4, values.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return nil }
         return UIColor(red: CGFloat(values[0]), green: CGFloat(values[1]),
                        blue: CGFloat(values[2]), alpha: 1)
@@ -2288,10 +2332,10 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         colorEditRow("主题颜色", target: .theme, in: card,
                      frame: CGRect(x: 0, y: 66, width: card.bounds.width, height: 24))
         card.addSubview(label("预设颜色", size: 12, frame: CGRect(x: 12, y: 96, width: 76, height: 24)))
-        for (index, rgb) in presetRGB.enumerated() {
+        for index in presetRGB.indices {
             let swatch = UIButton(type: .system)
             swatch.frame = CGRect(x: 90 + CGFloat(index) * 31, y: 96, width: 24, height: 24)
-            swatch.backgroundColor = UIColor(red: rgb[0] / 255, green: rgb[1] / 255, blue: rgb[2] / 255, alpha: 1)
+            swatch.backgroundColor = uiColor(CoreSetReferenceMenuAppearance.preset(index))
             swatch.layer.cornerRadius = 5
             swatch.tag = index
             swatch.accessibilityLabel = "预设颜色 \(index + 1)"
@@ -2332,8 +2376,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     @objc private func selectPresetColor(_ sender: UIButton) {
         refreshBeforeInteraction(sender)
         guard localAppearanceReady, presetRGB.indices.contains(sender.tag) else { return }
-        let rgb = presetRGB[sender.tag]
-        saveColor(UIColor(red: rgb[0] / 255, green: rgb[1] / 255, blue: rgb[2] / 255, alpha: 1), forKey: accentKey)
+        // Integer labels remain display-only; apply original Float32 data.
+        saveColor(uiColor(CoreSetReferenceMenuAppearance.preset(sender.tag)), forKey: accentKey)
     }
 
     @objc private func editLocalColor(_ sender: UIButton) {
@@ -2495,11 +2539,11 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
 
     private func floatingColorRows(in card: UIView) {
         card.addSubview(label("悬浮颜色", size: 12, frame: CGRect(x: 12, y: 126, width: 76, height: 24)))
-        for (index, rgb) in presetRGB.enumerated() {
+        for index in presetRGB.indices {
             let swatch = UIButton(type: .custom)
             swatch.frame = CGRect(x: 90 + CGFloat(index) * 31, y: 126, width: 24, height: 24)
             swatch.tag = index
-            swatch.backgroundColor = UIColor(red: rgb[0] / 255, green: rgb[1] / 255, blue: rgb[2] / 255, alpha: 1)
+            swatch.backgroundColor = uiColor(CoreSetReferenceMenuAppearance.preset(index))
             swatch.layer.cornerRadius = 5
             if index == 6 {
                 let gradient = CAGradientLayer()
@@ -2507,9 +2551,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 gradient.cornerRadius = 5
                 gradient.startPoint = CGPoint(x: 0, y: 0.5)
                 gradient.endPoint = CGPoint(x: 1, y: 0.5)
-                gradient.colors = [presetRGB[0], presetRGB[2]].map {
-                    UIColor(red: $0[0] / 255, green: $0[1] / 255, blue: $0[2] / 255, alpha: 1).cgColor
-                }
+                gradient.colors = [0, 2].map { uiColor(CoreSetReferenceMenuAppearance.preset($0)).cgColor }
                 swatch.layer.addSublayer(gradient)
             }
             let selected = floatingThemeValue == floatingThemeValues[index]
@@ -2560,7 +2602,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             button.backgroundColor = selected ? materialPreviewTint(category: index) : gray(41, 230)
             button.layer.cornerRadius = 14
             button.accessibilityTraits = selected ? [.button, .selected] : .button
-            button.accessibilityHint = "本地目录预览；原版运行分类和实际可见物资未验证"
+            button.accessibilityHint = "v1.7同义本地分类切换；目标物资效果和设备呈现仍未验证"
             button.isEnabled = localDirectoryReady
             button.addTarget(self, action: #selector(selectMaterialCategory(_:)), for: .touchUpInside)
             registerHosted(button, .materialCategory)
@@ -2778,12 +2820,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             let measured = (title as NSString).size(withAttributes: [.font: font(12)]).width + 24
             let width = min(measured, materialGrid.bounds.width - 22)
             if x > 4 && x + width > materialGrid.bounds.width - 18 { x = 4; y += 32 }
-            let button = UIButton(type: .system)
+            let button = MaterialGroupButton(type: .system)
             button.frame = CGRect(x: x, y: y, width: width, height: 26)
             button.tag = index
             button.setTitle(title, for: .normal)
             button.titleLabel?.font = font(12)
             let selected = materialGroupSelection(materialGroupValues(category: previewMaterialCategory, item: index))
+            button.observedSelection = selected.unknown ? .unknown : (selected.all ? .all : (selected.any ? .partial : .none))
             button.setTitleColor(selected.all ? UIColor.white.withAlphaComponent(240.0 / 255.0) : gray(255, 80), for: .normal)
             // Unknown reference colors fall back only to the local preview theme.
             let tint = materialPreviewTint(category: previewMaterialCategory)
@@ -2906,9 +2949,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         let age = sample.map { Date().timeIntervalSince($0.observedAt) }
         let fresh = sample?.processID == getpid() && age.map { $0 >= 0 && $0 <= 5 } == true
         guard fresh, let sample else { return [nil, nil, nil] }
-        return [sample.cpuPercent.map { String(format: "本应用 %.1f%%", $0) },
-                sample.residentMiB.map { String(format: "本应用 %.1f MiB", $0) },
-                sample.peakResidentMiB.map { String(format: "本应用 %.1f MiB", $0) }]
+        return [sample.cpuPercent.map { String(format: "本应用 %.1f %%", $0) },
+                sample.footprintMiB.map { String(format: "本应用 %.1f MiB", $0) },
+                sample.peakFootprintMiB.map { String(format: "本应用 %.1f MiB", $0) }]
     }
     private func refreshPerformanceLabels() {
         let values = performanceValues()
@@ -2918,6 +2961,14 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             let display = statusText(values[index])
             performanceValueLabels[index].text = display
             performanceValueLabels[index].accessibilityLabel = "\(titles[index])：\(display)"
+            let sources = ["nonidle-thread-basic-info", "TASK_VM_INFO.phys_footprint", "process-lifetime-footprint-CAS-max"]
+            let observed = values[index] != nil && performanceValueLabels[index].window != nil &&
+                performanceValueLabels[index].text == display
+            let reason = values[index] == nil ? "identity/freshness/independent-field-valid-unconfirmed" :
+                (observed ? "matched-local-label-property" : "local-label-not-attached")
+            performanceValueLabels[index].accessibilityHint = "本应用 \(sources[index])；本地数值/属性回读，不代表目标游戏或设备效果验收"
+            NSLog("Core-SET: performance point=v17-%03d stage=observation source=%@ observed=%d reason=%@ scope=own-process-local-label-property original-runtime-receipt=0 device-effect-verified=0",
+                  30 + index, sources[index], observed ? 1 : 0, reason)
         }
     }
 

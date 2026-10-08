@@ -60,6 +60,20 @@ final class CoreSetActionReadOnlyProbe {
                                   self.lane, captureCycle, snapshot.sessionGeneration,
                                   snapshot.snapshotID.uuidString, snapshot.localADS ? 1 : 0,
                                   snapshot.localFiring ? 1 : 0)
+                            let inputFailuresBefore = self.session.readFailureSequence
+                            let inputs = CoreSetActionInputObservation.capture(self.session, snapshot: snapshot)
+                            let diagnostic = self.session.readFailureSequence != inputFailuresBefore
+                                ? self.session.lastReadDiagnostic : "transport-errors=0"
+                            self.lock.lock()
+                            let inputStillCurrent = !self.stopped && self.cycle == captureCycle
+                            self.lock.unlock()
+                            if inputStillCurrent {
+                                NSLog("Core-SET: action-read-probe lane=%@ cycle=%llu stage=controller-input-observed complete=%d writeReady=0 originalEffectConfirmed=0 captureGeneration=%llu snapshot=%@ inputFingerprint=%016llx controlBeforeFingerprint=%016llx controlAfterFingerprint=%016llx fingerprintScope=diagnostic-fnv1a64-not-authority objectLifetimeAtomic=0 selector=not-run slotRoute=unissued reason=%@ transport=%@",
+                                      self.lane, captureCycle, inputs.complete ? 1 : 0,
+                                      snapshot.sessionGeneration, snapshot.snapshotID.uuidString,
+                                      inputs.inputFingerprint, inputs.controlBeforeFingerprint,
+                                      inputs.controlAfterFingerprint, inputs.reason, diagnostic)
+                            }
                         } else {
                             NSLog("Core-SET: action-read-probe lane=%@ cycle=%llu stage=capture complete=0 writeReady=0 reason=snapshot-stale captureAge=%.6f",
                                   self.lane, captureCycle, age)

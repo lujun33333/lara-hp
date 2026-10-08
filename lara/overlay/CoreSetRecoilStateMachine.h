@@ -89,7 +89,8 @@ inline bool stepRecoilRawState(RecoilRawState *state, const RecoilRawInput &inpu
         state->binding = input.binding;
         state->positiveFrames = 0;
         state->accumulator = 0;
-        if (!pausedReuse) state->pausedAngle = base;
+        // c5820..c5864 does not update local +1c on a fresh firing context.
+        // Only the non-firing c58c8 path records pausedAngle for later reuse.
     } else {
         base = state->angle;
     }
@@ -120,9 +121,10 @@ inline bool stepRecoilRawState(RecoilRawState *state, const RecoilRawInput &inpu
         state->positiveFrames = 0;
     }
     const float filtered = std::fabs(delta) > 0.005f ? delta : 0.0f;
-    const float integral = filtered * input.strength01 * 0.08f + state->accumulator;
+    // Preserve c5a74/c5a7c's multiplication order and fused round-to-f32.
+    const float integral = std::fma(filtered, input.strength01 * 0.08f, state->accumulator);
     const float accumulator = std::clamp(integral, -1.25f * input.strength01, 0.0f);
-    const float feedforward = filtered * 0.72f * input.strength01;
+    const float feedforward = filtered * (0.72f * input.strength01);
     const float combined = std::clamp(feedforward + accumulator,
                                       -1.5f * input.strength01, 0.0f);
     if (!std::isfinite(filtered) || !std::isfinite(accumulator) ||

@@ -60,6 +60,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) float controlPitchDegrees;
 @property(nonatomic, readonly) float controlYawDegrees;
 @property(nonatomic, readonly) double captureCompletedMonotonicSeconds;
+// Counts of already-read fields, never raw names/addresses or a parity claim.
+@property(nonatomic, copy, readonly) NSString *readSemanticDiagnostic;
 @end
 
 @interface CoreSetPlayerCollector : NSObject
@@ -168,5 +170,9 @@ FOUNDATION_EXPORT BOOL CoreSetRadarPoint(CGPoint cameraMinusActor, double camera
                                           CGPoint center, CGPoint *output);
 FOUNDATION_EXPORT BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor,
                                                    double serverYawDegrees);
+FOUNDATION_EXPORT NSString * _Nullable CoreSetReferencePlayerDistanceText(double distance);
+FOUNDATION_EXPORT NSString * _Nullable CoreSetReferenceWarningText(
+    NSString * _Nullable playerName, BOOL bot, NSString * _Nullable weaponName,
+    uint32_t weaponID, double distance);
 
 NS_ASSUME_NONNULL_END

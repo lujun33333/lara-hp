@@ -3,6 +3,7 @@
 #import "CoreSetMetroArmorNames.h"
 #import "CoreSetVehicleStatus.h"
 #import "CoreSetPlayerProjection.h"
+#import <QuartzCore/QuartzCore.h>
 #import <algorithm>
 #import <cmath>
 #import <cstring>
@@ -193,6 +194,8 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
 @property(nonatomic, copy) NSUUID *snapshotID;
 @property(nonatomic) NSArray<CoreSetMaterialMark *> *marks;
 @property(nonatomic) NSArray<CoreSetMetroArmorMark *> *metroMarks;
+@property(nonatomic) double captureCompletedMonotonicSeconds;
+@property(nonatomic, copy) NSString *readSemanticDiagnostic;
 @end
 @implementation CoreSetMaterialSnapshot @end
 
@@ -276,6 +279,9 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
     if (!CSMPosition(session, generation, base, local, &localPosition, &present) || !present) return nil;
     NSMutableArray<CoreSetMaterialMark *> *marks = [NSMutableArray array];
     NSMutableArray<CoreSetMetroArmorMark *> *metroMarks = [NSMutableArray array];
+    NSUInteger namesMatched = 0, vehicleCandidates = 0, vehicleTyped = 0, vehicleComponentTyped = 0;
+    NSUInteger hpValid = 0, fuelValid = 0, escapeBoxCandidates = 0, childrenOne = 0, levelsPresent = 0;
+    NSUInteger metroCharacters = 0, metroSlots = 0, metroKnown = 0;
     struct Observed { uint64_t address; uint32_t nameIndex; uint64_t type;
                       CoreSet::Vec3 position; size_t record; std::string level;
                       bool escapeBox; CSMChildrenArray children;
@@ -337,12 +343,15 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
             if (includeMetroArmor) {
                 CSMMetroObservation metro = {};
                 if (!CSMMetro(session, generation, actor, type, characterClass, &metro)) return nil;
+                if (metro.characterType) ++metroCharacters;
+                if (metro.hasSlots) ++metroSlots;
                 if (metro.characterType && metro.hasSlots &&
                     std::isfinite(metro.health) && std::isfinite(metro.healthMax) &&
                     metro.health > 0 && metro.healthMax > 0 && metro.health <= metro.healthMax) {
                     const char *head = CoreSet::metroHeadLabel(metro.headID);
                     const char *armor = CoreSet::metroArmorLabel(metro.armorID);
                     if (head || armor) {
+                        ++metroKnown;
                         CoreSet::Vec3 metroPosition = {};
                         bool metroPositionPresent = false;
                         if (!CSMPosition(session, generation, base, actor, &metroPosition,
@@ -365,16 +374,26 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
                 }
             }
             if (match < 0) continue;
+            ++namesMatched;
             if (!includeMetroArmor &&
                 (!CSMReadValue(session, generation, actor + 0x10, &type) ||
                  !CSMAddress(type, 0x38))) return nil;
             CSMChildrenArray children = {};
             if (includeHideOpenedCrates && match >= 106 && match < 145 &&
                 nameMatch.escapeBox && !CSMChildren(session, generation, actor, &children)) return nil;
+            if (includeHideOpenedCrates && match >= 106 && match < 145 && nameMatch.escapeBox) {
+                ++escapeBoxCandidates;
+                if (children.count == 1) ++childrenOne;
+            }
             CSMVehicleObservation vehicle = {};
             if (includeVehicleStatus && match >= 29 && match < 77 &&
                 !CSMVehicle(session, generation, actor, type, vehicleClass,
                             componentClass, &vehicle)) return nil;
+            if (includeVehicleStatus && match >= 29 && match < 77) {
+                ++vehicleCandidates;
+                if (vehicle.vehicleType) ++vehicleTyped;
+                if (vehicle.componentType) ++vehicleComponentTyped;
+            }
             CoreSet::Vec3 position = {};
             bool hasPosition = false;
             if (!CSMPosition(session, generation, base, actor, &position, &hasPosition)) return nil;
@@ -392,6 +411,7 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
             mark.recordIndex = match; mark.point = CGPointMake(point.x, point.y);
             mark.distanceUnitsDividedBy100 = distance;
             if (!nameMatch.level.empty()) {
+                ++levelsPresent;
                 mark.crateLevelLabel = [NSString stringWithUTF8String:nameMatch.level.c_str()];
                 if (!mark.crateLevelLabel) return nil;
             }
@@ -400,8 +420,8 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
             if (vehicle.component && vehicle.componentType) {
                 CoreSet::VehiclePercent hp = CoreSet::vehiclePercent(vehicle.hp, vehicle.hpMax, true);
                 CoreSet::VehiclePercent fuel = CoreSet::vehiclePercent(vehicle.fuel, vehicle.fuelMax, false);
-                if (hp.valid) mark.vehicleHPPercent = @(hp.value);
-                if (fuel.valid) mark.vehicleFuelPercent = @(fuel.value);
+                if (hp.valid) { mark.vehicleHPPercent = @(hp.value); ++hpValid; }
+                if (fuel.valid) { mark.vehicleFuelPercent = @(fuel.value); ++fuelValid; }
             }
             [marks addObject:mark];
             observedMarks.push_back({actor, nameIndex, type, position, size_t(match), nameMatch.level,
@@ -511,6 +531,18 @@ static bool CSMPosition(CoreSetReadSession *session, uint64_t generation, uint64
     snapshot.localWeaponID = localWeaponID;
     snapshot.marks = [marks copy];
     snapshot.metroMarks = [metroMarks copy];
+    snapshot.captureCompletedMonotonicSeconds = CACurrentMediaTime();
+    snapshot.readSemanticDiagnostic = [NSString stringWithFormat:
+        @"candidateCounts=capture-pass displayFields=end-reread actors=%d namesMatched=%lu marks=%lu vehicleRequested=%d vehicleCandidates=%lu "
+         "vehicleTyped=%lu vehicleComponentTyped=%lu hpValid=%lu fuelValid=%lu "
+         "openedRequested=%d escapeBoxCandidates=%lu childrenOne=%lu openedRule=children-num-eq1-proxy gameplayOpened=unproven "
+         "levelRequested=%d levelsPresent=%lu metroRequested=%d metroCharacters=%lu metroSlots=%lu metroKnown=%lu metroOnscreen=%lu",
+        actors.count, (unsigned long)namesMatched, (unsigned long)marks.count, includeVehicleStatus,
+        (unsigned long)vehicleCandidates, (unsigned long)vehicleTyped, (unsigned long)vehicleComponentTyped,
+        (unsigned long)hpValid, (unsigned long)fuelValid, includeHideOpenedCrates,
+        (unsigned long)escapeBoxCandidates, (unsigned long)childrenOne, includeCrateLevel,
+        (unsigned long)levelsPresent, includeMetroArmor, (unsigned long)metroCharacters,
+        (unsigned long)metroSlots, (unsigned long)metroKnown, (unsigned long)metroMarks.count];
     return snapshot;
 }
 @end

@@ -28,6 +28,16 @@
       "runtime_insertion": "CoreSetRuntimeCoordinator.recordHomeProducerProbeEvent",
       "scope": "diagnostic-only; no action consumer or progress provider attached",
       "original_runtime_receipt_verified": false
+    },
+    "local_behavior_probe": {
+      "tool": "tools/core_set_v17_local_behavior_probe.py",
+      "source_contract": "tests/core_set_local_behavior_contract_test.py",
+      "math_contract": "tests/core_set_performance_metrics_test.cpp",
+      "source_same_meaning_local_contract_points": ["v17-011", "v17-012", "v17-013", "v17-015", "v17-016", "v17-017", "v17-018", "v17-019", "v17-020", "v17-021", "v17-030", "v17-031", "v17-032", "v17-070", "v17-071", "v17-072", "v17-073", "v17-074", "v17-075", "v17-076", "v17-077", "v17-078", "v17-079", "v17-080", "v17-081", "v17-082"],
+      "remaining_local_or_observation_points": ["v17-004", "v17-005", "v17-006", "v17-007", "v17-008", "v17-014", "v17-022", "v17-023", "v17-024", "v17-025", "v17-026", "v17-027", "v17-028"],
+      "scope": "same-meaning local source contracts for theme/category-navigation/own-process metric quantity; floating menu component and home status are NOT full original producers",
+      "original_runtime_receipt_verified": false,
+      "device_effect_verified": false
     }
   },
   "acceptance_rule": "visible/hittable/configurable/source contract alone never counts as original effect; device evidence and same-meaning consumer receipt are required.",
@@ -43,25 +53,25 @@
     "local_appearance": {
       "source": "lara/views/app/CoreSetMenuViewController.swift",
       "producer": "configureLocalConsumers/appearanceConsumer",
-      "receipt": "observeAppearance; local preference + actual UIView equality; appearanceChannel.receive",
-      "scope": "local UI appearance only",
+      "receipt": "observeAppearance: native-key integer theme + packed RGBA preference readback + actual UIView equality; appearanceChannel.receive token; floating palette preference is not original floating effect",
+      "scope": "same-meaning local theme/default/Float32/persistence source contract; not pixel/device or original floating effect",
       "runtime_device_verified": false,
       "lifecycle": {
         "start": "applyLocalAppearance/prepareApply",
         "update": "configureLocalConsumers appearance apply -> rebuildMenu -> observeAppearance",
-        "stop": "local consumer stop dismisses picker; preferences intentionally retained"
+        "stop": "suspendGameConsumers -> local channel stop token -> observed editor dismissal -> restored/failed; native preferences intentionally retained"
       }
     },
     "local_directory": {
       "source": "lara/views/app/CoreSetMenuViewController.swift",
       "producer": "configureLocalConsumers/directoryConsumer",
-      "receipt": "observeDirectory; selected category/group/tint equality; directoryChannel.receive",
-      "scope": "static local candidate directory only",
+      "receipt": "observeDirectory: actual category selected trait/tint + exact catalog titles/count + typed group view state; directoryChannel.receive token; no accessibility-text parser",
+      "scope": "same-meaning local category index0..12/content switch/scroll reset, preserve group flags; not target item discovery/filter effect",
       "runtime_device_verified": false,
       "lifecycle": {
         "start": "applyLocalDirectory/prepareApply",
         "update": "directory apply -> rebuildMenu -> observeDirectory",
-        "stop": "local consumer stop dismisses picker; local selections retained"
+        "stop": "suspendGameConsumers -> local channel stop token -> observed editor dismissal -> restored/failed; category/group configuration retained"
       }
     },
     "home_observation": {
@@ -79,13 +89,13 @@
     "performance_observation": {
       "source": "lara/views/app/CoreSetMenuViewController.swift",
       "producer": "updatePerformanceObservation",
-      "receipt": "getpid identity + observedAt <=5s + validity flags; no target process metric claim",
-      "scope": "this app metrics only",
+      "receipt": "getpid + observedAt age0..5s + independent cpu/footprint/peak valid flags + displayed UILabel readback; primary nonidle-thread sum only, diagnostic RUSAGE cannot confirm CPU",
+      "scope": "same-meaning own-process metric quantity: Float32 nonidle THREAD_BASIC_INFO sum; TASK_VM_INFO phys_footprint/2^20; process-lifetime CAS peak; original MB label means MiB quantity, explicit own-app unit/scope retained",
       "runtime_device_verified": false,
       "lifecycle": {
         "start": "updatePerformanceObservation",
-        "update": "performanceValues verifies getpid/age/validity",
-        "stop": "stale/invalid sample -> nil display"
+        "update": "serialized sampler -> updatePerformanceObservation -> performanceValues getpid/age/independent validity -> actual UILabel text; no target PID",
+        "stop": "stale/invalid source -> nil per-field display; process-lifetime footprint peak persists in same PID, resets only on PID change"
       }
     },
     "frame_rate": {
@@ -504,13 +514,13 @@
       "",
       false,
       "native-v17/v17-011",
-      "0x1000ccabc / 0x1000ccac0",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "explicit local boolean request; nil not a reference default; original inversion/owner must be separately proved",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000ccabc / 0x1000ccac0 / 0x1000c78d8 / 0x1000cb594 / 0x1000cb794 / 0x10011d434",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "theme global0x100c58868 default0 + NSUserDefaults OKDemo_MenuTheme int0/1; accent OKDemo_MenuAccentColorV1 uint32-packed RGBA",
+      "theme index0 dark/1 light; native integer key; absent-key-only legacy fallback; stop retains preference",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/home"
+      "core_set_v17_native_function_slices.json#/functions/home | tools/core_set_v17_local_behavior_probe.py#theme"
     ],
     [
       "v17-012",
@@ -528,13 +538,13 @@
       "",
       false,
       "native-v17/v17-012",
-      "0x1000ccabc / 0x1000ccac0",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "explicit local boolean request; nil not a reference default; original inversion/owner must be separately proved",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000ccabc / 0x1000ccac0 / 0x1000c78d8 / 0x1000cb594 / 0x1000cb794 / 0x10011d434",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "theme global0x100c58868 default0 + NSUserDefaults OKDemo_MenuTheme int0/1; accent OKDemo_MenuAccentColorV1 uint32-packed RGBA",
+      "theme index0 dark/1 light; native integer key; absent-key-only legacy fallback; stop retains preference",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/home"
+      "core_set_v17_native_function_slices.json#/functions/home | tools/core_set_v17_local_behavior_probe.py#theme"
     ],
     [
       "v17-013",
@@ -552,13 +562,13 @@
       "",
       false,
       "native-v17/v17-013",
-      "0x1000ccaf8 / 0x1000cb81c / 0x1000cb844",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-theme-state: unknown-base+unknown-offset rgba32f/16bytes value; NSUserDefaults: unknown-base+unknown-offset packed-rgba32/unknown-widthbytes value",
-      "finite RGBA0..1; theme alpha forced1; player/material alpha retained; local picker approximation",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000ccaf8 / 0x1000cb81c / 0x1000cb844 / 0x1000c78d8 / 0x1000cb594 / 0x1000cb794 / 0x10011d434",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "theme global0x100c58868 default0 + NSUserDefaults OKDemo_MenuTheme int0/1; accent OKDemo_MenuAccentColorV1 uint32-packed RGBA",
+      "original Float32 default/preset bits0x100c19a88/0x100ac813c; opaque clamp; fused Float32 c*255+0.5 truncate RGBA R-low-byte; load Float32 byte*(1/255); explicit-edit native-key persistence",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#theme-color"
+      "ui-point-evidence.md#theme-color | tools/core_set_v17_local_behavior_probe.py#theme"
     ],
     [
       "v17-014",
@@ -577,12 +587,12 @@
       false,
       "native-v17/v17-014",
       "0x1000ccdfc",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
       null,
-      "text/group descriptor; no click execution or effect",
-      "local-presentation-contract-only / original-effect-unverified",
+      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
+      "same-meaning-menu-component-only / original-floating-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#floating-palette"
+      "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
     [
       "v17-015",
@@ -600,13 +610,13 @@
       "",
       false,
       "native-v17/v17-015",
-      "0x1000cb794",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-theme-state: unknown-base+unknown-offset rgba32f/16bytes value",
-      "seven reference theme RGB tuples/255, alpha1; selected index changes local theme",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000cb794 / 0x1000c78d8 / 0x1000cb594 / 0x1000cb794 / 0x10011d434",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "theme global0x100c58868 default0 + NSUserDefaults OKDemo_MenuTheme int0/1; accent OKDemo_MenuAccentColorV1 uint32-packed RGBA",
+      "original Float32 default/preset bits0x100c19a88/0x100ac813c; opaque clamp; fused Float32 c*255+0.5 truncate RGBA R-low-byte; load Float32 byte*(1/255); explicit-edit native-key persistence",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#theme-presets"
+      "ui-point-evidence.md#theme-presets | tools/core_set_v17_local_behavior_probe.py#theme"
     ],
     [
       "v17-016",
@@ -624,13 +634,13 @@
       "",
       false,
       "native-v17/v17-016",
-      "0x1000cb794",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-theme-state: unknown-base+unknown-offset rgba32f/16bytes value",
-      "seven reference theme RGB tuples/255, alpha1; selected index changes local theme",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000cb794 / 0x1000c78d8 / 0x1000cb594 / 0x1000cb794 / 0x10011d434",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "theme global0x100c58868 default0 + NSUserDefaults OKDemo_MenuTheme int0/1; accent OKDemo_MenuAccentColorV1 uint32-packed RGBA",
+      "original Float32 default/preset bits0x100c19a88/0x100ac813c; opaque clamp; fused Float32 c*255+0.5 truncate RGBA R-low-byte; load Float32 byte*(1/255); explicit-edit native-key persistence",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#theme-presets"
+      "ui-point-evidence.md#theme-presets | tools/core_set_v17_local_behavior_probe.py#theme"
     ],
     [
       "v17-017",
@@ -648,13 +658,13 @@
       "",
       false,
       "native-v17/v17-017",
-      "0x1000cb794",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-theme-state: unknown-base+unknown-offset rgba32f/16bytes value",
-      "seven reference theme RGB tuples/255, alpha1; selected index changes local theme",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000cb794 / 0x1000c78d8 / 0x1000cb594 / 0x1000cb794 / 0x10011d434",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "theme global0x100c58868 default0 + NSUserDefaults OKDemo_MenuTheme int0/1; accent OKDemo_MenuAccentColorV1 uint32-packed RGBA",
+      "original Float32 default/preset bits0x100c19a88/0x100ac813c; opaque clamp; fused Float32 c*255+0.5 truncate RGBA R-low-byte; load Float32 byte*(1/255); explicit-edit native-key persistence",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#theme-presets"
+      "ui-point-evidence.md#theme-presets | tools/core_set_v17_local_behavior_probe.py#theme"
     ],
     [
       "v17-018",
@@ -672,13 +682,13 @@
       "",
       false,
       "native-v17/v17-018",
-      "0x1000cb794",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-theme-state: unknown-base+unknown-offset rgba32f/16bytes value",
-      "seven reference theme RGB tuples/255, alpha1; selected index changes local theme",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000cb794 / 0x1000c78d8 / 0x1000cb594 / 0x1000cb794 / 0x10011d434",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "theme global0x100c58868 default0 + NSUserDefaults OKDemo_MenuTheme int0/1; accent OKDemo_MenuAccentColorV1 uint32-packed RGBA",
+      "original Float32 default/preset bits0x100c19a88/0x100ac813c; opaque clamp; fused Float32 c*255+0.5 truncate RGBA R-low-byte; load Float32 byte*(1/255); explicit-edit native-key persistence",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#theme-presets"
+      "ui-point-evidence.md#theme-presets | tools/core_set_v17_local_behavior_probe.py#theme"
     ],
     [
       "v17-019",
@@ -696,13 +706,13 @@
       "",
       false,
       "native-v17/v17-019",
-      "0x1000cb794",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-theme-state: unknown-base+unknown-offset rgba32f/16bytes value",
-      "seven reference theme RGB tuples/255, alpha1; selected index changes local theme",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000cb794 / 0x1000c78d8 / 0x1000cb594 / 0x1000cb794 / 0x10011d434",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "theme global0x100c58868 default0 + NSUserDefaults OKDemo_MenuTheme int0/1; accent OKDemo_MenuAccentColorV1 uint32-packed RGBA",
+      "original Float32 default/preset bits0x100c19a88/0x100ac813c; opaque clamp; fused Float32 c*255+0.5 truncate RGBA R-low-byte; load Float32 byte*(1/255); explicit-edit native-key persistence",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#theme-presets"
+      "ui-point-evidence.md#theme-presets | tools/core_set_v17_local_behavior_probe.py#theme"
     ],
     [
       "v17-020",
@@ -720,13 +730,13 @@
       "",
       false,
       "native-v17/v17-020",
-      "0x1000cb794",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-theme-state: unknown-base+unknown-offset rgba32f/16bytes value",
-      "seven reference theme RGB tuples/255, alpha1; selected index changes local theme",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000cb794 / 0x1000c78d8 / 0x1000cb594 / 0x1000cb794 / 0x10011d434",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "theme global0x100c58868 default0 + NSUserDefaults OKDemo_MenuTheme int0/1; accent OKDemo_MenuAccentColorV1 uint32-packed RGBA",
+      "original Float32 default/preset bits0x100c19a88/0x100ac813c; opaque clamp; fused Float32 c*255+0.5 truncate RGBA R-low-byte; load Float32 byte*(1/255); explicit-edit native-key persistence",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#theme-presets"
+      "ui-point-evidence.md#theme-presets | tools/core_set_v17_local_behavior_probe.py#theme"
     ],
     [
       "v17-021",
@@ -744,13 +754,13 @@
       "",
       false,
       "native-v17/v17-021",
-      "0x1000cb794",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-theme-state: unknown-base+unknown-offset rgba32f/16bytes value",
-      "seven reference theme RGB tuples/255, alpha1; selected index changes local theme",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000cb794 / 0x1000c78d8 / 0x1000cb594 / 0x1000cb794 / 0x10011d434",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "theme global0x100c58868 default0 + NSUserDefaults OKDemo_MenuTheme int0/1; accent OKDemo_MenuAccentColorV1 uint32-packed RGBA",
+      "original Float32 default/preset bits0x100c19a88/0x100ac813c; opaque clamp; fused Float32 c*255+0.5 truncate RGBA R-low-byte; load Float32 byte*(1/255); explicit-edit native-key persistence",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#theme-presets"
+      "ui-point-evidence.md#theme-presets | tools/core_set_v17_local_behavior_probe.py#theme"
     ],
     [
       "v17-022",
@@ -769,12 +779,12 @@
       false,
       "native-v17/v17-022",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "local palette mapping [6,4,1,0,2,3,5]; full original palette not established",
-      "local-presentation-contract-only / original-effect-unverified",
+      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
+      "same-meaning-menu-component-only / original-floating-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#floating-palette"
+      "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
     [
       "v17-023",
@@ -793,12 +803,12 @@
       false,
       "native-v17/v17-023",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "local palette mapping [6,4,1,0,2,3,5]; full original palette not established",
-      "local-presentation-contract-only / original-effect-unverified",
+      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
+      "same-meaning-menu-component-only / original-floating-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#floating-palette"
+      "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
     [
       "v17-024",
@@ -817,12 +827,12 @@
       false,
       "native-v17/v17-024",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "local palette mapping [6,4,1,0,2,3,5]; full original palette not established",
-      "local-presentation-contract-only / original-effect-unverified",
+      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
+      "same-meaning-menu-component-only / original-floating-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#floating-palette"
+      "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
     [
       "v17-025",
@@ -841,12 +851,12 @@
       false,
       "native-v17/v17-025",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "local palette mapping [6,4,1,0,2,3,5]; full original palette not established",
-      "local-presentation-contract-only / original-effect-unverified",
+      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
+      "same-meaning-menu-component-only / original-floating-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#floating-palette"
+      "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
     [
       "v17-026",
@@ -865,12 +875,12 @@
       false,
       "native-v17/v17-026",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "local palette mapping [6,4,1,0,2,3,5]; full original palette not established",
-      "local-presentation-contract-only / original-effect-unverified",
+      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
+      "same-meaning-menu-component-only / original-floating-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#floating-palette"
+      "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
     [
       "v17-027",
@@ -889,12 +899,12 @@
       false,
       "native-v17/v17-027",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "local palette mapping [6,4,1,0,2,3,5]; full original palette not established",
-      "local-presentation-contract-only / original-effect-unverified",
+      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
+      "same-meaning-menu-component-only / original-floating-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#floating-palette"
+      "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
     [
       "v17-028",
@@ -913,12 +923,12 @@
       false,
       "native-v17/v17-028",
       "0x1000ccf04 / 0x1000ccf18",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound menu swatch/index/persistence component; actual native floating instance/lifecycle/receipt NOT proved",
       "NSUserDefaults: unknown-base+unknown-offset int32/unknown-widthbytes value",
-      "local palette mapping [6,4,1,0,2,3,5]; full original palette not established",
-      "local-presentation-contract-only / original-effect-unverified",
+      "native menu Float32 swatch bits0x100ac813c; mapping[6,4,1,0,2,3,5]; gradient indices0/2; preference/menu component only, not original floating effect",
+      "same-meaning-menu-component-only / original-floating-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-evidence.md#floating-palette"
+      "ui-point-evidence.md#floating-palette | tools/core_set_v17_local_behavior_probe.py#floating"
     ],
     [
       "v17-029",
@@ -963,13 +973,13 @@
       "",
       false,
       "native-v17/v17-030",
-      "0x1000cb8c8 / 0x1000cd274",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-home-snapshot: unknown-base+0x88 float32/4bytes value",
-      "typed observed value; identity/freshness checked; nil is unavailable, never fabricated zero",
-      "local-observation-only / original-effect-unverified",
+      "0x1000cb8c8 / 0x1000cd274 / 0x1000fc86c",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "own-process Float32 globals0x100c52988/0x100c5298c/0x100c52990 -> snapshot+0x88/+0x8c/+0x90",
+      "nonidle THREAD_BASIC_INFO cpu_usage -> Float32 /1000 -> fused *100+sum; own process; %.1f %%; primary valid independent; RUSAGE delta diagnostic-only",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-inventory.json#points[30]"
+      "ui-point-inventory.json#points[30] | tools/core_set_v17_local_behavior_probe.py#performance"
     ],
     [
       "v17-031",
@@ -978,7 +988,7 @@
       "内存占用",
       "updatePerformanceObservation|performanceValues",
       "observation",
-      "performanceSnapshot.residentMiB",
+      "performanceSnapshot.footprintMiB",
       "performance_observation",
       "",
       "",
@@ -987,13 +997,13 @@
       "",
       false,
       "native-v17/v17-031",
-      "0x1000cb8c8 / 0x1000cd290",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-home-snapshot: unknown-base+0x8c float32/4bytes value",
-      "typed observed value; identity/freshness checked; nil is unavailable, never fabricated zero",
-      "local-observation-only / original-effect-unverified",
+      "0x1000cb8c8 / 0x1000cd290 / 0x1000fc86c",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "own-process Float32 globals0x100c52988/0x100c5298c/0x100c52990 -> snapshot+0x88/+0x8c/+0x90",
+      "TASK_VM_INFO.phys_footprint -> Float32 /2^20; native %.1f MB label but MiB quantity; independent footprint valid",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-inventory.json#points[31]"
+      "ui-point-inventory.json#points[31] | tools/core_set_v17_local_behavior_probe.py#performance"
     ],
     [
       "v17-032",
@@ -1002,7 +1012,7 @@
       "内存峰值",
       "updatePerformanceObservation|performanceValues",
       "observation",
-      "performanceSnapshot.peakResidentMiB",
+      "performanceSnapshot.peakFootprintMiB",
       "performance_observation",
       "",
       "",
@@ -1011,13 +1021,13 @@
       "",
       false,
       "native-v17/v17-032",
-      "0x1000cb8c8 / 0x1000cd2ac",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-home-snapshot: unknown-base+0x90 float32/4bytes value",
-      "typed observed value; identity/freshness checked; nil is unavailable, never fabricated zero",
-      "local-observation-only / original-effect-unverified",
+      "0x1000cb8c8 / 0x1000cd2ac / 0x1000fc86c",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "own-process Float32 globals0x100c52988/0x100c5298c/0x100c52990 -> snapshot+0x88/+0x8c/+0x90",
+      "same-PID process-lifetime Float32 CAS max(phys_footprint/2^20); independent peak valid; reset only on PID change",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "ui-point-inventory.json#points[32]"
+      "ui-point-inventory.json#points[32] | tools/core_set_v17_local_behavior_probe.py#performance"
     ],
     [
       "v17-033",
@@ -1938,13 +1948,13 @@
       "",
       false,
       "native-v17/v17-070",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-071",
@@ -1962,13 +1972,13 @@
       "",
       false,
       "native-v17/v17-071",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-072",
@@ -1986,13 +1996,13 @@
       "",
       false,
       "native-v17/v17-072",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-073",
@@ -2010,13 +2020,13 @@
       "",
       false,
       "native-v17/v17-073",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-074",
@@ -2034,13 +2044,13 @@
       "",
       false,
       "native-v17/v17-074",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-075",
@@ -2058,13 +2068,13 @@
       "",
       false,
       "native-v17/v17-075",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-076",
@@ -2082,13 +2092,13 @@
       "",
       false,
       "native-v17/v17-076",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-077",
@@ -2106,13 +2116,13 @@
       "",
       false,
       "native-v17/v17-077",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-078",
@@ -2130,13 +2140,13 @@
       "",
       false,
       "native-v17/v17-078",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-079",
@@ -2154,13 +2164,13 @@
       "",
       false,
       "native-v17/v17-079",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-080",
@@ -2178,13 +2188,13 @@
       "",
       false,
       "native-v17/v17-080",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-081",
@@ -2202,13 +2212,13 @@
       "",
       false,
       "native-v17/v17-081",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-082",
@@ -2226,13 +2236,13 @@
       "",
       false,
       "native-v17/v17-082",
-      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
-      "Core-material-ui-local-global: unknown-base+unknown-offset selected-category-index/unknown-widthbytes value",
-      "local category index0..12; reset scroll, preserve selections; not target item discovery",
-      "local-presentation-contract-only / original-effect-unverified",
+      "0x1000f8e94 / 0x1000f8ec4 / 0x1000fa654 / 0x1000fa660 / 0x1000fa648",
+      "native point callsites + sample-bound local behavior probe; same-meaning local source contract; native/device receipt NOT proved",
+      "native selected-category int32 global0x100c52914; changed flag0x100c52918; current directoryPresentation.category",
+      "category index0..12; local content switch + scroll reset; preserve group flags; actual selected trait/titles/count/typed view-state receipt; no target filtering claim",
+      "same-meaning-local-source-contract / native-device-effect-unverified",
       "carrier-only; NOT feature algorithm/source",
-      "core_set_v17_native_function_slices.json#/functions/material_categories"
+      "core_set_v17_native_function_slices.json#/functions/material_categories | tools/core_set_v17_local_behavior_probe.py#directory"
     ],
     [
       "v17-083",
@@ -3806,7 +3816,7 @@
     "v17-010": {
       "field": "homeSnapshot.downloadedBytes/totalBytes/environmentStage",
       "producer_available": false,
-      "requirement": "原链4010→112d0→QXA107 qx327/qx307:；0x170 snapshot包含phase/inFlight/ready/errorCode及UInt64 bytes(+10/+18)，qm543按generation门禁发布，cancel推进代次。需要同任务的真实OTA provider及完成失败/取消回执；只读诊断接口不充当provider，不用fetchkcache本地复制量替代。"
+      "requirement": "原链4010→112d0→QXA107 qx327/qx307:；0x170 snapshot包含phase/inFlight/ready/errorCode及UInt64 bytes(+10/+18)。新增已回放qm571调用ff24→selector72c640→bfc0，进度block调用cac0/cbd4/d6dc，qm543有22个selector调用点，totalBytes仅generation相等时更新。下一包记录request/epoch/sequence、代次原始位、callback bytes及qm543状态/失败/取消；URL/path/client只记录presence/digest。需要真实同任务OTA provider，不以只读诊断或fetchkcache本地复制量替代。"
     }
   },
   "statistics": {
@@ -3819,6 +3829,8 @@
     "original_action_consumer_missing_points": 35,
     "alternative_aim_preview_points": 7,
     "missing_observation_producers": 2,
+    "source_same_meaning_local_contract_points": 26,
+    "remaining_local_or_observation_points": 13,
     "device_effect_verified_points": 0
   },
   "current_ui_extensions": [

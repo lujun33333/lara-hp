@@ -1,11 +1,68 @@
 #import "CoreSetTargetWriteSession.h"
 #import "CoreSetReadSession.h"
+#import "CoreSetPlayerSnapshot.h"
+#import <QuartzCore/QuartzCore.h>
 #import "CoreSetMappedPageWriteBackend.h"
 #include "CoreSetTargetWriteContract.h"
 #include "CoreSetActionEffectLedger.h"
+#include "CoreSetActionInputReadContract.h"
 #include <array>
 #include <cmath>
 #include <cstring>
+
+@implementation CoreSetActionInputObservation
+- (instancetype)init {
+    if ((self = [super init])) _reason = @"controller-input-not-captured";
+    return self;
+}
++ (instancetype)capture:(CoreSetReadSession *)session snapshot:(CoreSetPlayerSnapshot *)snapshot {
+    CoreSetActionInputObservation *observation = [CoreSetActionInputObservation new];
+    observation->_reason = @"snapshot-battle-input-lease-unavailable";
+    if (!snapshot || !snapshot.battleInputsPresent) return observation;
+    CoreSet::ActionInputReadLease lease;
+    lease.pid = snapshot.processID; lease.imageBase = snapshot.imageBase;
+    lease.generation = snapshot.sessionGeneration; lease.controller = snapshot.controllerAddress;
+    // connect/ready on CoreSetReadSession already validates this exact profile;
+    // this constant is not independently capable of establishing a live lease.
+    lease.uuid = CoreSet::ControlRotationWriteGate::kUUID;
+    uuid_t snapshotBytes = {0}; [snapshot.snapshotID getUUIDBytes:snapshotBytes];
+    memcpy(lease.snapshotID.data(), snapshotBytes, sizeof(snapshotBytes));
+    lease.snapshotCompletedSeconds = snapshot.captureCompletedMonotonicSeconds;
+    lease.capturedControl = {snapshot.controlPitchDegrees, snapshot.controlYawDegrees};
+    auto identity = [&](const CoreSet::ActionInputReadLease &current) {
+        return session.ready && session.processID == current.pid &&
+            session.imageBase == current.imageBase && session.generation == current.generation &&
+            snapshot.processID == current.pid && snapshot.imageBase == current.imageBase &&
+            snapshot.sessionGeneration == current.generation && snapshot.controllerAddress == current.controller;
+    };
+    auto readOnly = [&](uint64_t address, void *output, size_t length) -> size_t {
+        if (length != 8 || (address != lease.controller + 0x620 &&
+                            address != lease.controller + 0x828)) return 0;
+        size_t completed = 0;
+        return [session readAt:address to:output length:length generation:lease.generation
+            completedBytes:&completed error:nullptr] ? completed : 0;
+    };
+    const auto result = CoreSet::observeActionControllerInput(lease, identity, readOnly,
+                                                            [] { return CACurrentMediaTime(); });
+    observation->_complete = result.complete();
+    observation->_inputFingerprint = result.inputFingerprint;
+    observation->_controlBeforeFingerprint = result.controlBeforeFingerprint;
+    observation->_controlAfterFingerprint = result.controlAfterFingerprint;
+    observation->_completedMonotonicSeconds = result.completedSeconds;
+    switch (result.status) {
+        case CoreSet::ActionInputReadStatus::invalidLease: observation->_reason = @"controller-input-lease-or-profile-invalid"; break;
+        case CoreSet::ActionInputReadStatus::invalidClock: observation->_reason = @"local-monotonic-clock-invalid-or-regressed"; break;
+        case CoreSet::ActionInputReadStatus::staleSnapshot: observation->_reason = @"snapshot-stale"; break;
+        case CoreSet::ActionInputReadStatus::identityChanged: observation->_reason = @"snapshot-generation-or-identity-changed"; break;
+        case CoreSet::ActionInputReadStatus::partialInput: observation->_reason = @"RotationInput-f32-pair-read-not-complete"; break;
+        case CoreSet::ActionInputReadStatus::partialControl: observation->_reason = @"ControlRotation-f32-pair-read-not-complete"; break;
+        case CoreSet::ActionInputReadStatus::nonfiniteValue: observation->_reason = @"controller-input-or-control-nonfinite-or-out-of-range"; break;
+        case CoreSet::ActionInputReadStatus::controlChanged: observation->_reason = @"ControlRotation-changed-after-snapshot"; break;
+        case CoreSet::ActionInputReadStatus::observed: observation->_reason = @"typed-controller-input-observed-not-atomic-not-authority"; break;
+    }
+    return observation;
+}
+@end
 
 @implementation CoreSetTargetWriteCleanupResult
 - (instancetype)initWithReadTaskPortReleased:(BOOL)readTaskPortReleased

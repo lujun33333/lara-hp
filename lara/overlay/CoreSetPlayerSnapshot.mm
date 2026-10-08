@@ -3,6 +3,7 @@
 #import "CoreSetWeaponNames.h"
 #import "CoreSetMaterialName.h"
 #import "CoreSetWarningProjection.h"
+#import "CoreSetReadDisplaySemantics.h"
 #import <QuartzCore/QuartzCore.h>
 #import <algorithm>
 #import <array>
@@ -293,6 +294,7 @@ static NSArray<CoreSetBoneSegment *> *CSProjectBones(const CSBoneState &state,
 @property(nonatomic) float controlPitchDegrees;
 @property(nonatomic) float controlYawDegrees;
 @property(nonatomic) double captureCompletedMonotonicSeconds;
+@property(nonatomic, copy) NSString *readSemanticDiagnostic;
 @end
 @implementation CoreSetPlayerSnapshot @end
 
@@ -309,6 +311,18 @@ BOOL CoreSetRadarPoint(CGPoint cameraMinusActor, double cameraYawDegrees,
 BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor, double serverYawDegrees) {
     return CoreSet::warningAngleMatches(cameraMinusActor.x, cameraMinusActor.y,
                                         serverYawDegrees);
+}
+
+NSString *CoreSetReferencePlayerDistanceText(double distance) {
+    const std::string text = CoreSet::referencePlayerDistanceText(distance);
+    return text.empty() ? nil : [NSString stringWithUTF8String:text.c_str()];
+}
+
+NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *weaponName,
+                                       uint32_t weaponID, double distance) {
+    const std::string text = CoreSet::referenceWarningText(playerName.UTF8String, bot,
+        weaponName.UTF8String, weaponID, distance);
+    return text.empty() ? nil : [NSString stringWithUTF8String:text.c_str()];
 }
 
 @implementation CoreSetPlayerCollector
@@ -467,6 +481,9 @@ BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor, double serverYawDegree
     NSMutableArray<CoreSetPlayerMark *> *marks = [NSMutableArray array];
     NSMutableArray<CoreSetGrenadeMark *> *grenadeMarks = [NSMutableArray array];
     NSUInteger observedPlayerCount = 0, observedBotCount = 0;
+    NSUInteger grenadeCandidates = 0, grenadePositionPresent = 0;
+    NSUInteger warningPrimaryValid = 0, warningPrimaryInvalid = 0;
+    NSUInteger nameRequested = 0, namePresent = 0, weaponRequested = 0, weaponKnown = 0;
     uint64_t pointers[512];
     std::vector<uint64_t> observedPointers;
     observedPointers.reserve((size_t)array.count);
@@ -519,10 +536,12 @@ BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor, double serverYawDegree
                     grenadeNames.emplace(nameIndex, grenade);
                 }
                 if (grenade) {
+                    ++grenadeCandidates;
                     CSVector grenadePosition = {0};
                     bool present = false;
                     if (!CSPosition(session, generation, base, actor, &grenadePosition, &present)) return nil;
                     if (present) {
+                        ++grenadePositionPresent;
                         CGPoint point = CGPointZero;
                         double dx = (double)grenadePosition.x - localPosition.x;
                         double dy = (double)grenadePosition.y - localPosition.y;
@@ -601,15 +620,17 @@ BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor, double serverYawDegree
             NSString *playerName = nil;
             if (wantsInformation && !CSPlayerName(session, generation, actor,
                                                    &namePointer, &nameRaw, &playerName)) return nil;
+            if (wantsInformation) { ++nameRequested; if (playerName.length) ++namePresent; }
             CoreSetPlayerMark *mark = [CoreSetPlayerMark new];
             mark.actorAddress = actor; mark.bot = ai != 0;
             mark.healthStatusCode = status;
             mark.playerName = playerName; mark.teamID = team;
             mark.health = health; mark.maximumHealth = maximum;
             if (wantsWeapon) {
+                ++weaponRequested;
                 mark.weaponID = weaponID;
                 const char *name = CoreSet::weaponNameForCanonicalID(weaponID);
-                if (name) mark.weaponName = [NSString stringWithUTF8String:name];
+                if (name) { mark.weaponName = [NSString stringWithUTF8String:name]; ++weaponKnown; }
             }
             mark.center = centerPoint; mark.head = headPoint;
             mark.feet = feetPoint; mark.distanceUnitsDividedBy100 = distance;
@@ -619,8 +640,10 @@ BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor, double serverYawDegree
             if (includeWarningYaw) {
                 float yaw = 0;
                 std::memcpy(&yaw, &warningYawRaw, sizeof(yaw));
-                if (std::isfinite(yaw) && std::fabs(yaw) <= 360.0f)
+                if (std::isfinite(yaw) && std::fabs(yaw) <= 360.0f) {
                     mark.warningServerYawDegrees = @(yaw);
+                    ++warningPrimaryValid;
+                } else ++warningPrimaryInvalid;
             }
             mark.boneSegments = @[];
             if (onScreen && (ai ? botBones : playerBones) &&
@@ -774,6 +797,18 @@ BOOL CoreSetWarningAngleMatches(CGPoint cameraMinusActor, double serverYawDegree
     snapshot.grenadeMarks = [grenadeMarks copy];
     snapshot.observedPlayerCount = observedPlayerCount;
     snapshot.observedBotCount = observedBotCount;
+    snapshot.readSemanticDiagnostic = [NSString stringWithFormat:
+        @"candidateCounts=capture-pass displayFields=end-reread actors=%d marks=%lu players=%lu bots=%lu countScope=positive-health-enemy-draw-range "
+         "grenadeRequested=%d grenadeCandidates=%lu grenadePosition=%lu grenadeOnscreen=%lu "
+         "grenadeTimer=unproven grenadeRadius=unproven grenadeAnimation=unproven "
+         "warningRequested=%d warningPrimaryValid=%lu warningPrimaryInvalid=%lu warningFallback=unproven "
+         "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationLayout=local-subset",
+        array.count, (unsigned long)marks.count, (unsigned long)observedPlayerCount,
+        (unsigned long)observedBotCount, includeGrenadeWarning, (unsigned long)grenadeCandidates,
+        (unsigned long)grenadePositionPresent, (unsigned long)grenadeMarks.count,
+        includeWarningYaw, (unsigned long)warningPrimaryValid, (unsigned long)warningPrimaryInvalid,
+        (unsigned long)nameRequested, (unsigned long)namePresent,
+        (unsigned long)weaponRequested, (unsigned long)weaponKnown];
     return snapshot;
 }
 @end

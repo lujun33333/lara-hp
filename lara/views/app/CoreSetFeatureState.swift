@@ -397,6 +397,37 @@ struct CoreSetRGBA: Equatable {
         self.red = red; self.green = green; self.blue = blue; self.alpha = alpha
     }
     var opaque: CoreSetRGBA { CoreSetRGBA(red: red, green: green, blue: blue, alpha: 1)! }
+    var referenceOpaque: CoreSetRGBA {
+        CoreSetRGBA(red: Double(Float(red)), green: Double(Float(green)), blue: Double(Float(blue)), alpha: 1)!
+    }
+    // v1.7 11d434: Float32 clamp, fused c*255+0.5, truncation; R is low byte.
+    var referencePackedRGBA: UInt32 {
+        func byte(_ value: Double) -> UInt32 { UInt32(Float(0.5).addingProduct(Float(value), 255)) }
+        return byte(red) | byte(green) << 8 | byte(blue) << 16 | byte(alpha) << 24
+    }
+    static func referenceOpaque(packed: UInt32) -> CoreSetRGBA {
+        let scale = Float(bitPattern: 0x3b808081) // cb694..cb69c, Float32 1/255
+        func channel(_ shift: UInt32) -> Double { Double(min(1, Float((packed >> shift) & 255) * scale)) }
+        return CoreSetRGBA(red: channel(0), green: channel(8), blue: channel(16), alpha: 1)!
+    }
+}
+
+enum CoreSetReferenceMenuAppearance {
+    static let themeKey = "OKDemo_MenuTheme"
+    static let accentKey = "OKDemo_MenuAccentColorV1"
+    // Identity-bound Float32 bytes at Core 0x100ac813c; do not round these
+    // through integer RGB labels when applying the local appearance.
+    static let presetBits: [[UInt32]] = [
+        [0x3f2eaeaf, 0x3f0b8b8c, 0x3f149495], [0x3f34b4b5, 0x3eaaaaab, 0x3ebcbcbd],
+        [0x3e888889, 0x3eeeeeef, 0x3f28a8a9], [0x3e68e8e9, 0x3f058586, 0x3ef0f0f1],
+        [0x3efcfcfd, 0x3ec4c4c5, 0x3f2babac], [0x3f35b5b6, 0x3eacacad, 0x3f09898a],
+        [0x3e60e0e1, 0x3f0b8b8c, 0x3f1b9b9c]
+    ]
+    static func preset(_ index: Int) -> CoreSetRGBA {
+        let bits = presetBits[index]
+        return CoreSetRGBA(red: Double(Float(bitPattern: bits[0])), green: Double(Float(bitPattern: bits[1])),
+                          blue: Double(Float(bitPattern: bits[2])), alpha: 1)!
+    }
 }
 
 enum CoreSetRunMode: String { case safe, efficiency } // Reference UI 0/1 is evidenced; runtime strategy is not.
@@ -413,7 +444,7 @@ struct CoreSetHomeSettings: Equatable {
     private(set) var accent: CoreSetRGBA?
     var floatingPalette: CoreSetFloatingPalette?
     var framesPerSecond = CoreSetIntSetting(30...144) // Reference UI model; runtime uses frameRate channel.
-    mutating func setAccent(_ color: CoreSetRGBA?) { accent = color?.opaque }
+    mutating func setAccent(_ color: CoreSetRGBA?) { accent = color?.referenceOpaque }
 }
 
 struct CoreSetFrameRateSettings: Equatable {
@@ -450,8 +481,8 @@ struct CoreSetPerformanceSnapshot: Equatable {
     let processID: Int32
     let observedAt: Date
     let cpuPercent: Double?
-    let residentMiB: Double?
-    let peakResidentMiB: Double?
+    let footprintMiB: Double?
+    let peakFootprintMiB: Double?
 }
 
 enum CoreSetWeaponMode: Int { case image = 0, text = 1 }

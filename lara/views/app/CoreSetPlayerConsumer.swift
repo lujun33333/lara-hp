@@ -24,6 +24,9 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private var expectedImageBase: UInt64?
     private var expectedCapturedAt: Double?
     private var lastCaptureFailure: String?
+    private var expectedReadSemanticDiagnostic: String?
+    private var lastSemanticLogAt: Double = 0
+    private var lastSemanticLogRevision: UInt64?
     private var pendingInvalidation: (token: CoreSetRequestToken, snapshot: UUID,
         generation: UInt64, revision: UInt64, reason: String)?
 
@@ -189,6 +192,8 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.expectedProcessID = snapshot.processID
                 self.expectedImageBase = snapshot.imageBase
                 self.expectedCapturedAt = snapshot.captureCompletedMonotonicSeconds
+                self.expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
+                    " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog"
             }
         }
     }
@@ -291,11 +296,12 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                     text: nil, fontSize: 12)
                     .styled(role: mark.bot ? .botRay : .playerRay))
             }
-            if display.distance == true && mark.distanceUnitsDividedBy100.isFinite {
+            if display.distance == true {
+                guard let text = CoreSetReferencePlayerDistanceText(mark.distanceUnitsDividedBy100) else { return nil }
                 result.append(CoreSetRenderCommand(kind: .text,
                     rect: CGRect(x: feet.x - 40, y: feet.y + 2, width: 80, height: 20),
                     endpoint: .zero, color: color, lineWidth: 0, filled: false,
-                    text: String(format: "%.0f", mark.distanceUnitsDividedBy100), fontSize: 12)
+                    text: text, fontSize: 12)
                     .styled(role: distanceRole))
             }
             if display.weapon.enabled == true && display.weapon.mode == .text,
@@ -433,6 +439,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 return
             }
             if receipt.acceptedByLocalRenderer {
+                logReadSemanticReceipt(receipt)
                 pending.1(pending.0, .applied(observed: settings))
                 refresh?.invalidate()
                 refresh = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in self?.capture() }
@@ -453,10 +460,20 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 clearStaleLane(token: receipt.requestToken,
                     reason: !identityMatches ? "player-receipt-identity-lost" :
                         (!fresh ? "snapshot-stale stage=receipt" : "player-renderer-rejected"))
-            }
+            } else { logReadSemanticReceipt(receipt) }
         } else if activeToken == receipt.requestToken && availability != .ready {
             clearStaleLane(token: receipt.requestToken, reason: "player-receipt-session-unavailable")
         }
+    }
+
+    private func logReadSemanticReceipt(_ receipt: CoreSetLocalFrameReceipt) {
+        guard let diagnostic = expectedReadSemanticDiagnostic else { return }
+        let now = CACurrentMediaTime()
+        guard lastSemanticLogRevision != receipt.configRevision || now - lastSemanticLogAt >= 30 else { return }
+        lastSemanticLogRevision = receipt.configRevision; lastSemanticLogAt = now
+        NSLog("Core-SET: read-semantic lane=player stage=receipt confirmed=1 evidence=local-renderer-frame parity=partial session=%llu pid=%d host=%llu revision=%llu snapshot=%@ scope=%@",
+              session.generation, session.processID, receipt.hostGeneration, receipt.configRevision,
+              receipt.snapshotID.uuidString, diagnostic)
     }
 
     func stop(_ token: CoreSetRequestToken,
@@ -490,6 +507,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         probe?.invalidate(); probe = nil
         refresh?.invalidate(); refresh = nil
         activeToken = nil; pendingApply = nil
+        expectedReadSemanticDiagnostic = nil
         CoreSetWeaponImageCatalog.stop()
         let cleanup = worker.sync { session.disconnect() } // Drain queued connects/captures first.
         return cleanup.taskPortReleased && cleanup.generationAdvanced
