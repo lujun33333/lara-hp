@@ -43,15 +43,18 @@ for token in (
     assert token in app, token
 
 for token in (
-    'CSClass(_process, "SBSAccessibilityWindowHostingController")',
-    'CSSel(_process, "registerWindowWithContextID:atLevel:")',
+    'NSClassFromString(@"SBSAccessibilityWindowHostingController")',
+    'NSSelectorFromString(@"registerWindowWithContextID:atLevel:")',
     "_primary.level = 999998.0",
     "menu.level = 1000000.0",
     "draw.level = 999999.0",
     "primaryReady && menuReady && drawReady",
+    "objc_setAssociatedObject(application, side.associationKey, controller",
+    "objc_getAssociatedObject(application, side.associationKey)",
 ):
     assert token in adapter, token
-assert "CALayerHost" not in adapter
+for forbidden in ("CALayerHost", "RemoteCall", "remote_getClass", "doRemoteCall"):
+    assert forbidden not in adapter, forbidden
 
 for token in (
     'UIImage imageNamed:@"CoreSetLoading"',
@@ -68,11 +71,14 @@ for forbidden in (
     assert forbidden not in owner, forbidden
 for token in (
     "CoreSetFloatingSceneManager.shared().createScenes",
-    "CoreSetRemoteHostingAdapter(remoteCall: process, primaryWindow: primaryWindow)",
+    "CoreSetCore17HostingAdapter(primaryWindow: primaryWindow)",
     "host.startHosted(menuScene: touchScene, drawScene: drawScene",
     "hosting mode=core17-floating-scenes registered=1",
 ):
     assert token in owner, token
+for forbidden in ("prepareSpringBoardHosting", "rcinit(process: \"SpringBoard\"",
+                  "rebuildHostedWindows(process:"):
+    assert forbidden not in owner, forbidden
 
 assert '#define IMGUI_VERSION       "1.92.8"' in imgui
 for token in (

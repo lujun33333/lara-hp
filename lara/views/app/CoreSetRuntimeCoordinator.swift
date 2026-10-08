@@ -173,7 +173,7 @@ final class CoreSetRuntimeCoordinator {
     private let menu = CoreSetMenuViewController()
     private let host = CoreSetHUDHost(hostingAdapter: nil)
     private let metalAdapter = CoreSetMetalRenderAdapter()
-    private var remoteHostingAdapter: CoreSetRemoteHostingAdapter?
+    private var core17HostingAdapter: CoreSetCore17HostingAdapter?
     private var consumer: CoreSetLocalHostConsumer!
     private var playerConsumer: CoreSetPlayerConsumer?
     private var materialConsumer: CoreSetMaterialConsumer?
@@ -483,18 +483,18 @@ final class CoreSetRuntimeCoordinator {
             aimSuspendedForHost = false
         }
         activateAfterAimStop = false
-        if remoteHostingAdapter != nil,
+        if core17HostingAdapter != nil,
            host.localSurfacesReady, !gameLaunchPending {
             host.setApplicationActive(true)
             hostChanged()
             return
         }
         if !host.localSurfacesReady {
-            if remoteHostingAdapter != nil {
+            if core17HostingAdapter != nil {
                 guard !host.cleanupPending, host.installRemoteHostingAdapter(nil) else {
                     publishStatus(); return
                 }
-                remoteHostingAdapter = nil
+                core17HostingAdapter = nil
             }
             if !host.startLocal(in: scene, menuController: menu) {
                 publishStatus(); return
@@ -506,7 +506,7 @@ final class CoreSetRuntimeCoordinator {
         hostChanged()
     }
 
-    // Core 1.7 uses one floating-scene + SpringBoard SBS registration path.
+    // Core 1.7 uses one floating-scene + application-process SBS registration path.
     func launchGame(completion: @escaping (String?) -> Void) {
         precondition(Thread.isMainThread)
         guard !stopping, let scene, scene.activationState == .foregroundActive else {
@@ -518,7 +518,7 @@ final class CoreSetRuntimeCoordinator {
             completion("HUD 退出后的功能恢复未确认，已停止再次启动"); return
         }
         guard !remoteCleanupFailed else {
-            completion("远端清理未确认，请先点“重试清理”"); return
+            completion("context 清理未确认，请先点“重试清理”"); return
         }
         let support = axDeviceSupportStatus()
         guard support.isSupported else {
@@ -531,7 +531,7 @@ final class CoreSetRuntimeCoordinator {
         gameLaunchStatus = "正在准备跨应用悬浮窗"
         publishStatus()
 
-        if remoteHostingAdapter != nil, host.hostedRegistrationReceipt {
+        if core17HostingAdapter != nil, host.hostedRegistrationReceipt {
             showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
             return
         }
@@ -539,74 +539,7 @@ final class CoreSetRuntimeCoordinator {
             finishGameLaunch(epoch: epoch, error: "上次窗口清理尚未确认，请重新打开应用", completion: completion)
             return
         }
-        let manager = laramgr.shared
-        guard !manager.dsrunning else {
-            finishGameLaunch(epoch: epoch, error: "内核环境正在初始化，请稍后重试", completion: completion)
-            return
-        }
-        guard !kernelOffsetsRunning else {
-            finishGameLaunch(epoch: epoch, error: "当前设备内核偏移仍在解析，请稍后重试", completion: completion)
-            return
-        }
-        if !manager.dsready {
-            init_offsets()
-            offsets_init()
-        }
-        manager.run { [weak self] ready in
-            guard let self, self.gameLaunchCurrent(epoch) else { return }
-            guard ready else {
-                self.finishGameLaunch(epoch: epoch, error: "内核环境初始化失败，无法建立跨应用悬浮窗", completion: completion)
-                return
-            }
-            self.prepareKernelOffsets(epoch: epoch, completion: completion)
-        }
-    }
-
-    private func prepareKernelOffsets(epoch: UInt64, completion: @escaping (String?) -> Void) {
-        guard gameLaunchCurrent(epoch) else { return }
-        guard let scene, scene.activationState == .foregroundActive else {
-            finishGameLaunch(epoch: epoch, error: "场景已失活，已取消当前设备内核偏移解析", completion: completion)
-            return
-        }
-        let manager = laramgr.shared
-        if manager.hasOffsets {
-            CoreSetKernelInformationOwner.shared.publishCachedValidation()
-            prepareSpringBoardHosting(epoch: epoch, completion: completion)
-            return
-        }
-        kernelOffsetsRunning = true
-        CoreSetKernelInformationOwner.shared.beginResolve()
-        gameLaunchStatus = "正在获取并解析当前设备内核偏移"
-        NSLog("Core-SET: game launch epoch=%llu stage=kernel-offsets start", epoch)
-        publishStatus()
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let fetched = fetchkcache()
-            if fetched { CoreSetKernelInformationOwner.shared.didResolveArtifact() }
-            else { CoreSetKernelInformationOwner.shared.failValidation("kernelcache 获取失败") }
-            let loaded = fetched && dlkcache()
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.kernelOffsetsRunning = false
-                manager.hasOffsets = loaded
-                if loaded { CoreSetKernelInformationOwner.shared.completeValidation() }
-                else if fetched { CoreSetKernelInformationOwner.shared.failValidation("本机内核偏移验证失败") }
-                NSLog("Core-SET: game launch epoch=%llu stage=kernel-offsets fetched=%d resolved=%d",
-                      epoch, fetched ? 1 : 0, loaded ? 1 : 0)
-                guard self.gameLaunchCurrent(epoch) else { return }
-                guard loaded else {
-                    self.finishGameLaunch(epoch: epoch,
-                        error: fetched ? "当前设备内核偏移解析失败" : "当前设备 kernelcache 获取失败",
-                        completion: completion)
-                    return
-                }
-                self.prepareSpringBoardHosting(epoch: epoch, completion: completion)
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(180)) { [weak self] in
-            guard let self, self.gameLaunchCurrent(epoch), self.kernelOffsetsRunning else { return }
-            self.finishGameLaunch(epoch: epoch,
-                error: "当前设备内核偏移解析超时；后台任务结束前请勿重试", completion: completion)
-        }
+        prepareCore17Hosting(epoch: epoch, completion: completion)
     }
 
     private func gameLaunchCurrent(_ epoch: UInt64) -> Bool {
@@ -619,7 +552,7 @@ final class CoreSetRuntimeCoordinator {
               stage, epoch, remoteDecision, scene?.activationState.rawValue ?? -1,
               UIApplication.shared.applicationState.rawValue,
               host.hostingDiagnosticSnapshot(),
-              remoteHostingAdapter?.hostingDiagnosticSnapshot() ?? "adapter-not-installed")
+              core17HostingAdapter?.hostingDiagnosticSnapshot() ?? "adapter-not-installed")
     }
 
     func recordSceneLifecycle(_ event: String, scene eventScene: UIScene) {
@@ -645,42 +578,15 @@ final class CoreSetRuntimeCoordinator {
         (finishedCompletion ?? completion)(error)
     }
 
-    private func prepareSpringBoardHosting(epoch: UInt64, completion: @escaping (String?) -> Void) {
+    private func prepareCore17Hosting(epoch: UInt64, completion: @escaping (String?) -> Void) {
         guard gameLaunchCurrent(epoch), let scene, scene.activationState == .foregroundActive else {
             finishGameLaunch(epoch: epoch, error: "场景已失活，已取消跨应用托管", completion: completion)
             return
         }
-        let manager = laramgr.shared
-        if manager.rcready, let process = manager.sbProc {
-            rebuildHostedWindows(process: process, epoch: epoch, completion: completion)
-            return
-        }
-        guard !manager.rcrunning else {
-            finishGameLaunch(epoch: epoch, error: "SpringBoard 远程会话正在初始化，请稍后重试", completion: completion)
-            return
-        }
-        gameLaunchStatus = "正在初始化 SpringBoard 远程会话"
-        NSLog("Core-SET: game launch epoch=%llu stage=springboard-rc start", epoch)
-        publishStatus()
-        manager.rcinit(process: "SpringBoard", migbypass: false) { [weak self] success in
-            guard let self, self.gameLaunchCurrent(epoch) else { return }
-            NSLog("Core-SET: game launch epoch=%llu stage=springboard-rc ready=%d",
-                  epoch, success ? 1 : 0)
-            guard success, let process = manager.sbProc else {
-                let detail = manager.rcLastError ?? "远程调用初始化失败"
-                self.finishGameLaunch(epoch: epoch, error: "SpringBoard 托管不可用：\(detail)", completion: completion)
-                return
-            }
-            self.rebuildHostedWindows(process: process, epoch: epoch, completion: completion)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(180)) { [weak self] in
-            guard let self, self.gameLaunchCurrent(epoch), manager.rcrunning else { return }
-            self.finishGameLaunch(epoch: epoch,
-                error: "SpringBoard 远程会话初始化超时；后台任务结束前请勿重试", completion: completion)
-        }
+        rebuildHostedWindows(epoch: epoch, completion: completion)
     }
 
-    private func rebuildHostedWindows(process: RemoteCall, epoch: UInt64,
+    private func rebuildHostedWindows(epoch: UInt64,
                                       completion: @escaping (String?) -> Void) {
         guard gameLaunchCurrent(epoch), let scene, scene.activationState == .foregroundActive else {
             finishGameLaunch(epoch: epoch, error: "场景已失活，已取消跨应用托管", completion: completion)
@@ -690,13 +596,7 @@ final class CoreSetRuntimeCoordinator {
             finishGameLaunch(epoch: epoch, error: "Core 1.7 主窗口 context 不可用", completion: completion)
             return
         }
-        let adapter = CoreSetRemoteHostingAdapter(remoteCall: process, primaryWindow: primaryWindow)
-        if let reason = adapter.sessionIdentityFailureReason {
-            let detail = "SpringBoard 会话身份未通过核对：\(reason)"
-            globallogger.log("Core-SET: \(detail)")
-            finishGameLaunch(epoch: epoch, error: detail, completion: completion)
-            return
-        }
+        let adapter = CoreSetCore17HostingAdapter(primaryWindow: primaryWindow)
         CoreSetFloatingSceneManager.shared().createScenes { [weak self] touchScene, drawScene in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
             guard let touchScene, let drawScene else {
@@ -721,7 +621,7 @@ final class CoreSetRuntimeCoordinator {
                     self.finishGameLaunch(epoch: epoch, error: "Core 1.7 SBS 适配器安装失败", completion: completion)
                     return
                 }
-                self.remoteHostingAdapter = adapter
+                self.core17HostingAdapter = adapter
                 self.remoteCleanupFailed = false
                 guard self.host.startHosted(menuScene: touchScene, drawScene: drawScene,
                     menuController: self.menu, completion: { [weak self] registered in
@@ -779,10 +679,10 @@ final class CoreSetRuntimeCoordinator {
                 guard result.complete.boolValue, !self.host.cleanupPending else {
                     self.remoteCleanupFailed = true
                     self.finishGameLaunch(epoch: epoch,
-                        error: "\(error)；远端清理回执未确认，已保留句柄", completion: completion)
+                        error: "\(error)；context 清理回执未确认，已保留控制器", completion: completion)
                     return
                 }
-                self.remoteHostingAdapter = nil
+                self.core17HostingAdapter = nil
                 self.menu.setHostedExitAvailable(false)
                 if self.host.installRemoteHostingAdapter(nil), let scene = self.scene,
                    scene.activationState == .foregroundActive,
@@ -796,13 +696,12 @@ final class CoreSetRuntimeCoordinator {
         }
     }
 
-    // The launcher button explicitly retries a failed remote cleanup once.
-    // No background timer or lifecycle notification replays remote writes.
+    // The launcher button explicitly retries a failed context cleanup once.
     func retryRemoteCleanup(completion: @escaping (String?) -> Void) {
         precondition(Thread.isMainThread)
         guard remoteCleanupFailed, !returnToLocalPending, !stopping,
               scene?.activationState == .foregroundActive else {
-            completion("当前没有可重试的远端清理任务"); return
+            completion("当前没有可重试的 context 清理任务"); return
         }
         remoteCleanupFailed = false
         returnToLocalPending = true
@@ -815,15 +714,15 @@ final class CoreSetRuntimeCoordinator {
                 guard result.complete.boolValue, !self.host.cleanupPending else {
                     self.remoteCleanupFailed = true
                     self.publishStatus()
-                    completion("远端清理仍未确认，已保留句柄；不会自动重试")
+                    completion("context 清理仍未确认，已保留控制器；不会自动重试")
                     return
                 }
-                self.remoteHostingAdapter = nil
+                self.core17HostingAdapter = nil
                 guard self.host.installRemoteHostingAdapter(nil), let scene = self.scene,
                       scene.activationState == .foregroundActive,
                       self.host.startLocal(in: scene, menuController: self.menu) else {
                     self.publishStatus()
-                    completion("远端已清理，但本应用窗口恢复失败")
+                    completion("context 已清理，但本应用窗口恢复失败")
                     return
                 }
                 self.host.setApplicationActive(true)
@@ -842,11 +741,11 @@ final class CoreSetRuntimeCoordinator {
     }
 
     // The visible "退出 HUD" control must own actual stop receipts. Hiding the
-    // panel alone leaves the source windows and remote mirror installed.
+    // panel alone leaves the source windows and hosting controllers installed.
     private func exitHostedHUD() {
         precondition(Thread.isMainThread)
         guard !stopping, !returnToLocalPending,
-              remoteHostingAdapter != nil else { return }
+              core17HostingAdapter != nil else { return }
         returnToLocalPending = true
         if gameLaunchPending {
             // WZ cancels the current launch generation before HUD teardown.
@@ -880,7 +779,7 @@ final class CoreSetRuntimeCoordinator {
                 NSLog("Core-SET: hosted input stage=exit-hud cleanupConfirmed=0")
                 return
             }
-            self.remoteHostingAdapter = nil
+            self.core17HostingAdapter = nil
             let channelsResumed = self.menu.resumeGameConsumers() &&
                 self.menu.resumeMenuHostConsumer()
             self.exitHUDRestorationPending = !channelsResumed
@@ -1019,9 +918,9 @@ final class CoreSetRuntimeCoordinator {
         let renderer = host.activeBackend == CoreSetHUDBackendMetal ? "Metal" : "CA"
         let frame = host.lastConsumedSequence > 0 ? "\(renderer) 本地帧已消费" : "\(renderer) 本地帧未确认"
         // UI status is a structural registration receipt, never a live pixel
-        // or touch claim. Launch and post-open gates call a real async readback.
+        // or touch claim.
         let remoteHosted = host.hostedRegistrationReceipt
-        let hosting = remoteHosted ? "跨应用注册回执有效" : "跨应用 unavailable"
+        let hosting = remoteHosted ? "Core 1.7 context 已注册" : "Core 1.7 context 未注册"
         let cleanup = host.cleanupPending ? " · 清理待确认" : ""
         let launch = gameLaunchStatus.map { " · \($0)" } ?? ""
         launcher?.updateRuntimePresentation(menuVisible: host.panelVisible,
@@ -1038,7 +937,7 @@ final class CoreSetRuntimeCoordinator {
     }
 
     private func stopAudioAfterSceneTeardownIfReady() {
-        // A failed remote cleanup retains its owner for explicit retry. It
+        // A failed context cleanup retains its owner for explicit retry. It
         // must not keep audio running once every scene has finished trying to
         // stop; an in-flight cleanup still gets time to return its receipt.
         guard Self.retained.values.allSatisfy({
@@ -1047,8 +946,8 @@ final class CoreSetRuntimeCoordinator {
         CoreSetBackgroundAudio.shared.stop()
     }
 
-    // Local disarm/hide is immediate. Remote mirror cleanup is best-effort on
-    // the adapter's serial worker; termination does not wait for its callback.
+    // Local disarm/hide is immediate. Associated controllers are released by
+    // the adapter before UIKit detaches its source windows.
     @discardableResult
     func stop() -> CoreSetHUDStopResult {
         precondition(Thread.isMainThread)

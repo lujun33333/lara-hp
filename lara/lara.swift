@@ -60,9 +60,8 @@ final class LaraAppDelegate: UIResponder, UIApplicationDelegate {
                 CFRunLoopStop(CFRunLoopGetMain())
             }
         }
-        // Match the working WZ exit contract: keep the main run loop alive so
-        // hosted-window callbacks finish before the process owning the active
-        // SpringBoard exception/RemoteCall session disappears.
+        // Keep the main run loop alive until the remaining feature session
+        // and floating-scene ownership have completed their shutdown callbacks.
         while !finished { CFRunLoopRun() }
         CoreSetBackgroundAudio.shared.stop()
         NSLog("Core-SET: shutdown stage=complete")

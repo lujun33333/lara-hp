@@ -5,7 +5,7 @@
 #include <cmath>
 
 // Match the source-window tier used by the working WZ dual-window host and
-// by the SpringBoard mirrors in CoreSetRemoteHostingAdapter.
+// by the Core 1.7 application-process hosting controllers.
 static const double kCoreSetHUDWindowLevel = 10000009.0;
 static BOOL CoreSetHostedOrientationValid(UIInterfaceOrientation value) {
     return value == UIInterfaceOrientationPortrait ||
@@ -325,8 +325,7 @@ static CGFloat CoreSetHostedOrientationAngle(UIInterfaceOrientation value) {
                 host->_drawWindow != draw) { completion(NO); return; }
             host->_menuRegistered = NO; host->_drawRegistered = NO;
             host->_hostedReadbackGeneration = 0;
-            // Keep WZ's source/context and its local UIKit hit-test policy;
-            // SpringBoard's mirror remains non-interactive.
+            // Keep the source contexts and their local UIKit hit-test policy.
             [CATransaction flush];
             host->_adapter = adapter;
             [host layoutSurfaces];
@@ -568,7 +567,7 @@ static CGFloat CoreSetHostedOrientationAngle(UIInterfaceOrientation value) {
                     [host->_adapter hostGeneration] == generation;
                 host->_menuRegistered = current; host->_drawRegistered = current;
                 host->_hostedReadbackGeneration = current ? generation : 0;
-                if (!current) [host fail:6 message:@"Asynchronous remote registration/readback failed" error:nil];
+                if (!current) [host fail:6 message:@"Core 1.7 context registration failed" error:nil];
                 [host selectBackend]; [host publishState];
                 hostedCompletion(current);
             }];
@@ -758,8 +757,8 @@ static CGFloat CoreSetHostedOrientationAngle(UIInterfaceOrientation value) {
             CoreSetHUDStopResult pending = {YES, !_menuCleanupNeeded, !_drawCleanupNeeded, NO};
             return pending;
         }
-        // Termination/disconnect cannot wait for a RemoteCall. Disarm and hide
-        // immediately, enqueue best-effort cleanup, retain handles on failure.
+        // Termination/disconnect disarms and hides immediately, then releases
+        // the application-process hosting controllers.
         [self stopHostedAsync:^(__unused CoreSetHUDStopResult result) {}];
         CoreSetHUDStopResult pending = {YES, NO, NO, NO};
         return pending;
@@ -821,7 +820,7 @@ static CGFloat CoreSetHostedOrientationAngle(UIInterfaceOrientation value) {
             host->_hostedAsyncStopPending = NO;
             if (!menuRemoved || !drawRemoved) {
                 host->_hostedCleanupFailed = YES;
-                [host fail:13 message:@"Asynchronous remote cleanup unconfirmed; handles retained" error:nil];
+                [host fail:13 message:@"Core 1.7 context cleanup unconfirmed; handles retained" error:nil];
                 CoreSetHUDStopResult incomplete = {YES, menuRemoved, drawRemoved, NO};
                 [host publishState];
                 NSArray *waiters = [host->_hostedAsyncStopWaiters copy];
@@ -829,8 +828,8 @@ static CGFloat CoreSetHostedOrientationAngle(UIInterfaceOrientation value) {
                 for (id waiter in waiters) ((void (^)(CoreSetHUDStopResult))waiter)(incomplete);
                 return;
             }
-            // Remote handles are gone. The existing local stop now performs
-            // only UIKit detach; it cannot make a RemoteCall on this path.
+            // Hosting controllers are gone. The existing local stop now
+            // performs only UIKit detach.
             const CoreSetHUDStopResult result = [host stop];
             NSArray *waiters = [host->_hostedAsyncStopWaiters copy];
             [host->_hostedAsyncStopWaiters removeAllObjects];

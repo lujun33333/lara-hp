@@ -86,7 +86,7 @@ def validate_owner(text):
     assert "playerConsumer?.consumed(receipt)" in owner
     need(swift(owner, "activate"), "guard !stopping, let scene", "host.startLocal(in: scene, menuController: menu)")
     need(swift(owner, "hostChanged"), "submittedGeneration != host.renderGeneration", "generation: host.renderGeneration, sequence: 1", "commands: []")
-    need(swift(owner, "publishStatus"), "host.lastConsumedSequence > 0", "跨应用 unavailable")
+    need(swift(owner, "publishStatus"), "host.lastConsumedSequence > 0", "Core 1.7 context 未注册")
     stop = swift(owner, "stop")
     need(stop, "precondition(Thread.isMainThread)", "if stopping, let result = lastStopResult", "stopReceiptsPending = true",
          "let result = host.stop()", "menu.suspendGameConsumers", "menu.suspendMenuHostConsumer", "self.stopReceiptsPending = false",
@@ -220,11 +220,11 @@ need(coordinator, "aimConsumer = CoreSetAimConsumer(coordinator: self)")
 need(aim_consumer, "CoreSetIsolatedWriteProbe", "includeBattleInputs: true",
      "result.committed", "cleanup.complete")
 need(feature_state, "case basicAimScene")
-need(launch, "axDeviceSupportStatus()", "init_offsets()", "offsets_init()", "manager.run", "prepareKernelOffsets")
+need(launch, "axDeviceSupportStatus()", "prepareCore17Hosting")
 for forbidden in ("foregroundInputProbeConfirmed", "foregroundProbeSourcesDetached",
                   "rejectForegroundProbe", "armForegroundInputProbe", ".milliseconds(120)"):
     assert forbidden not in launch + header + host, forbidden
-assert launch.index("axDeviceSupportStatus()") < launch.index("gameLaunchPending = true") < launch.index("init_offsets()")
+assert launch.index("axDeviceSupportStatus()") < launch.index("gameLaunchPending = true") < launch.index("prepareCore17Hosting")
 stop_body = objc(host, "stop")
 need(stop_body, "[self invalidateFrames]", "_drawRegistered = NO; _menuRegistered = NO;")
 assert stop_body.index("_drawWindow.hidden = YES; _menuWindow.hidden = YES;") < stop_body.index("[CATransaction flush];")
@@ -234,13 +234,14 @@ need(start_host, "_drawWindow = [[CoreSetDrawWindow alloc] initWithWindowScene:d
      "_menuWindow = [[CoreSetMenuWindow alloc] initWithWindowScene:menuScene]", "[self invalidateFrames]")
 assert start_host.index("[self invalidateFrames]") < start_host.index("_drawWindow = [[CoreSetDrawWindow alloc]")
 assert "ForegroundTouchCalibration" not in launch
-assert launch.index("axDeviceSupportStatus()") < launch.index("init_offsets()") < launch.index("offsets_init()") < launch.index("manager.run") < launch.index("prepareKernelOffsets")
-kernel_offsets = swift(coordinator, "prepareKernelOffsets")
-need(kernel_offsets, "fetchkcache()", "fetched && dlkcache()", "manager.hasOffsets = loaded", "prepareSpringBoardHosting", ".seconds(180)")
-assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && dlkcache()") < kernel_offsets.index("manager.hasOffsets = loaded") < kernel_offsets.index("guard loaded else") < kernel_offsets.rindex("prepareSpringBoardHosting")
+assert launch.index("axDeviceSupportStatus()") < launch.index("prepareCore17Hosting")
+for forbidden in ("manager.run", "prepareKernelOffsets"):
+    assert forbidden not in launch, forbidden
+for forbidden in ("prepareSpringBoardHosting", "rcinit(process: \"SpringBoard\""):
+    assert forbidden not in coordinator, forbidden
 remote = swift(coordinator, "rebuildHostedWindows")
 need(remote, "CoreSetFloatingSceneManager.shared().createScenes", "host.startHosted(menuScene: touchScene, drawScene: drawScene",
-     "CoreSetRemoteHostingAdapter(remoteCall: process, primaryWindow: primaryWindow)")
+     "CoreSetCore17HostingAdapter(primaryWindow: primaryWindow)")
 for forbidden in ("CoreSetLocalHostingAdapter", "verifyHostedWindows", "confirmHostedReadbackAsync"):
     assert forbidden not in coordinator
 action_stop = swift(menu, "suspendActionConsumers")
@@ -276,14 +277,16 @@ need(swift(launcher, "launchApplication"),
      "error != CoreSetRuntimeCoordinator.sceneEndedLaunchReason")
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
 need(remote_adapter, "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
-     "_primary.level = 999998.0", "menu.level = 1000000.0", "draw.level = 999999.0")
-assert "CALayerHost" not in remote_adapter
+     "_primary.level = 999998.0", "menu.level = 1000000.0", "draw.level = 999999.0",
+     "objc_setAssociatedObject", "objc_getAssociatedObject")
+for forbidden in ("CALayerHost", "RemoteCall", "remote_getClass", "doRemoteCall"):
+    assert forbidden not in remote_adapter, forbidden
 open_game = swift(coordinator, "showHostedMenuAndOpenGame")
 need(open_game, "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication")
 assert "confirmHostedReadbackAsync" not in open_game
 assert "CoreSetGameTarget.openApplication" not in swift(launcher, "launchApplication")
 need(swift(launcher, "launchApplication"), "coreSetRuntime.launchGame")
-print("PASS: D1 project/owner/host contracts and game launch gated by observed dual-window hosting; source only")
+print("PASS: D1 project/owner/host contracts and Core 1.7 local SBS context registration; source only")
 print("LIMIT: no Swift/ObjC/UIKit compile, cross-app physical touch or device lifecycle execution")
 for name in paths:
     print(name + "=" + hashlib.sha256((ROOT / name).read_bytes()).hexdigest())

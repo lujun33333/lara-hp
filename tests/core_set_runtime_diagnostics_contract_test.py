@@ -120,8 +120,11 @@ for forbidden in ("BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation"):
 for contract in (
     "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
     "_primary.level = 999998.0", "menu.level = 1000000.0", "draw.level = 999999.0",
+    "objc_setAssociatedObject", "objc_getAssociatedObject",
 ):
     assert contract in adapter, contract
+for forbidden in ("RemoteCall", "remote_getClass", "doRemoteCall"):
+    assert forbidden not in adapter, forbidden
 for contract in ("FBSceneManager", "-touchFloating", "-noTouchFloating"):
     assert contract in scenes, contract
 
@@ -136,10 +139,11 @@ for contract in (
 
 # Negative controls: silently removing a target or host boundary must make this
 # test logic reject the source.
-for missing in ("task-read-denied", "main-image-or-uuid-not-found", "SBSAccessibilityWindowHostingController"):
-    combined = session + adapter
+for missing in ("task-read-denied", "main-image-or-uuid-not-found"):
+    combined = session
     assert missing in combined
     assert missing not in combined.replace(missing, "REMOVED", 1)
+assert "SBSAccessibilityWindowHostingController" in adapter
 
 print("PASS: target read stages, consumer labels, truthful manifest and Core 1.7 scene/SBS diagnostics")
 print("LIMIT: source contract only; requires a fresh device log for runtime closure")

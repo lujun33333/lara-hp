@@ -28,10 +28,8 @@ typedef NS_ENUM(NSInteger, CoreSetHostedPointerPhase) {
 @property(nonatomic, readonly) uint64_t hostedMenuRevision;
 @end
 
-// Integration may implement this with the application's existing RemoteCall.
-// Registration must return an observed result; a queued request is not success.
-// A failed registration must either leave no resource or allow unregister to
-// retry cleanup for the same window. This module never creates a RemoteCall.
+// Core 1.7 registration is performed in the application process. A failed
+// registration must leave no retained controller or allow explicit cleanup.
 @protocol CoreSetHUDHostingAdapter <NSObject>
 - (void)registerBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
                          completion:(void (^)(BOOL observed, uint64_t generation))completion;
@@ -42,8 +40,7 @@ typedef NS_ENUM(NSInteger, CoreSetHostedPointerPhase) {
 - (void)prepareForHostGeneration:(uint64_t)generation;
 - (uint64_t)hostGeneration;
 - (BOOL)localSurfacesStillPublished;
-// Captures local UIKit context on the main thread, then verifies remote
-// mirrors on a serialized worker and completes on the main thread.
+// Verifies the three local controller associations and source contexts.
 - (void)observeBothSurfacesAsync:(void (^)(BOOL observed, uint64_t generation))completion;
 @end
 
@@ -57,7 +54,7 @@ typedef struct CoreSetHUDStopResult {
 @interface CoreSetHUDHost : NSObject
 @property(atomic, readonly) uint64_t generation;
 // Local geometry and frame provenance. A pure orientation change advances
-// this token without replacing the remote source/context generation.
+// this token without replacing the source/context generation.
 @property(atomic, readonly) uint64_t renderGeneration;
 @property(nonatomic, readonly) BOOL localSurfacesReady;
 @property(nonatomic, readonly) CGSize logicalCanvasSize;
@@ -67,7 +64,7 @@ typedef struct CoreSetHUDStopResult {
 @property(nonatomic, readonly) BOOL hostedInputMonitorArmed;
 // Compatibility boundary; Core 1.7 has no extra readback worker.
 - (void)whenHostedReadbackIdle:(dispatch_block_t)completion;
-// Cached local state only. Does not call the remote readback gate.
+// Cached local state only. Does not start another registration.
 - (NSString *)hostingDiagnosticSnapshot;
 @property(nonatomic, readonly) BOOL cleanupPending;
 @property(nonatomic, readonly) BOOL hostedCleanupInFlight;
@@ -101,12 +98,11 @@ typedef struct CoreSetHUDStopResult {
 // Attach the first hosting tier to the already visible system source windows.
 - (void)attachHostingAdapter:(id<CoreSetHUDHostingAdapter>)adapter
                  completion:(void (^)(BOOL registered))completion;
-// Local SBS failure may switch to SpringBoard while retaining both UIWindow
-// source contexts. Completion is a registration receipt, not device visibility.
+// Retains both UIWindow source contexts while replacing an adapter.
 - (void)transitionToRemoteHostingAdapter:(id<CoreSetHUDHostingAdapter>)adapter
                               completion:(void (^)(BOOL registered))completion;
 // All lifecycle methods require the main thread. Local-only start is supported;
-// Remote registration remains false until its async worker returns a receipt.
+// hosted registration remains false until the adapter returns a receipt.
 - (BOOL)startInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
               error:(NSError * _Nullable * _Nullable)error;
 // Explicit Swift boundary: do not depend on NSError importer heuristics.
@@ -143,8 +139,7 @@ typedef struct CoreSetHUDStopResult {
 // The owner must call stop before releasing the host, and retain it while
 // cleanupPending is true so failed adapter cleanup can be retried explicitly.
 - (CoreSetHUDStopResult)stop;
-// Detaches the local owner only after both remote sides finish their serialized
-// cleanup. The caller may start a normal local owner on complete == YES.
+// Detaches the local owner only after all associated controllers are released.
 - (void)stopHostedAsync:(void (^)(CoreSetHUDStopResult result))completion;
 @end
 
