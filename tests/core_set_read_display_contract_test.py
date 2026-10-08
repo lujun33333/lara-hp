@@ -193,6 +193,25 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertIn("localInActorArrayAfter", self.collector)
         self.assertIn("no-renderable-output coreAccepted=", self.collector)
 
+    def test_kernel_mapped_capture_coalesces_page_and_bone_reads_without_cross_capture_state(self) -> None:
+        cached = body(self.collector, "static bool CSCaptureRead(")
+        for token in ("CSCaptureReadPageSize = 0x4000", "address & ~(uint64_t)(CSCaptureReadPageSize - 1)",
+                      "CSRead(session, generation, page, entry.bytes.data(), entry.bytes.size())",
+                      "std::memcpy(output, found->bytes.data() + offset, length)"):
+            self.assertIn(token, self.collector if token == "CSCaptureReadPageSize = 0x4000" else cached)
+        self.assertNotIn("static CSCaptureReadCache", self.collector)
+        reread = body(self.collector, "static bool CSReadCorePlayerState(")
+        self.assertGreaterEqual(reread.count("CSCaptureReadValue("), 10)
+        bones = body(self.collector, "static bool CSReadBoneState(")
+        self.assertIn("std::vector<uint8_t> transforms((size_t)array.count * 0x30)", bones)
+        self.assertIn("CSRead(session, generation, array.data, transforms.data(), transforms.size())", bones)
+        sample_loop = bones[bones.index("for (unsigned edge = 0; edge < 28; ++edge)"):]
+        self.assertNotIn("array.data + (uint64_t)index * 0x30", sample_loop)
+        self.assertIn("finalActorObservations.find(count.address)", self.collector)
+        self.assertIn("knownComponent", self.collector)
+        self.assertIn("phasePlayers=", self.collector)
+        self.assertIn("phaseBones=", self.collector)
+
     def test_zero_health_extension_is_count_only_and_has_lifecycle_reread(self) -> None:
         for scoped in ("CoreSet::playerCountEligible(health, maximum, countStatus)",
                        "actor + 0x3be0, &state->status",
@@ -243,9 +262,10 @@ class ReadDisplayContracts(unittest.TestCase):
         for gate in ("state->registered & 4", "state->flags", "state->callback != base + CSPositionCallbackRVA",
                      "CoreSet::decodePositionBlock", "array.count > 256", "state->edges[edge] >= array.count"):
             self.assertIn(gate, bones)
-        for stable in ("CSReadBoneState(session, generation, base, bone.actor, &after, &present)",
-                       "CSProjectBones(after, cameraAfter, size)",
-                       "CSProjectBoneHead(after, cameraAfter, size, &top, &headIndex)"):
+        for stable in ("CSReadBoneState(session, generation, base, bone.actor,",
+                       "finalBoneObservations.push_back",
+                       "CSProjectBones(bone.state, cameraAfter, size)",
+                       "CSProjectBoneHead(bone.state, cameraAfter, size, &top, &headIndex)"):
             self.assertIn(stable, self.collector)
         self.assertIn("mark.head = top; mark.headBoneIndex = @(headIndex)", self.collector)
         self.assertIn("headScope=requested-bones-only headParity=partial", self.collector)

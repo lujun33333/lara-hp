@@ -141,7 +141,8 @@ for filename in ("CoreSetAimConsumer.swift", "CoreSetRecoilConsumer.swift"):
 
 # An unrelated observation cannot destroy the pointer between down and up.
 rebuild = body(menu, "private func rebuildMenu(")
-assert rebuild.index("hostedPointerID != nil && hostedDispatchControlID == nil") < rebuild.index("hostedMenuRevision &+= 1")
+for gate in ("hostedPointerID != nil", "hostedDispatchControlID != nil", "trackingUIKitSlider != nil"):
+    assert rebuild.index(gate) < rebuild.index("hostedMenuRevision &+= 1")
 register = body(menu, "private func registerHosted(")
 assert "slider.isContinuous = false" in register
 assert "beginUIKitSliderTracking" in register and "endUIKitSliderTracking" in register
@@ -150,6 +151,7 @@ native_end = body(menu, "@objc private func endUIKitSliderTracking(")
 assert "DispatchQueue.main.async" in native_end and "homeStatusNeedsRebuild" in native_end
 handler = body(menu, "func handleHostedControl(")
 assert "if homeStatusNeedsRebuild && hostedPointerID == nil {" in handler
+assert "DispatchQueue.main.async" in handler and "self.hostedDispatchControlID == nil" in handler
 assert "selectedPage == 0" not in handler
 circle = body(menu, "@objc private func toggleLocalAimCircle(")
 assert "featureState.aimDisplay.desired.circleVisible" in circle

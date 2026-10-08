@@ -167,11 +167,15 @@ private func coreSetV17SupportClass() -> CoreSetV17SupportClass {
 final class CoreSetHomeRuntimeProducer: CoreSetHomeReferenceObservationProvider {
     let observerEpoch = UUID()
     private let manager: laramgr
+    private let supportClass: CoreSetV17SupportClass
     private var stopped = false
     private var observationSequences: [CoreSetHomeObservationField: UInt64] = [:]
     private var darkSwordRequests: [CoreSetHomeObservationField: (key: String, id: UUID)] = [:]
 
-    init(manager: laramgr = .shared) { self.manager = manager }
+    init(manager: laramgr = .shared) {
+        self.manager = manager
+        supportClass = coreSetV17SupportClass()
+    }
 
     private func nextSequence(_ field: CoreSetHomeObservationField) -> UInt64 {
         let old = observationSequences[field] ?? 0
@@ -206,7 +210,7 @@ final class CoreSetHomeRuntimeProducer: CoreSetHomeReferenceObservationProvider 
         let firmware = CoreSetKernelCacheTransferOwner.shared.snapshot()
 
         var environmentSnapshot = CoreSetHomeSnapshot()
-        let support = coreSetV17SupportClass()
+        let support = supportClass
         if support != .supported {
             environmentSnapshot.environment = support.text
         } else if firmware.inFlight {

@@ -343,10 +343,10 @@ final class CoreSetRuntimeCoordinator {
         Self.retained[identity] = self
         startPerformanceSampling()
         let observationTimer = DispatchSource.makeTimerSource(queue: .main)
-        observationTimer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250), leeway: .milliseconds(50))
+        observationTimer.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(500), leeway: .milliseconds(100))
         observationTimer.setEventHandler { [weak self] in
             guard let self, !self.stopping else { return }
-            self.publishStatus() // All sources are read-only; no action or target probe is retried.
+            self.refreshPeriodicObservations() // Read-only refresh; no host apply/readback or target action is retried.
         }
         self.observationTimer = observationTimer; observationTimer.resume()
     }
@@ -362,7 +362,6 @@ final class CoreSetRuntimeCoordinator {
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.stopping, self.performanceEpoch == epoch else { return }
                 self.menu.updatePerformanceObservation(sample)
-                self.publishStatus()
             }
         }
         performanceTimer = timer
@@ -1000,12 +999,29 @@ final class CoreSetRuntimeCoordinator {
         return true
     }
 
+    private func refreshHomeObservation() {
+        let remoteHosted = host.hostedRegistrationReceipt
+        let homeGeneration = host.generation
+        let homeObservation = homeTelemetry.capture(
+            hostReady: host.localSurfacesReady, panelVisible: host.panelVisible,
+            cleanupPending: host.cleanupPending,
+            remoteHosted: remoteHosted,
+            hostGeneration: homeGeneration,
+            floatingReady: host.floatingControlReady)
+        menu.updateRuntimeObservations(homeObservation, expectedHostGeneration: host.generation)
+    }
+
+    private func refreshPeriodicObservations() {
+        frameRateConsumer?.refreshSchedulerObservation()
+        menu.updatePresentedFrameObservation(presentedFrameObservation)
+        refreshHomeObservation()
+    }
+
     private func publishStatus() {
         consumer.refreshObservation(isCurrent: menu.menuHostRequestIsCurrent,
                                     canInspect: menu.menuHostObservationMayBeRefreshed,
                                     invalidate: menu.invalidateMenuHostObservation)
-        frameRateConsumer?.refreshSchedulerObservation()
-        menu.updatePresentedFrameObservation(presentedFrameObservation)
+        refreshPeriodicObservations()
         let local = host.localSurfacesReady ? "本应用悬浮可用" : "本应用悬浮未就绪"
         let renderer = host.activeBackend == CoreSetHUDBackendMetal ? "Metal" : "CA"
         let frame = host.lastConsumedSequence > 0 ? "\(renderer) 本地帧已消费" : "\(renderer) 本地帧未确认"
@@ -1018,14 +1034,6 @@ final class CoreSetRuntimeCoordinator {
         launcher?.updateRuntimePresentation(menuVisible: host.panelVisible,
             status: "\(local) · \(frame) · \(hosting)\(cleanup)\(launch)",
             cleanupRetryRequired: remoteCleanupFailed)
-        let homeGeneration = host.generation
-        let homeObservation = homeTelemetry.capture(
-            hostReady: host.localSurfacesReady, panelVisible: host.panelVisible,
-            cleanupPending: host.cleanupPending,
-            remoteHosted: remoteHosted,
-            hostGeneration: homeGeneration,
-            floatingReady: host.floatingControlReady)
-        menu.updateRuntimeObservations(homeObservation, expectedHostGeneration: host.generation)
     }
 
     private func releaseStoppedOwnerIfReady() {

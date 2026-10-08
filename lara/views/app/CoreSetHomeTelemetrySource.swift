@@ -39,6 +39,13 @@ struct CoreSetHomeReferenceObservation {
     let fields: [CoreSetHomeObservationField: CoreSetHomeReferenceFieldObservation]
     let actionProbeEvents: [CoreSetHomeProducerProbeEvent]
 }
+private struct CoreSetHomeProducerLogSignature: Equatable {
+    let requestID: UUID
+    let currentGeneration: UInt64?
+    let publishGenerationRaw: UInt64?
+    let nativeSequence: UInt64
+    let originalRuntimeReceipt: Bool
+}
 protocol CoreSetHomeReferenceObservationProvider: AnyObject {
     var observerEpoch: UUID { get }
     func readObservation(hostGeneration: UInt64) -> CoreSetHomeReferenceObservation?
@@ -142,6 +149,7 @@ final class CoreSetHomeTelemetrySource {
     private var referenceGenerations: [CoreSetHomeObservationField: UInt64] = [:]
     private var referenceNativeSequences: [CoreSetHomeObservationField: UInt64] = [:]
     private var referenceSnapshots: [CoreSetHomeObservationField: CoreSetHomeSnapshot] = [:]
+    private var producerLogSignatures: [CoreSetHomeObservationField: CoreSetHomeProducerLogSignature] = [:]
     private var observationsStopped = false
     init(runtimeProvider: CoreSetExistingHomeRuntimeObservationProvider = CoreSetLaraHomeRuntimeObservationProvider()) {
         self.runtimeProvider = runtimeProvider
@@ -151,7 +159,7 @@ final class CoreSetHomeTelemetrySource {
         guard !observationsStopped else { return }
         referenceProvider = provider
         referenceIdentities.removeAll(); referenceRequests.removeAll(); referenceGenerations.removeAll()
-        referenceNativeSequences.removeAll(); referenceSnapshots.removeAll()
+        referenceNativeSequences.removeAll(); referenceSnapshots.removeAll(); producerLogSignatures.removeAll()
     }
     @discardableResult
     func stopObservations() -> Bool {
@@ -160,7 +168,7 @@ final class CoreSetHomeTelemetrySource {
         let referenceStopped = referenceProvider?.stopObservation() ?? true
         referenceProvider = nil
         referenceIdentities.removeAll(); referenceRequests.removeAll(); referenceGenerations.removeAll()
-        referenceNativeSequences.removeAll(); referenceSnapshots.removeAll()
+        referenceNativeSequences.removeAll(); referenceSnapshots.removeAll(); producerLogSignatures.removeAll()
         let stopped = runtimeProvider.stopObservation()
         NSLog("Core-SET: home-observation stage=stop confirmed=%d reference-detached=%d scope=read-only-observation-owner native-action-stop=0", stopped ? 1 : 0, referenceStopped ? 1 : 0)
         return stopped && referenceStopped && referenceProvider == nil
@@ -338,11 +346,17 @@ final class CoreSetHomeTelemetrySource {
                 referenceNativeSequences[field] = value.nativeSequence
                 referenceSnapshots[field] = value.snapshot
                 supported.insert(field); reasons[field] = nil; fieldIdentities[field] = identity
-                NSLog("Core-SET: home-producer field=%@ request=%@ generation=%@ nativeSequence=%llu original-runtime-receipt=%d scope=%@",
-                      String(describing: field), value.nativeRequestID.uuidString,
-                      value.currentGeneration.map(String.init) ?? "absent", value.nativeSequence,
-                      value.originalRuntimeReceipt ? 1 : 0,
-                      value.originalRuntimeReceipt ? "core-v17-owner" : "local-equivalent-live-owner")
+                let logSignature = CoreSetHomeProducerLogSignature(requestID: value.nativeRequestID,
+                    currentGeneration: value.currentGeneration, publishGenerationRaw: value.publishGenerationRaw,
+                    nativeSequence: value.nativeSequence, originalRuntimeReceipt: value.originalRuntimeReceipt)
+                if producerLogSignatures[field] != logSignature {
+                    producerLogSignatures[field] = logSignature
+                    NSLog("Core-SET: home-producer field=%@ request=%@ generation=%@ nativeSequence=%llu original-runtime-receipt=%d scope=%@",
+                          String(describing: field), value.nativeRequestID.uuidString,
+                          value.currentGeneration.map(String.init) ?? "absent", value.nativeSequence,
+                          value.originalRuntimeReceipt ? 1 : 0,
+                          value.originalRuntimeReceipt ? "core-v17-owner" : "local-equivalent-live-owner")
+                }
             }
             for event in reference.actionProbeEvents {
                 let field: CoreSetHomeObservationField? = event.point == .pageProgress ? .pageProgress :

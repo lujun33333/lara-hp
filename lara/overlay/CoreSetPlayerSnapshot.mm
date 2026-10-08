@@ -35,6 +35,7 @@ static constexpr int32_t CSMaxActors = 50000;
 static constexpr int32_t CSActorPointerBatch = 0x200;
 static constexpr size_t CSMaxBoneActors = 256;
 static constexpr NSUInteger CSMaxRenderedMarks = 8192;
+static constexpr size_t CSCaptureReadPageSize = 0x4000;
 static thread_local std::string CSLastCaptureDiagnostic = "not-attempted";
 
 using CSVector = CoreSet::Vec3;
@@ -52,6 +53,45 @@ static bool CSRead(CoreSetReadSession *session, uint64_t generation,
 template <typename T> static bool CSReadValue(CoreSetReadSession *session, uint64_t generation,
                                                uint64_t address, T *value) {
     return address <= UINT64_MAX - sizeof(T) && CSRead(session, generation, address, value, sizeof(T));
+}
+
+struct CSCaptureReadPage {
+    uint64_t address = 0;
+    std::array<uint8_t, CSCaptureReadPageSize> bytes = {};
+};
+using CSCaptureReadCache = std::vector<CSCaptureReadPage>;
+
+// The kernel transport maps and releases one 16 KiB target page per read. A
+// Core player touches the same few pages repeatedly, so retain only copied page
+// bytes for one actor validation. No Mach mapping or cross-capture state is kept.
+static bool CSCaptureRead(CoreSetReadSession *session, uint64_t generation,
+                          uint64_t address, void *output, size_t length,
+                          CSCaptureReadCache *cache) {
+    if (!cache || !output || !length || address > UINT64_MAX - length) return false;
+    const uint64_t page = address & ~(uint64_t)(CSCaptureReadPageSize - 1);
+    const size_t offset = (size_t)(address - page);
+    if (length > CSCaptureReadPageSize - offset) return CSRead(session, generation, address, output, length);
+    auto found = std::find_if(cache->begin(), cache->end(), [page](const CSCaptureReadPage &entry) {
+        return entry.address == page;
+    });
+    if (found == cache->end()) {
+        cache->emplace_back();
+        CSCaptureReadPage &entry = cache->back();
+        entry.address = page;
+        if (!CSRead(session, generation, page, entry.bytes.data(), entry.bytes.size())) {
+            cache->pop_back();
+            return false;
+        }
+        found = cache->end() - 1;
+    }
+    std::memcpy(output, found->bytes.data() + offset, length);
+    return true;
+}
+
+template <typename T> static bool CSCaptureReadValue(CoreSetReadSession *session,
+                                                      uint64_t generation, uint64_t address,
+                                                      T *value, CSCaptureReadCache *cache) {
+    return CSCaptureRead(session, generation, address, value, sizeof(T), cache);
 }
 
 struct CSActorArrayState {
@@ -103,27 +143,27 @@ struct CSCorePlayerState {
 // Core v1.7 0x1000d5440..0x1000d569c. UClass is intentionally absent.
 static bool CSReadCorePlayerState(CoreSetReadSession *session, uint64_t generation,
                                   uint64_t actor, uint64_t local, uint32_t localTeam,
-                                  CSCorePlayerState *state) {
+                                  CSCorePlayerState *state, CSCaptureReadCache *cache) {
     *state = {};
     if (!CSUserPointerValid(actor) ||
-        !CSReadValue(session, generation, actor + 0x10bc, &state->speed) ||
+        !CSCaptureReadValue(session, generation, actor + 0x10bc, &state->speed, cache) ||
         !CSCorePlayerSpeedMatches(state->speed) || actor == local ||
-        !CSReadValue(session, generation, actor + 0xb78, &state->team) ||
+        !CSCaptureReadValue(session, generation, actor + 0xb78, &state->team, cache) ||
         state->team < 1 || state->team > 100 || state->team == localTeam ||
-        !CSReadValue(session, generation, actor + 0x1700, &state->stateOwner) ||
+        !CSCaptureReadValue(session, generation, actor + 0x1700, &state->stateOwner, cache) ||
         !CSUserPointerValid(state->stateOwner) ||
-        !CSReadValue(session, generation, state->stateOwner, &state->stateFlags) ||
+        !CSCaptureReadValue(session, generation, state->stateOwner, &state->stateFlags, cache) ||
         (state->stateFlags & (1u << 20)) ||
-        !CSReadValue(session, generation, actor + 0x3be0, &state->status) ||
+        !CSCaptureReadValue(session, generation, actor + 0x3be0, &state->status, cache) ||
         state->status == 4 ||
-        !CSReadValue(session, generation, actor + 0x1060, &state->health) ||
-        !CSReadValue(session, generation, actor + 0x1068, &state->maximum) ||
+        !CSCaptureReadValue(session, generation, actor + 0x1060, &state->health, cache) ||
+        !CSCaptureReadValue(session, generation, actor + 0x1068, &state->maximum, cache) ||
         !CSCorePlayerHealthMatches(state->health, state->maximum) ||
-        !CSReadValue(session, generation, actor + 0x260, &state->rootComponent) ||
+        !CSCaptureReadValue(session, generation, actor + 0x260, &state->rootComponent, cache) ||
         !CSUserPointerValid(state->rootComponent) ||
-        !CSReadValue(session, generation, actor + 0x658, &state->meshComponent) ||
+        !CSCaptureReadValue(session, generation, actor + 0x658, &state->meshComponent, cache) ||
         !CSUserPointerValid(state->meshComponent) ||
-        !CSReadValue(session, generation, actor + 0xb94, &state->ai)) return false;
+        !CSCaptureReadValue(session, generation, actor + 0xb94, &state->ai, cache)) return false;
     return true;
 }
 
@@ -274,29 +314,38 @@ static bool CSPlayerName(CoreSetReadSession *session, uint64_t generation,
 }
 
 static bool CSPosition(CoreSetReadSession *session, uint64_t generation, uint64_t base,
-                       uint64_t actor, CSVector *position, bool *present) {
+                       uint64_t actor, CSVector *position, bool *present,
+                       CSCaptureReadCache *cache = nullptr, uint64_t knownComponent = 0) {
     *present = false;
-    uint64_t component = 0;
-    if (!CSReadValue(session, generation, actor + 0x260, &component)) return false;
+    uint64_t component = knownComponent;
+    const auto readValue = [&](uint64_t address, auto *value) {
+        return cache ? CSCaptureReadValue(session, generation, address, value, cache) :
+            CSReadValue(session, generation, address, value);
+    };
+    const auto readBytes = [&](uint64_t address, void *output, size_t length) {
+        return cache ? CSCaptureRead(session, generation, address, output, length, cache) :
+            CSRead(session, generation, address, output, length);
+    };
+    if (!component && !readValue(actor + 0x260, &component)) return false;
     if (!component) return true; // No invented zero-vector fallback.
     uint32_t flags = 0;
-    if (!CSReadValue(session, generation, component + 0x25c, &flags)) return false;
+    if (!readValue(component + 0x25c, &flags)) return false;
     if ((flags & ((1u << 20) | (1u << 22))) == ((1u << 20) | (1u << 22))) {
         uint64_t callback = 0;
-        if (!CSReadValue(session, generation, base + CSPositionCallbackSlot, &callback)) return false;
+        if (!readValue(base + CSPositionCallbackSlot, &callback)) return false;
         if (callback) {
             if (callback != base + CSPositionCallbackRVA) return false;
             uint8_t block[0x30] = {0};
             uint32_t key = 0;
-            if (!CSRead(session, generation, component + 0x1f0, block, sizeof(block)) ||
-                !CSReadValue(session, generation, base + CSPositionXORKeySlot, &key)) return false;
+            if (!readBytes(component + 0x1f0, block, sizeof(block)) ||
+                !readValue(base + CSPositionXORKeySlot, &key)) return false;
             CoreSet::decodePositionBlock(block, key);
             std::memcpy(position, block + 0x10, sizeof(*position));
             *present = CSFinite(*position);
             return true;
         }
     }
-    if (!CSRead(session, generation, component + 0x200, position, sizeof(*position))) return false;
+    if (!readBytes(component + 0x200, position, sizeof(*position))) return false;
     *present = CSFinite(*position);
     return true;
 }
@@ -354,16 +403,22 @@ struct CSBoneState {
 };
 
 static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation, uint64_t base,
-                            uint64_t actor, CSBoneState *state, bool *present) {
+                            uint64_t actor, CSBoneState *state, bool *present,
+                            uint64_t knownMesh = 0) {
     *present = false;
-    if (!CSReadValue(session, generation, actor + 0x658, &state->mesh)) return false;
+    CSCaptureReadCache cache;
+    cache.reserve(6);
+    state->mesh = knownMesh;
+    if (!state->mesh &&
+        !CSCaptureReadValue(session, generation, actor + 0x658, &state->mesh, &cache)) return false;
     if (!state->mesh) { state->status = 1; return true; }
     if (state->mesh < 0x100000000ULL || state->mesh > 0x8000000000ULL - 0x850) return false;
     // Native GetBoneTransform a3c4124 requires a registered component. Its
     // a3c4150..a3c41a0 uses the same verified read-only decoder as CSPosition.
-    if (!CSReadValue(session, generation, state->mesh + 0xe0, &state->registered)) return false;
+    if (!CSCaptureReadValue(session, generation, state->mesh + 0xe0, &state->registered, &cache)) return false;
     if (!(state->registered & 4)) { state->status = 2; return true; }
-    if (!CSRead(session, generation, state->mesh + 0x838, &state->array, sizeof(state->array))) return false;
+    if (!CSCaptureRead(session, generation, state->mesh + 0x838, &state->array,
+                       sizeof(state->array), &cache)) return false;
     const auto &array = state->array;
     if (array.count < 0 || array.count > 256 || array.capacity < array.count ||
         array.capacity > 256 || (array.count && !array.data)) { state->status = 3; return true; }
@@ -372,29 +427,35 @@ static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation, ui
     state->edges = CSBoneProfile(array.count);
     for (unsigned edge = 0; edge < 28; ++edge)
         if (state->edges[edge] >= array.count) { state->status = 4; return true; }
-    if (!CSReadValue(session, generation, state->mesh + 0x25c, &state->flags)) return false;
+    if (!CSCaptureReadValue(session, generation, state->mesh + 0x25c, &state->flags, &cache)) return false;
     state->status = 6;
     if ((state->flags & ((1u << 20) | (1u << 22))) == ((1u << 20) | (1u << 22))) {
-        if (!CSReadValue(session, generation, base + CSPositionCallbackSlot, &state->callback)) return false;
+        if (!CSCaptureReadValue(session, generation, base + CSPositionCallbackSlot,
+                                &state->callback, &cache)) return false;
         if (state->callback) {
             if (state->callback != base + CSPositionCallbackRVA) { state->status = 5; return true; }
             uint8_t block[0x30] = {};
-            if (!CSRead(session, generation, state->mesh + 0x1f0, block, sizeof(block)) ||
-                !CSReadValue(session, generation, base + CSPositionXORKeySlot, &state->key)) return false;
+            if (!CSCaptureRead(session, generation, state->mesh + 0x1f0,
+                               block, sizeof(block), &cache) ||
+                !CSCaptureReadValue(session, generation, base + CSPositionXORKeySlot,
+                                    &state->key, &cache)) return false;
             CoreSet::decodePositionBlock(block, state->key);
             std::memcpy(state->component.data(), block, state->component.size());
             state->status = 7;
         }
     }
-    if (state->status == 6 && !CSRead(session, generation, state->mesh + 0x1f0,
-                                     state->component.data(), state->component.size())) return false;
+    if (state->status == 6 &&
+        !CSCaptureRead(session, generation, state->mesh + 0x1f0,
+                       state->component.data(), state->component.size(), &cache)) return false;
+    std::vector<uint8_t> transforms((size_t)array.count * 0x30);
+    if (!CSRead(session, generation, array.data, transforms.data(), transforms.size())) return false;
     for (unsigned edge = 0; edge < 28; ++edge) {
         uint8_t index = state->edges[edge];
         if (std::any_of(state->samples.begin(), state->samples.end(),
                         [index](const CSBoneSample &sample) { return sample.index == index; })) continue;
         CSBoneSample sample = {index, {}};
-        if (!CSRead(session, generation, array.data + (uint64_t)index * 0x30,
-                    sample.bytes.data(), sample.bytes.size())) return false;
+        std::memcpy(sample.bytes.data(), transforms.data() + (size_t)index * 0x30,
+                    sample.bytes.size());
         state->samples.push_back(sample);
     }
     *present = true;
@@ -1287,9 +1348,12 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         !CSCameraValid(cameraAfter) ||
         !CSPosition(session, generation, base, local, &localPositionAfter, &hasLocalPositionAfter) ||
         !hasLocalPositionAfter) return nil;
-    const double finalReprojectionStartedAt = CACurrentMediaTime();
+    const double finalValidationStartedAt = CACurrentMediaTime();
     CSLastCaptureDiagnostic = "stability-player-actors";
     NSMutableIndexSet *invalidActorMarks = [NSMutableIndexSet indexSet];
+    struct CSFinalActorObservation { CSCorePlayerState state; CSVector position; double distance; };
+    std::unordered_map<uint64_t, CSFinalActorObservation> finalActorObservations;
+    finalActorObservations.reserve(observedActors.size());
     for (const ObservedActor &actor : observedActors) {
         if (currentActors.find(actor.address) == currentActors.end()) {
             [invalidActorMarks addIndex:actor.markIndex];
@@ -1305,9 +1369,13 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         NSString *name = nil;
         uint32_t warningYawRaw = 0;
         uint32_t warningFallbackRaw = 0;
-        if (!CSReadCorePlayerState(session, generation, actor.address, local, localTeam, &current) ||
+        CSCaptureReadCache readCache;
+        readCache.reserve(6);
+        if (!CSReadCorePlayerState(session, generation, actor.address, local, localTeam,
+                                   &current, &readCache) ||
             current.health == 0 ||
-            !CSPosition(session, generation, base, actor.address, &position, &present) || !present) {
+            !CSPosition(session, generation, base, actor.address, &position, &present, &readCache) ||
+            !present) {
             [invalidActorMarks addIndex:actor.markIndex];
             continue;
         }
@@ -1320,6 +1388,8 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             [invalidActorMarks addIndex:actor.markIndex];
             continue;
         }
+        finalActorObservations.emplace(actor.address,
+            CSFinalActorObservation{current, position, distance});
         CSVector head = position, feet = position;
         head.z += 90; feet.z -= 90;
         CGPoint centerPoint = CGPointZero, headPoint = CGPointZero, feetPoint = CGPointZero;
@@ -1392,6 +1462,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             }
         }
     }
+    const double finalPlayersCompletedAt = CACurrentMediaTime();
     CSLastCaptureDiagnostic = "stability-count-actors";
     observedPlayerCount = 0;
     observedBotCount = 0;
@@ -1401,18 +1472,32 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         CSCorePlayerState current;
         CSVector position = {0};
         bool present = false;
-        if (!CSReadCorePlayerState(session, generation, count.address, local, localTeam, &current) ||
-            !CoreSet::playerCountEligible(current.health, current.maximum, current.status) ||
-            !CSPosition(session, generation, base, count.address, &position, &present) || !present) continue;
-        const double dx = (double)position.x - localPositionAfter.x;
-        const double dy = (double)position.y - localPositionAfter.y;
-        const double dz = (double)position.z - localPositionAfter.z;
-        const double distance = std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
+        double distance = 0;
+        const auto cached = finalActorObservations.find(count.address);
+        if (cached != finalActorObservations.end()) {
+            current = cached->second.state;
+            position = cached->second.position;
+            distance = cached->second.distance;
+            present = true;
+        } else {
+            CSCaptureReadCache readCache;
+            readCache.reserve(6);
+            if (!CSReadCorePlayerState(session, generation, count.address, local, localTeam,
+                                       &current, &readCache) ||
+                !CSPosition(session, generation, base, count.address, &position, &present,
+                            &readCache) || !present) continue;
+            const double dx = (double)position.x - localPositionAfter.x;
+            const double dy = (double)position.y - localPositionAfter.y;
+            const double dz = (double)position.z - localPositionAfter.z;
+            distance = std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
+        }
+        if (!CoreSet::playerCountEligible(current.health, current.maximum, current.status)) continue;
         if (!std::isfinite(distance) ||
             (maximumDrawDistance != 0 && distance > maximumDrawDistance)) continue;
         if (current.ai) ++observedBotCount; else ++observedPlayerCount;
         if (current.health == 0) ++observedZeroHealthLastBreath;
     }
+    const double finalCountsCompletedAt = CACurrentMediaTime();
     CSLastCaptureDiagnostic = "stability-grenades";
     for (ObservedGrenade &grenade : observedGrenades) {
         if (currentActors.find(grenade.address) == currentActors.end()) {
@@ -1515,30 +1600,41 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             }
         }
     }
+    const double finalGrenadesCompletedAt = CACurrentMediaTime();
     CSLastCaptureDiagnostic = "stability-bones";
+    struct CSFinalBoneObservation { uint64_t actor; NSUInteger markIndex; CSBoneState state; };
+    std::vector<CSFinalBoneObservation> finalBoneObservations;
+    finalBoneObservations.reserve(observedBones.size());
     for (const ObservedBone &bone : observedBones) {
         if ([invalidActorMarks containsIndex:bone.markIndex] ||
             currentActors.find(bone.actor) == currentActors.end()) continue;
         CoreSetPlayerMark *mark = marks[bone.markIndex];
         CSBoneState after;
         bool present = false;
-        const bool boneRead = CSReadBoneState(session, generation, base, bone.actor, &after, &present);
+        const auto actorObservation = finalActorObservations.find(bone.actor);
+        const uint64_t knownMesh = actorObservation == finalActorObservations.end() ? 0 :
+            actorObservation->second.state.meshComponent;
+        const bool boneRead = CSReadBoneState(session, generation, base, bone.actor,
+                                               &after, &present, knownMesh);
         if (!boneRead || !present) {
             mark.boneSegments = @[];
             mark.headBoneIndex = nil;
             continue;
         }
-        mark.boneSegments = CSProjectBones(after, cameraAfter, size);
+        finalBoneObservations.push_back({bone.actor, bone.markIndex, std::move(after)});
+        const CSBoneState &finalBone = finalBoneObservations.back().state;
+        mark.boneSegments = CSProjectBones(finalBone, cameraAfter, size);
         uint8_t headIndex = 0;
         CGPoint top = CGPointZero;
-        if (CoreSet::referenceBoneHeadIndex(after.array.count, &headIndex) &&
-            CSProjectBoneHead(after, cameraAfter, size, &top, &headIndex)) {
+        if (CoreSet::referenceBoneHeadIndex(finalBone.array.count, &headIndex) &&
+            CSProjectBoneHead(finalBone, cameraAfter, size, &top, &headIndex)) {
             mark.head = top;
             mark.headBoneIndex = @(headIndex);
         } else {
             mark.headBoneIndex = nil;
         }
     }
+    const double finalBonesCompletedAt = CACurrentMediaTime();
     CSLastCaptureDiagnostic = "stability-battle-inputs";
     if (includeBattleInputs) {
         uint8_t adsAfter = 0, firingAfter = 0;
@@ -1552,6 +1648,104 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         localFiring = firingAfter;
         controlRotation[0] = rotationAfter[0];
         controlRotation[1] = rotationAfter[1];
+    }
+    // All expensive identity, lifecycle, name, weapon and bone reads are now
+    // complete. Refresh the camera/local origin once more and only time the
+    // position rereads plus local projection that form the delivered geometry.
+    CSLastCaptureDiagnostic = "stability-final-reprojection";
+    if (!CSRead(session, generation, manager + cameraOffset, &cameraAfter, sizeof(cameraAfter)) ||
+        !CSCameraValid(cameraAfter) ||
+        !CSPosition(session, generation, base, local, &localPositionAfter, &hasLocalPositionAfter) ||
+        !hasLocalPositionAfter) return nil;
+    const double finalReprojectionStartedAt = CACurrentMediaTime();
+    for (const ObservedActor &actor : observedActors) {
+        if ([invalidActorMarks containsIndex:actor.markIndex]) continue;
+        const auto validated = finalActorObservations.find(actor.address);
+        if (validated == finalActorObservations.end()) {
+            [invalidActorMarks addIndex:actor.markIndex];
+            continue;
+        }
+        CSCaptureReadCache readCache;
+        readCache.reserve(4);
+        CSVector position = {0};
+        bool present = false;
+        if (!CSPosition(session, generation, base, actor.address, &position, &present, &readCache,
+                        validated->second.state.rootComponent) ||
+            !present) {
+            [invalidActorMarks addIndex:actor.markIndex];
+            continue;
+        }
+        const double dx = (double)position.x - localPositionAfter.x;
+        const double dy = (double)position.y - localPositionAfter.y;
+        const double dz = (double)position.z - localPositionAfter.z;
+        const double distance = std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
+        CSVector head = position, feet = position;
+        head.z += 90; feet.z -= 90;
+        CGPoint centerPoint = CGPointZero, headPoint = CGPointZero, feetPoint = CGPointZero;
+        const bool projectedCenter = CSProject(cameraAfter, position, size, &centerPoint);
+        const bool projectedHead = CSProject(cameraAfter, head, size, &headPoint);
+        const bool projectedFeet = CSProject(cameraAfter, feet, size, &feetPoint);
+        const bool onScreen = projectedCenter && centerPoint.x >= 0 && centerPoint.x <= size.width &&
+            centerPoint.y >= 0 && centerPoint.y <= size.height;
+        CGPoint indicator = CGPointZero;
+        if (!std::isfinite(distance) ||
+            (maximumDrawDistance != 0 && distance > maximumDrawDistance) ||
+            (onScreen && (!projectedHead || !projectedFeet) && !includeRadar) ||
+            (!onScreen && !includeRadar &&
+             (!includeOffscreen || !CSProjectIndicator(cameraAfter, position, size, &indicator)))) {
+            [invalidActorMarks addIndex:actor.markIndex];
+            continue;
+        }
+        CoreSetPlayerMark *mark = marks[actor.markIndex];
+        mark.center = centerPoint;
+        mark.head = headPoint;
+        mark.feet = feetPoint;
+        mark.distanceUnitsDividedBy100 = distance;
+        mark.onScreen = onScreen;
+        mark.indicatorProjection = indicator;
+        mark.radarCameraDelta = CGPointMake((double)cameraAfter.location.x - position.x,
+                                            (double)cameraAfter.location.y - position.y);
+    }
+    for (ObservedGrenade &grenade : observedGrenades) {
+        if ([invalidGrenadeMarks containsIndex:grenade.markIndex]) continue;
+        CSCaptureReadCache readCache;
+        readCache.reserve(4);
+        CSVector position = {0};
+        bool present = false;
+        if (!CSPosition(session, generation, base, grenade.address, &position, &present, &readCache) ||
+            !present) {
+            [invalidGrenadeMarks addIndex:grenade.markIndex];
+            continue;
+        }
+        const double dx = (double)position.x - localPositionAfter.x;
+        const double dy = (double)position.y - localPositionAfter.y;
+        const double dz = (double)position.z - localPositionAfter.z;
+        const double distance = std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
+        CGPoint point = CGPointZero;
+        if (!std::isfinite(distance) || !CSProject(cameraAfter, position, size, &point) ||
+            point.x < 0 || point.x > size.width || point.y < 0 || point.y > size.height) {
+            [invalidGrenadeMarks addIndex:grenade.markIndex];
+            continue;
+        }
+        grenade.position = position;
+        CoreSetGrenadeMark *mark = grenadeMarks[grenade.markIndex];
+        mark.point = point;
+        mark.distanceUnitsDividedBy100 = distance;
+        mark.motionPosition = position;
+    }
+    for (const CSFinalBoneObservation &bone : finalBoneObservations) {
+        if ([invalidActorMarks containsIndex:bone.markIndex]) continue;
+        CoreSetPlayerMark *mark = marks[bone.markIndex];
+        mark.boneSegments = CSProjectBones(bone.state, cameraAfter, size);
+        uint8_t headIndex = 0;
+        CGPoint top = CGPointZero;
+        if (CoreSet::referenceBoneHeadIndex(bone.state.array.count, &headIndex) &&
+            CSProjectBoneHead(bone.state, cameraAfter, size, &top, &headIndex)) {
+            mark.head = top;
+            mark.headBoneIndex = @(headIndex);
+        } else {
+            mark.headBoneIndex = nil;
+        }
     }
     if (invalidActorMarks.count) [marks removeObjectsAtIndexes:invalidActorMarks];
     if (invalidGrenadeMarks.count) [grenadeMarks removeObjectsAtIndexes:invalidGrenadeMarks];
@@ -1570,7 +1764,16 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     if (!std::isfinite(finalReprojectionAge) || finalReprojectionAge < 0 ||
         finalReprojectionAge > 0.45) {
         CSLastCaptureDiagnostic = "final-reprojection-stale age=" +
-            std::to_string(finalReprojectionAge) + " limit=0.45";
+            std::to_string(finalReprojectionAge) + " limit=0.45 actors=" +
+            std::to_string(observedActors.size()) + " counts=" +
+            std::to_string(observedCounts.size()) + " grenades=" +
+            std::to_string(observedGrenades.size()) + " bones=" +
+            std::to_string(observedBones.size()) + " coreAccepted=" +
+            std::to_string(coreAccepted) + " marks=" + std::to_string(marks.count) +
+            " phasePlayers=" + std::to_string(finalPlayersCompletedAt - finalValidationStartedAt) +
+            " phaseCounts=" + std::to_string(finalCountsCompletedAt - finalPlayersCompletedAt) +
+            " phaseGrenades=" + std::to_string(finalGrenadesCompletedAt - finalCountsCompletedAt) +
+            " phaseBones=" + std::to_string(finalBonesCompletedAt - finalGrenadesCompletedAt);
         return nil;
     }
     CSLastCaptureDiagnostic = "identity-final";

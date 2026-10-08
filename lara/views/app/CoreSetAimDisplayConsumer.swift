@@ -16,6 +16,9 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
     private var expectedGeneration: UInt64?
     private var expectedReadIdentity: (generation: UInt64, pid: Int32, base: UInt64)?
     private var expectedCompletedAt: Double?
+    private var expectedCommandCount: Int?
+    private var expectedTargetPresent: Bool?
+    private var awaitingTargetEvidence = false
     private var dynamicCandidateKey: UInt64?
     private var dynamicReadIdentity: (generation: UInt64, pid: Int32, base: UInt64)?
     private var dynamicStartedAt: CFTimeInterval?
@@ -58,6 +61,13 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         dynamicCandidateKey = nil
         dynamicReadIdentity = nil
         dynamicStartedAt = nil
+    }
+
+    private func armRefresh() {
+        guard refresh == nil else { return }
+        refresh = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            self?.capture()
+        }
     }
 
     private func dynamicElapsed(for target: CoreSetAimPreviewTarget,
@@ -203,6 +213,9 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
             completion(request.token, .notApplied(reason: reason)); return
         }
         refresh?.invalidate(); refresh = nil
+        awaitingTargetEvidence = false
+        expectedCommandCount = nil
+        expectedTargetPresent = nil
         revision += 1
         settings = request.desired; activeToken = request.token
         pendingApply = (request.token, request.desired, completion)
@@ -239,6 +252,11 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
                     reason: "只读候选快照未确认：\(self.preview.lastCaptureDiagnostic)")
                 return
             }
+            if self.needsTarget(current), frame.target == nil,
+               self.awaitingTargetEvidence {
+                self.armRefresh()
+                return
+            }
             self.submit(frame: frame, ring: ring, state: current, token: token,
                         revision: expectedRevision, canvas: canvas)
         }
@@ -249,7 +267,8 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         let targetRequired = needsTarget(state)
         if targetRequired && frame?.target == nil {
             resetDynamicAnimation()
-            return [] // No candidate: clear this lane.
+            // Keep the independent local circle visible. Target-dependent
+            // decoration still waits for a confirmed candidate before apply.
         }
         var result: [CoreSetRenderCommand] = []
         let center = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
@@ -296,13 +315,19 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         expectedSnapshot = id; expectedGeneration = canvas.generation
         expectedReadIdentity = frame.map { ($0.sessionGeneration, $0.processID, $0.imageBase) }
         expectedCompletedAt = frame?.captureCompletedMonotonicSeconds
+        let renderedCommands = commands(state: state, frame: frame,
+                                        canvas: canvas.size, ring: ring)
+        expectedCommandCount = renderedCommands.count
+        expectedTargetPresent = frame?.target != nil
+        awaitingTargetEvidence = needsTarget(state) && frame?.target == nil
         let input = CoreSetLaneSubmission(lane: .aimDisplay, hostGeneration: canvas.generation,
             configRevision: revision, snapshotID: id, requestToken: token,
-            canvasSize: canvas.size, commands: commands(state: state, frame: frame,
-                                                       canvas: canvas.size, ring: ring))
+            canvasSize: canvas.size, commands: renderedCommands)
         if coordinator?.submitLane(input) != true {
             expectedSnapshot = nil; expectedGeneration = nil
             expectedReadIdentity = nil; expectedCompletedAt = nil
+            expectedCommandCount = nil; expectedTargetPresent = nil
+            awaitingTargetEvidence = false
             if let pending = pendingApply, pending.0 == token {
                 pendingApply = nil
                 pending.2(token, .failed(reason: "本地预览帧未进入合成器"))
@@ -314,6 +339,8 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
                             canvas: (generation: UInt64, size: CGSize), reason: String) {
         NSLog("Core-SET: target-read lane=aim-preview stage=preview-invalidated confirmed=0 reason=%@", reason)
         refresh?.invalidate(); refresh = nil
+        awaitingTargetEvidence = false
+        expectedCommandCount = nil; expectedTargetPresent = nil
         resetDynamicAnimation()
         guard revision < UInt64.max else { return }
         revision += 1
@@ -343,6 +370,8 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         }
         if let failure = pendingFailure, failure.0 == receipt.requestToken {
             pendingFailure = nil; expectedSnapshot = nil; expectedGeneration = nil
+            expectedReadIdentity = nil; expectedCompletedAt = nil
+            expectedCommandCount = nil; expectedTargetPresent = nil
             failure.2(failure.0, receipt.acceptedByLocalRenderer ?
                 .unavailable(reason: failure.1) : .failed(reason: "本地预览失效清帧被拒绝"))
             return
@@ -368,12 +397,22 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
                 }
                 return
             }
+            if needsTarget(pending.1), expectedTargetPresent != true {
+                let count = expectedCommandCount ?? 0
+                expectedSnapshot = nil; expectedGeneration = nil
+                expectedReadIdentity = nil; expectedCompletedAt = nil
+                expectedCommandCount = nil; expectedTargetPresent = nil
+                awaitingTargetEvidence = true
+                NSLog("Core-SET: target-read lane=aim-preview stage=receipt confirmed=0 reason=no-target-evidence commands=\(count)")
+                armRefresh()
+                return
+            }
             pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
             expectedReadIdentity = nil; expectedCompletedAt = nil
+            expectedCommandCount = nil; expectedTargetPresent = nil
+            awaitingTargetEvidence = false
             pending.2(pending.0, .applied(observed: pending.1))
-            if needsTarget(pending.1) {
-                refresh = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in self?.capture() }
-            }
+            if needsTarget(pending.1) { armRefresh() }
             return
         }
         if !receipt.acceptedByLocalRenderer, activeToken == receipt.requestToken {
@@ -406,6 +445,8 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         pendingFailure = nil
         pendingClearInvalidation = nil
         expectedReadIdentity = nil; expectedCompletedAt = nil
+        expectedCommandCount = nil; expectedTargetPresent = nil
+        awaitingTargetEvidence = false
         guard revision < UInt64.max else {
             completion(token, .failed(reason: "本地预览圈序号耗尽")); return
         }
@@ -428,6 +469,8 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         refresh?.invalidate(); refresh = nil
         resetDynamicAnimation()
         activeToken = nil
+        expectedCommandCount = nil; expectedTargetPresent = nil
+        awaitingTargetEvidence = false
         return preview.shutdown()
     }
 
@@ -440,6 +483,8 @@ final class CoreSetAimDisplayConsumer: CoreSetFeatureConsumer {
         pendingClearInvalidation = nil
         expectedSnapshot = nil; expectedGeneration = nil; expectedReadIdentity = nil
         expectedCompletedAt = nil
+        expectedCommandCount = nil; expectedTargetPresent = nil
+        awaitingTargetEvidence = false
         if revision < UInt64.max { revision += 1 }
     }
 }

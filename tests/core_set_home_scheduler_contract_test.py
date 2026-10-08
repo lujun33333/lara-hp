@@ -53,7 +53,9 @@ class HomeSchedulerContract(unittest.TestCase):
         for gate in ("host.renderFPSControlReady", "host.activeBackend == CoreSetHUDBackendMetal",
                      "host.generation == generation", "host.observedRenderFPS()"):
             self.assertIn(gate, observation)
-        self.assertIn("frameRateConsumer?.refreshSchedulerObservation()", body(self.coordinator, "func publishStatus()"))
+        self.assertIn("refreshPeriodicObservations()", body(self.coordinator, "func publishStatus()"))
+        self.assertIn("frameRateConsumer?.refreshSchedulerObservation()",
+                      body(self.coordinator, "private func refreshPeriodicObservations()"))
 
     def test_scheduler_invalidation_does_not_forgive_stop(self):
         invalidate = body(self.state, "func invalidateSchedulerObservation(reason:")

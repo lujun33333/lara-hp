@@ -132,7 +132,7 @@ final class CoreSetAimPreviewConsumer {
                     self.lastCaptureDiagnostic = captureFailure
                     completion(nil); return
                 }
-                self.lastCaptureDiagnostic = "preview-snapshot-confirmed"
+                self.lastCaptureDiagnostic = "preview-snapshot-confirmed target=\(frame.target == nil ? 0 : 1)"
                 completion(frame)
             }
         }

@@ -142,9 +142,12 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private var performanceValueLabels: [UILabel] = []
     private weak var presentationRateLabel: UILabel?
     private var presentationProofSignature: String?
+    private var performanceLogSignatures: [Int: String] = [:]
     private var pageContentOffsets: [Int: CGPoint] = [:]
     private var hostedPointerID: String?
     private var homeStatusNeedsRebuild = false
+    private var homeFieldStateLogSignatures: [Int: String] = [:]
+    private var hostedPaletteLogSignatures: [Int: String] = [:]
     private var homeStatusSnapshot: CoreSetHomeSnapshot? { featureState.homeSnapshot }
     func updateRuntimeObservations(_ observation: CoreSetHomeObservation, expectedHostGeneration: UInt64) {
         precondition(Thread.isMainThread)
@@ -170,11 +173,16 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             let fields: [(Int, CoreSetHomeObservationField)] = [(4, .kernel), (5, .environment), (6, .information), (7, .floating), (8, .stage), (9, .pageProgress), (10, .firmwareProgress)]
             for (point, field) in fields {
                 let fieldIdentity = observation.fieldIdentities[field]
-                NSLog("Core-SET: home-observation stage=field-state point=v17-%03d observed=%d observerEpoch=%@ sequence=%llu hostGeneration=%llu reason=%@ scope=typed-read-only-producer original-runtime-receipt=0 device-effect-verified=0",
-                      point, observation.supportedFields.contains(field) ? 1 : 0,
-                      fieldIdentity?.observerEpoch.uuidString ?? "unavailable", fieldIdentity?.sequence ?? 0,
-                      fieldIdentity?.hostGeneration ?? expectedHostGeneration,
-                      observation.unavailableReasons[field] ?? (observation.supportedFields.contains(field) ? "matched-live-producer" : "field-producer-unconfirmed"))
+                let observed = observation.supportedFields.contains(field)
+                let reason = observation.unavailableReasons[field] ?? (observed ? "matched-live-producer" : "field-producer-unconfirmed")
+                let logSignature = "\(observed ? 1 : 0)|\(fieldIdentity?.observerEpoch.uuidString ?? "unavailable")|\(fieldIdentity?.hostGeneration ?? expectedHostGeneration)|\(reason)"
+                if homeFieldStateLogSignatures[point] != logSignature {
+                    homeFieldStateLogSignatures[point] = logSignature
+                    NSLog("Core-SET: home-observation stage=field-state point=v17-%03d observed=%d observerEpoch=%@ sequence=%llu hostGeneration=%llu reason=%@ scope=typed-read-only-producer original-runtime-receipt=0 device-effect-verified=0",
+                          point, observed ? 1 : 0,
+                          fieldIdentity?.observerEpoch.uuidString ?? "unavailable", fieldIdentity?.sequence ?? 0,
+                          fieldIdentity?.hostGeneration ?? expectedHostGeneration, reason)
+                }
             }
         }
         guard changed else { return }
@@ -446,7 +454,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     }
 
     private func rebuildMenu(preservingCurrentOffset: Bool = true) {
-        if (hostedPointerID != nil && hostedDispatchControlID == nil) || trackingUIKitSlider != nil {
+        if hostedPointerID != nil || hostedDispatchControlID != nil || trackingUIKitSlider != nil {
             homeStatusNeedsRebuild = true
             return
         }
@@ -592,7 +600,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             if phase == .ended || phase == .cancelled {
                 if hostedPointerID == identifier { hostedPointerID = nil }
                 if homeStatusNeedsRebuild && hostedPointerID == nil {
-                    rebuildMenu()
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.hostedPointerID == nil,
+                              self.hostedDispatchControlID == nil,
+                              self.trackingUIKitSlider == nil,
+                              self.homeStatusNeedsRebuild else { return }
+                        self.rebuildMenu()
+                    }
                 }
             }
         }
@@ -766,7 +780,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         trackingUIKitSlider = nil
         DispatchQueue.main.async { [weak self] in
             guard let self, self.trackingUIKitSlider == nil, self.hostedPointerID == nil,
-                  self.homeStatusNeedsRebuild else { return }
+                  self.hostedDispatchControlID == nil, self.homeStatusNeedsRebuild else { return }
             self.rebuildMenu()
         }
     }
@@ -2784,9 +2798,14 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             let confirmed = selected && hostChannel.isDesiredConfirmed && hostChannel.actual?.floatingPalette == CoreSetFloatingPalette(rawValue: floatingThemeValues[index])
             swatch.accessibilityValue = confirmed ? "宿主浮球颜色属性已回读" : "颜色已配置，等待宿主浮球回执"
             swatch.accessibilityHint = "实际 Host 浮球 gradient 属性/代次回读；不代表原包设备像素或跨应用呈现验收"
-            NSLog("Core-SET: hosted-palette stage=field-state point=v17-%03d field=floatingPalette configured=%d confirmed=%d scope=actual-host-floating-gradient-property original-runtime-receipt=0 device-effect-verified=0 reason=%@",
-                  22 + index, selected ? 1 : 0, confirmed ? 1 : 0,
-                  confirmed ? "matched-host-palette-token" : hostPaletteReceiptReason)
+            let point = 22 + index
+            let reason = confirmed ? "matched-host-palette-token" : hostPaletteReceiptReason
+            let logSignature = "\(selected ? 1 : 0)|\(confirmed ? 1 : 0)|\(reason)"
+            if hostedPaletteLogSignatures[point] != logSignature {
+                hostedPaletteLogSignatures[point] = logSignature
+                NSLog("Core-SET: hosted-palette stage=field-state point=v17-%03d field=floatingPalette configured=%d confirmed=%d scope=actual-host-floating-gradient-property original-runtime-receipt=0 device-effect-verified=0 reason=%@",
+                      point, selected ? 1 : 0, confirmed ? 1 : 0, reason)
+            }
             swatch.accessibilityTraits = selected ? [.button, .selected] : .button
             if selected {
                 let outline = CAShapeLayer()
@@ -3103,7 +3122,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
 
     private func refreshRadarRangeRows() {
         guard selectedPage == 4, radarRangeRows.bounds.width > 0 else { return }
-        if hostedPointerID != nil || trackingUIKitSlider != nil { homeStatusNeedsRebuild = true; return }
+        if hostedPointerID != nil || hostedDispatchControlID != nil || trackingUIKitSlider != nil {
+            homeStatusNeedsRebuild = true; return
+        }
         guard let canvas = featureState.radar.desired.placement.canvas else { return }
         guard radarRangeCanvas != canvas || radarRangeRows.subviews.isEmpty else { return }
         if radarRangeCanvas != nil {
@@ -3197,8 +3218,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             let reason = values[index] == nil ? "identity/freshness/independent-field-valid-unconfirmed" :
                 (observed ? "matched-local-label-property" : "local-label-not-attached")
             performanceValueLabels[index].accessibilityHint = "本应用 \(sources[index])；本地数值/属性回读，不代表目标游戏或设备效果验收"
-            NSLog("Core-SET: performance point=v17-%03d stage=observation source=%@ observed=%d reason=%@ scope=own-process-local-label-property original-runtime-receipt=0 device-effect-verified=0",
-                  30 + index, sources[index], observed ? 1 : 0, reason)
+            let point = 30 + index
+            let logSignature = "\(observed ? 1 : 0)|\(reason)"
+            if performanceLogSignatures[point] != logSignature {
+                performanceLogSignatures[point] = logSignature
+                NSLog("Core-SET: performance point=v17-%03d stage=observation source=%@ observed=%d reason=%@ scope=own-process-local-label-property original-runtime-receipt=0 device-effect-verified=0",
+                      point, sources[index], observed ? 1 : 0, reason)
+            }
         }
     }
 
@@ -3419,6 +3445,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             DispatchQueue.main.async {
                 guard let self else { return }
                 let received = self.featureState.aim.receiveStop(token, outcome: outcome)
+                if received && self.featureState.aim.restoration == .confirmed {
+                    self.featureState.aim.updateDesired { $0.enabled = false }
+                }
                 NSLog("Core-SET: hosted input stage=actual control=%@ capability=aimStop confirmed=%d",
                       hostedSource, received && self.featureState.aim.restoration == .confirmed ? 1 : 0)
                 self.rebuildMenu()
@@ -3430,7 +3459,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         let editable = featureState.aim.phase != .applying && featureState.aim.phase != .active
         let custom = state.scene == .custom
         let modes: [CoreSetAimTrigger] = [.scopeOnly, .fireOnly, .either, .both]
-        let trigger = UISegmentedControl(items: ["开镜", "开火", "任一", "同时"])
+        let trigger = UISegmentedControl(items: ["仅开镜", "仅开火", "开镜或开火", "开镜且开火"])
         trigger.frame = CGRect(x: 335, y: 34, width: 303, height: 40)
         trigger.selectedSegmentIndex = state.trigger.flatMap { modes.firstIndex(of: $0) } ?? UISegmentedControl.noSegment
         trigger.isEnabled = editable && aimConfigurationAvailable(.basicAimTrigger)
@@ -3526,7 +3555,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 scenario.addSubview(slider)
             }
         } else if state.scene != nil {
-            let strength = UISegmentedControl(items: ["强", "中", "轻"])
+            let strength = UISegmentedControl(items: ["强锁定", "中锁定", "轻锁定"])
             strength.frame = CGRect(x: 12, y: 82, width: 299, height: 40)
             let strengths: [CoreSetLockStrength] = [.strong, .medium, .light]
             strength.selectedSegmentIndex = state.lockStrength.flatMap { strengths.firstIndex(of: $0) } ?? UISegmentedControl.noSegment
@@ -3542,26 +3571,33 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
              state.custom.confirmationFrames.value != nil && state.custom.predictionMilliseconds.value != nil &&
              state.custom.takeoverPauseMilliseconds.value != nil)) &&
              (state.scene == .custom || state.lockStrength != nil)
-        let start = UIButton(type: .system)
-        start.frame = CGRect(x: 20, y: 126, width: 130, height: 40)
-        start.setTitle("启用自瞄", for: .normal)
-        start.isEnabled = editable && aimConfigurationAvailable(.basicAimEnabled) && configured &&
+        let totalSwitch = UIButton(type: .system)
+        totalSwitch.frame = CGRect(x: 20, y: 126, width: 245, height: 40)
+        totalSwitch.setTitle("自瞄总开关", for: .normal)
+        let restorationNeedsStop: Bool
+        switch featureState.aim.restoration {
+        case .required, .pending, .failed: restorationNeedsStop = true
+        case .notNeeded, .confirmed: restorationNeedsStop = false
+        }
+        let turningOff = state.enabled == true || restorationNeedsStop
+        let readyToConfigureOn = editable && aimConfigurationAvailable(.basicAimEnabled) && configured &&
             state.trigger != nil && state.includeBots != nil && state.lockSameTarget != nil &&
             state.point != nil && state.circleSize.value != nil
-        start.accessibilityHint = "仅把总开关记录为已配置；目标写消费者仍未启用"
-        start.addTarget(self, action: #selector(startBasicAim), for: .touchUpInside)
-        registerHosted(start, .aimStart)
-        aim.addSubview(start)
-        let stop = UIButton(type: .system)
-        stop.frame = CGRect(x: 160, y: 126, width: 105, height: 40)
-        stop.setTitle("关闭自瞄", for: .normal)
-        stop.isEnabled = aimConfigurationAvailable(.basicAimEnabled) ||
-            featureState.aim.restoration == .required || featureState.aim.restoration == .pending
-        if case .failed = featureState.aim.restoration { stop.isEnabled = true }
-        stop.accessibilityHint = "当前没有已启动的自瞄会话；未执行目标操作"
-        stop.addTarget(self, action: #selector(stopBasicAim), for: .touchUpInside)
-        registerHosted(stop, .aimStop)
-        aim.addSubview(stop)
+        totalSwitch.isEnabled = featureState.aim.restoration != .pending &&
+            (turningOff ? (restorationNeedsStop || aimConfigurationAvailable(.basicAimEnabled)) : readyToConfigureOn)
+        totalSwitch.isSelected = state.enabled == true
+        totalSwitch.accessibilityValue = featureState.aim.restoration == .pending ? "停止恢复中" :
+            (state.enabled == true ? "开启（仅配置）" : "关闭")
+        if turningOff {
+            totalSwitch.accessibilityHint = "关闭配置；如存在未恢复效果则执行原有 stop/恢复，不直接操作目标"
+            totalSwitch.addTarget(self, action: #selector(stopBasicAim), for: .touchUpInside)
+            registerHosted(totalSwitch, .aimStop)
+        } else {
+            totalSwitch.accessibilityHint = "仅记录总开关配置；目标写消费者仍未启用"
+            totalSwitch.addTarget(self, action: #selector(startBasicAim), for: .touchUpInside)
+            registerHosted(totalSwitch, .aimStart)
+        }
+        aim.addSubview(totalSwitch)
         let text: String
         if case .unavailable(let reason) = featureState.aim.availability { text = reason }
         else { text = basicAimStatus }
@@ -3645,7 +3681,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             disabledRows(["预瞄标记圈", "动态自瞄圈", "显示自瞄圈", "自瞄连接线"],
                          in: aim, y: 172, columns: 4)
             let filter = card("目标筛选", CGRect(x: 0, y: 246, width: 323, height: 440))
-            disabledRows(["倒地不瞄", "LOS掩体判断"], in: filter, y: 400)
+            disabledRows(["倒地不瞄"], in: filter, y: 400)
             let scenario = card("场景预设", CGRect(x: 335, y: 246, width: 323,
                 height: featureState.aim.desired.scene == .custom ? 306 : 220))
             scenePreview(in: scenario)

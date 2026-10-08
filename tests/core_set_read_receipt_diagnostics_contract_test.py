@@ -137,7 +137,7 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
             "stability-roots", "stability-actor-membership", "stability-final-projection-roots",
             "stability-player-actors",
             "stability-count-actors", "stability-grenades", "stability-bones",
-            "stability-battle-inputs", "identity-final", "ready",
+            "stability-battle-inputs", "stability-final-reprojection", "identity-final", "ready",
         )
         positions = []
         for stage in stages:
@@ -167,7 +167,8 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         collector = read("lara/overlay/CoreSetPlayerSnapshot.mm")
         apply = body(player, "func apply(")
         self.assertLess(apply.index("armCaptureLoop()"), apply.index("capture()"))
-        self.assertIn("player-loop contract=core17-filter-final-reproject-v3", player)
+        self.assertIn("player-loop contract=core17-filter-coalesced-final-reproject-v4", player)
+        self.assertIn("transportReads=actor-page-copy+bone-array-bulk", player)
         self.assertIn("geometryFreshness=final-reprojected", player)
         self.assertIn("emptyEffect=retry", player)
         loop = body(player, "private func armCaptureLoop()")
