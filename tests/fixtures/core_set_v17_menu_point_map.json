@@ -184,7 +184,7 @@
       "source": "lara/views/app/CoreSetRadarConsumer.swift",
       "producer": "apply/capture/consumed",
       "receipt": "both ownedLanes receipts + requestToken+hostGeneration+configRevision+snapshotID + target lease identity + <=0.5s freshness",
-      "scope": "declared radar/warning subset; primary yaw scope only",
+      "scope": "declared radar/warning subset; primary yaw plus reflected +0x190 fallback with end reread; network freshness unproven",
       "runtime_device_verified": false,
       "lifecycle": {
         "start": "apply -> capture",
@@ -273,8 +273,8 @@
       "主页",
       "内核管理",
       "运行模式  安全 / 效率",
-      "explainUnavailable",
-      "unavailableInfo",
+      "configureHomeRunMode",
+      "homeRunMode",
       "home.desired.runMode",
       "missing_home",
       "",
@@ -288,7 +288,7 @@
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x12c int32/4bytes value",
       "local optional desired state; unselected stays nil; native conversion must not be inferred; read-only original action tracing boundary exists, no action consumer or effect receipt is attached",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "original-consumer-missing / typed-local-configuration",
       "carrier-only; NOT feature algorithm/source",
       "sol-e30-home-run-cover-gate.md#run-mode"
     ],
@@ -297,8 +297,8 @@
       "主页",
       "内核管理",
       "掩体判断  全局 / 局内 / 关闭",
-      "explainUnavailable",
-      "unavailableInfo",
+      "configureHomeCoverMode",
+      "homeCoverMode",
       "home.desired.coverMode",
       "missing_home",
       "",
@@ -312,7 +312,7 @@
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x2f bool/1bytes enabled; Core-self-configuration: 0x100c58270+0x130 int32/4bytes mode",
       "local optional desired state; unselected stays nil; native conversion must not be inferred; read-only original action tracing boundary exists, no action consumer or effect receipt is attached",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "original-consumer-missing / typed-local-configuration",
       "carrier-only; NOT feature algorithm/source",
       "sol-e30-home-run-cover-gate.md#cover-mode"
     ],
@@ -2853,7 +2853,7 @@
       "自瞄",
       "Core稳定自瞄",
       "自瞄总开关",
-      "startBasicAim|explainUnavailable",
+      "startBasicAim",
       "aimStart",
       "aim.desired.enabled",
       "missing_aim",
@@ -2891,7 +2891,7 @@
       "0x1000cf144",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x150 int32/4bytes value",
-      "head0/chest1/hips2 displayed; chest1 explicitly rejected without state/target change",
+      "head0/chest1/hips2 typed configuration retained; target point owner/action consumer still unverified",
       "original-consumer-missing / fail-closed-local-configuration-or-explanation",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
@@ -3048,8 +3048,8 @@
       "自瞄",
       "目标筛选",
       "倒地不瞄",
-      "explainUnavailable",
-      "unavailableInfo",
+      "toggleAimConfigurationField",
+      "aimConfigurationField",
       "aim.desired.excludeKnocked",
       "missing_aim",
       "",
@@ -3483,8 +3483,8 @@
       "压枪",
       "Core智能压枪【非无后坐力】",
       "启用压枪",
-      "explainUnavailable",
-      "unavailableInfo",
+      "toggleRecoilField",
+      "recoilField",
       "recoil.desired.enabled",
       "missing_recoil",
       "",
@@ -3507,8 +3507,8 @@
       "压枪",
       "Core智能压枪【非无后坐力】",
       "停火不压",
-      "explainUnavailable",
-      "unavailableInfo",
+      "toggleRecoilField",
+      "recoilField",
       "recoil.desired.stopWhenNotFiring.enabled",
       "missing_recoil",
       "",
@@ -3521,7 +3521,7 @@
       "0x1000cfe9c",
       "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x18d bool/1bytes value",
-      "local optional desired state; unselected stays nil; native conversion must not be inferred",
+      "local optional desired state; unselected stays nil; UI stopWhenNotFiring is modeled as inverted nativeFlag; target behavior remains unverified",
       "original-consumer-missing / fail-closed-local-configuration-or-explanation",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/recoil_state"
@@ -3531,8 +3531,8 @@
       "压枪",
       "Core智能压枪【非无后坐力】",
       "垂直补偿",
-      "explainUnavailable",
-      "unavailableInfo",
+      "toggleRecoilField",
+      "recoilField",
       "recoil.desired.verticalEnabled",
       "missing_recoil",
       "",
@@ -3555,8 +3555,8 @@
       "压枪",
       "Core智能压枪【非无后坐力】",
       "垂直补偿强度",
-      "explainUnavailable",
-      "unavailableInfo",
+      "configureRecoilStrength",
+      "recoilStrength",
       "recoil.desired.verticalStrength",
       "missing_recoil",
       "",
@@ -3582,8 +3582,8 @@
       "压枪",
       "Core智能压枪【非无后坐力】",
       "水平补偿",
-      "explainUnavailable",
-      "unavailableInfo",
+      "toggleRecoilField",
+      "recoilField",
       "recoil.desired.horizontalEnabled",
       "missing_recoil",
       "",
@@ -3606,8 +3606,8 @@
       "压枪",
       "Core智能压枪【非无后坐力】",
       "水平补偿强度",
-      "explainUnavailable",
-      "unavailableInfo",
+      "configureRecoilStrength",
+      "recoilStrength",
       "recoil.desired.horizontalStrength",
       "missing_recoil",
       "",
@@ -3633,15 +3633,15 @@
     "v17-000": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetHomeSettings, capability=homeSettings>",
       "state_field": "home.desired.runMode",
-      "current_caller_evidence": "home_current_caller_probe: home_state/home_refusal; no current home consumer binding",
-      "evidence_required": "取证C+12c int32 0/1对应的非菜单资源或调度策略、切换副作用和停止恢复；当前只有可选state和拒绝入口，新增homeSettings同义runMode字段消费者。",
+      "current_caller_evidence": "configureHomeRunMode/homeRunMode typed configuration plus explicit effect refusal; no current home action consumer binding",
+      "evidence_required": "取证C+12c int32 0/1对应的非菜单资源或调度策略、切换副作用和停止恢复；当前已有typed配置入口，仍需homeSettings同义runMode动作消费者。",
       "receipt_required": "真实观察结果必须匹配本次请求身份；有副作用的切换与停止须独立恢复回执。"
     },
     "v17-001": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetHomeSettings, capability=homeSettings>",
       "state_field": "home.desired.coverMode",
-      "current_caller_evidence": "home_current_caller_probe: home_state/home_refusal; no current home consumer binding",
-      "evidence_required": "取证C+2f bool/C+130 int32的全局/局内/关闭对应遮挡读取、过滤顺序、作用域和关闭清理；off保留原mode，新增homeSettings同义coverMode字段消费者。",
+      "current_caller_evidence": "configureHomeCoverMode/homeCoverMode typed configuration plus explicit effect refusal; no current home action consumer binding",
+      "evidence_required": "取证C+2f bool/C+130 int32的全局/局内/关闭对应遮挡读取、过滤顺序、作用域和关闭清理；typed配置已保留off前mode，仍需homeSettings同义coverMode动作消费者。",
       "receipt_required": "真实观察结果必须匹配本次请求身份；有副作用的切换与停止须独立恢复回执。"
     },
     "v17-002": {
@@ -3659,187 +3659,187 @@
       "receipt_required": "真实观察结果必须匹配本次请求身份；有副作用的切换与停止须独立恢复回执。"
     },
     "v17-106": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.enabled",
       "evidence_required": "核实总开关的原包门禁、目标动作生命周期与退出清理；提供动作执行及停止回执。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-107": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.point",
       "evidence_required": "核实头部/胸部/屁股枚举到已证目标落点的owner、类型、单位和分支；胸部当前明确拒绝，不用fallback宣称同义。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-108": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.preaimCircle",
       "evidence_required": "取证原包预瞄标记的目标生产者、动作门禁、绘制时序和样式；替代本地标记不作为原效果回执。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-109": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.trigger",
       "evidence_required": "核实开镜/开火/任一/同时的状态owner、枚举和时序组合；提供筛选后动作回执。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-110": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.dynamicCircle.enabled",
       "evidence_required": "核实原包取反标志、动态半径生产者、动作门禁和生命周期；替代动态圈不作为原效果回执。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-111": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.showCircle",
       "evidence_required": "核实原包显示圈与自瞄总门禁、半径生产者和停止清理；独立本地圈不作为原效果回执。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-112": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.connectionLine",
       "evidence_required": "核实原包目标选择、连接线端点、动作门禁和样式；替代本地连线不作为原效果回执。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-113": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.circleSize",
       "evidence_required": "核实原包圈大小原值、屏幕换算及对实际筛选/动作的影响；本地半径换算不证明原控制效果。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-114": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.excludeKnocked",
       "evidence_required": "核实倒地与死亡的独立目标字段、筛选顺序及状态更新；提供排除后的动作结果回执。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-115": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.includeBots",
       "evidence_required": "核实原包人机分类与候选分流；本地预览的人机过滤不证明原动作包含/排除。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-116": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.lockSameTarget",
       "evidence_required": "核实跨帧同目标身份、切换条件、失效和释放；提供锁定/切换/停止的真实状态回执。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-117": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.maximumDistance",
       "evidence_required": "核实自定义最大距离的单位、测距owner及筛选位置；替代预览距离过滤不证明原动作。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-118": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.strength",
       "evidence_required": "核实自瞄强度5..100到动作增量的真实公式和单位；禁止按UI数值直接推导gain。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-119": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.smoothing",
       "evidence_required": "核实转动平滑1..10的时间基准、公式和状态恢复；禁止把局部UI值当已执行平滑。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-120": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.confirmationFrames",
       "evidence_required": "核实接管确认帧数1..6的帧定义、累积/重置条件和动作时序。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-121": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.scene=far(0)",
       "evidence_required": "取证远距预设的真实参数来源、枚举0的组合策略和切换恢复；不能发明预设值。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-122": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.scene=close(2)",
       "evidence_required": "取证近战预设的真实参数来源、枚举2的组合策略和切换恢复；不能发明预设值。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-123": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.scene=general(1)",
       "evidence_required": "取证通用预设的真实参数来源、枚举1的组合策略和切换恢复；不能发明预设值。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-124": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.scene=custom(3)",
       "evidence_required": "取证自定义枚举3与九项参数的真实消费位置和切换恢复；仅显示自定义控件不算执行。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-125": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.lockStrength",
       "evidence_required": "核实强/中/轻的原包枚举4/3/0、预设派生策略和实际接管效果。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-126": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.horizontalSpeed",
       "evidence_required": "核实水平速度30..720度/秒的轴owner、时间基准、限幅与停止；不从UI滑条直接推目标写。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-127": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.verticalSpeed",
       "evidence_required": "核实垂直速度30..720度/秒的轴owner、时间基准、限幅与停止；不从UI滑条直接推目标写。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-128": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.predictionMilliseconds",
       "evidence_required": "核实预判提前0..300毫秒的目标速度/时间戳生产者及原公式；当前只记录本地参数。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-129": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.lockThreshold",
       "evidence_required": "核实锁定门槛5..500的真实单位、比较owner、迟滞与重置；单位未证不猜像素/角度。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-130": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.takeoverPauseMilliseconds",
       "evidence_required": "核实接管暂停50..1000毫秒的触发/恢复和输入生命周期；提供暂停/恢复/停止回执。",
       "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
     },
     "v17-131": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "recoil.desired.enabled",
       "evidence_required": "核实原包启用门禁、Aim/Recoil合流及双轴输入生命周期；提供启用、关闭、退出恢复回执。",
       "receipt_required": "真实动作执行/失败及停止恢复观察；原包公式、类型、单位、时序须闭合，不能用纯C++计划或配置值充当回执。"
     },
     "v17-132": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "recoil.desired.stopWhenNotFiring.enabled",
       "evidence_required": "核实菜单取反值与真实fire bit组合、停火状态转移及恢复；不把本地InvertedFlag当目标停火行为。",
       "receipt_required": "真实动作执行/失败及停止恢复观察；原包公式、类型、单位、时序须闭合，不能用纯C++计划或配置值充当回执。"
     },
     "v17-133": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "recoil.desired.verticalEnabled",
       "evidence_required": "核实垂直开关到Pitch增量分支的公式、轴owner、并发和停止归零。",
       "receipt_required": "真实动作执行/失败及停止恢复观察；原包公式、类型、单位、时序须闭合，不能用纯C++计划或配置值充当回执。"
     },
     "v17-134": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "recoil.desired.verticalStrength",
       "evidence_required": "核实垂直强度0..100到原始状态机增量的公式和单位；不能用UI百分数猜倍率。",
       "receipt_required": "真实动作执行/失败及停止恢复观察；原包公式、类型、单位、时序须闭合，不能用纯C++计划或配置值充当回执。"
     },
     "v17-135": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "recoil.desired.horizontalEnabled",
       "evidence_required": "核实水平开关到Yaw增量分支的公式、轴owner、并发和停止归零。",
       "receipt_required": "真实动作执行/失败及停止恢复观察；原包公式、类型、单位、时序须闭合，不能用纯C++计划或配置值充当回执。"
     },
     "v17-136": {
-      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；还需定义逐字段CoreSetField合同",
+      "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "recoil.desired.horizontalStrength",
       "evidence_required": "核实水平强度0..100到原始状态机增量的公式和单位；不能用UI百分数猜倍率。",
       "receipt_required": "真实动作执行/失败及停止恢复观察；原包公式、类型、单位、时序须闭合，不能用纯C++计划或配置值充当回执。"

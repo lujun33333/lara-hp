@@ -146,7 +146,8 @@ class HomeSchedulerContract(unittest.TestCase):
         self.assertFalse(current["device_effect_verified"])
         for point in current["points"]:
             requirement = (matrix["downstream_requirements"] | matrix["missing_observation_producers"])[point]
-            self.assertTrue(requirement["current_caller_evidence"].startswith("home_current_caller_probe:"))
+            self.assertTrue(requirement["current_caller_evidence"].startswith("home_current_caller_probe:") or
+                            requirement["current_caller_evidence"].startswith("configureHome"))
 
     def test_current_callers_are_source_bound_not_an_external_library_claim(self):
         sys.path.insert(0, str(ROOT / "tools"))

@@ -831,6 +831,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         canStage(featureState.recoil) && controlAvailability(field, in: featureState.recoil) == .ready
     }
 
+    private var homeConfigurationAvailable: Bool {
+        guard !featureState.home.suspended, featureState.home.pendingStop == nil,
+              featureState.home.restoration != .pending else { return false }
+        if case .failed = featureState.home.restoration { return false }
+        return true
+    }
+
     private func recordRecoilConfiguration(_ sender: UIView, path: String) {
         interactionControlIdentifier = sender.accessibilityIdentifier ?? "recoil.local-configuration"
         let reason = "\(path)：仅记录本地参数；未提交目标补偿，原版效果未确认"
@@ -3234,7 +3241,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     @objc private func configureHomeRunMode(_ sender: UIButton) {
         refreshBeforeInteraction(sender)
         let values: [CoreSetRunMode] = [.safe, .efficiency]
-        guard values.indices.contains(sender.tag) else { return }
+        guard homeConfigurationAvailable, values.indices.contains(sender.tag) else { return }
         featureState.home.updateDesired { $0.runMode = values[sender.tag] }
         onHomeProbeRefusal?(.runMode, sender.tag)
         showConfigurationFeedback("home.runMode：配置已记录；未绑定原版资源调度消费者")
@@ -3246,7 +3253,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     @objc private func configureHomeCoverMode(_ sender: UIButton) {
         refreshBeforeInteraction(sender)
         let values: [CoreSetCoverMode] = [.global, .inGame, .off]
-        guard values.indices.contains(sender.tag) else { return }
+        guard homeConfigurationAvailable, values.indices.contains(sender.tag) else { return }
         featureState.home.updateDesired { $0.selectCoverMode(values[sender.tag]) }
         onHomeProbeRefusal?(.coverMode, sender.tag)
         showConfigurationFeedback("home.coverMode：配置已记录；关闭时保留上次非关闭模式，动作消费者未绑定")

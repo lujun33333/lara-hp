@@ -85,6 +85,15 @@ enum CoreSetField: Hashable {
             return [.radarEnabled, .radarShowDistance, .radarDetectionDistance, .radarRadius,
                     .radarX, .radarY, .warningEnabled, .warningIgnoreBots, .warningRange,
                     .warningTextSize]
+        default: return []
+        }
+    }
+
+    // Configuration membership is not live-effect completeness. Aim/Recoil
+    // retain typed desired values while required(for:) remains empty until an
+    // original-effect consumer can truthfully declare live support.
+    static func configurable(for capability: CoreSetCapability) -> Set<CoreSetField> {
+        switch capability {
         case .aimControl:
             return [.basicAimEnabled, .basicAimPoint, .basicAimPreaimCircle, .basicAimTrigger,
                     .basicAimDynamicCircle, .basicAimShowCircle, .basicAimConnectionLine,
@@ -97,7 +106,7 @@ enum CoreSetField: Hashable {
         case .recoilControl:
             return [.recoilEnabled, .recoilStopWhenNotFiring, .recoilVerticalEnabled,
                     .recoilVerticalStrength, .recoilHorizontalEnabled, .recoilHorizontalStrength]
-        default: return []
+        default: return required(for: capability)
         }
     }
 }
@@ -225,7 +234,7 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         return true
     }
     func fieldConfigurationAvailability(_ field: CoreSetField) -> CoreSetAvailability {
-        guard CoreSetField.required(for: capability).contains(field) else {
+        guard CoreSetField.configurable(for: capability).contains(field) else {
             return .unavailable(reason: "\(capability.rawValue).\(field.diagnosticID)：字段不属于此配置通道")
         }
         guard binding?.owner != nil else {

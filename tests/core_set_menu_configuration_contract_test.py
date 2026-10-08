@@ -29,7 +29,7 @@ assert "var configurableFields: Set<CoreSetField> { get }" in state
 assert "var configurableFields: Set<CoreSetField> { supportedFields }" in state
 assert "configurationFields = { consumer.configurableFields }" in menu
 configuration = body(state, "func fieldConfigurationAvailability(")
-assert "CoreSetField.required(for: capability).contains(field)" in configuration
+assert "CoreSetField.configurable(for: capability).contains(field)" in configuration
 assert "binding?.configurableFields().contains(field) == true" in configuration
 assert "canStageDesired" in configuration
 assert "currentAvailability" not in configuration
@@ -38,6 +38,7 @@ for gate in ("binding?.owner != nil", "!suspended", "pendingStop == nil", "resto
     assert gate in staging, gate
 assert "currentAvailability" not in staging
 live = body(state, "func fieldAvailability(")
+assert "CoreSetField.required(for: capability).contains(field)" in live
 assert "binding?.supportedFields().contains(field) == true" in live
 assert "binding?.currentAvailability()" in live
 prepare = body(state, "mutating func prepareApply()")

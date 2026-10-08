@@ -1,6 +1,7 @@
 """Typed action-configuration contracts only; no target effects or device claim."""
 
 from pathlib import Path
+import json
 import re
 import unittest
 
@@ -35,8 +36,10 @@ class ActionConfigurationContract(unittest.TestCase):
         configured = body(self.aim, "var configurableFields:")
         fields = set(re.findall(r"\.(basicAim\w+)", configured))
         self.assertEqual(len(fields), 22)
+        configurable = body(self.state, "static func configurable(for capability:")
+        self.assertTrue(fields.issubset(set(re.findall(r"\.(basicAim\w+)", configurable))))
         required = body(self.state, "static func required(for capability:")
-        self.assertTrue(fields.issubset(set(re.findall(r"\.(basicAim\w+)", required))))
+        self.assertFalse(set(re.findall(r"\.(basicAim\w+)", required)))
         self.assertRegex(body(self.aim, "var supportedFields:"), r"^\s*\[\]\s*$")
 
     def test_recoil_six_points_are_typed_and_inverted_flag_is_preserved(self):
@@ -87,12 +90,35 @@ class ActionConfigurationContract(unittest.TestCase):
         for signature in ("@objc private func configureHomeRunMode(",
                           "@objc private func configureHomeCoverMode("):
             handler = body(self.menu, signature)
+            self.assertIn("homeConfigurationAvailable", handler)
             self.assertIn("configured=1 confirmed=0", handler)
             self.assertIn("targetEffectsCreated=0", handler)
             self.assertNotIn(".applied", handler)
         run_row = self.menu.split('} else if parts.count == 2 && parts[0] == "运行模式" {', 1)[1]
         run_row = run_row.split('} else if title == "全开"', 1)[0]
         self.assertIn("row.isUserInteractionEnabled = true", run_row)
+
+    def test_137_point_ledger_names_current_configuration_entries(self):
+        fixture = json.loads((ROOT / "tests/fixtures/core_set_v17_menu_point_map.json").read_text(encoding="utf-8"))
+        rows = {row[0]: dict(zip(fixture["columns"], row)) for row in fixture["points"]}
+        expected = {
+            "v17-000": ("configureHomeRunMode", "homeRunMode"),
+            "v17-001": ("configureHomeCoverMode", "homeCoverMode"),
+            "v17-106": ("startBasicAim", "aimStart"),
+            "v17-114": ("toggleAimConfigurationField", "aimConfigurationField"),
+            "v17-131": ("toggleRecoilField", "recoilField"),
+            "v17-132": ("toggleRecoilField", "recoilField"),
+            "v17-133": ("toggleRecoilField", "recoilField"),
+            "v17-134": ("configureRecoilStrength", "recoilStrength"),
+            "v17-135": ("toggleRecoilField", "recoilField"),
+            "v17-136": ("configureRecoilStrength", "recoilStrength"),
+        }
+        for point, (entry, hosted) in expected.items():
+            self.assertEqual(rows[point]["entry"], entry)
+            self.assertEqual(rows[point]["hosted_action"], hosted)
+        serialized = json.dumps(fixture, ensure_ascii=False)
+        self.assertNotIn("还需定义逐字段CoreSetField合同", serialized)
+        self.assertIn("network freshness unproven", fixture["contracts"]["radar"]["scope"])
 
 
 if __name__ == "__main__":
