@@ -198,6 +198,10 @@ private:
 @interface CoreSetV17ActionDelta ()
 @property(nonatomic) float pitch;
 @property(nonatomic) float yaw;
+@property(nonatomic) float aimPitch;
+@property(nonatomic) float aimYaw;
+@property(nonatomic) float recoilPitch;
+@property(nonatomic) float recoilYaw;
 @end
 @implementation CoreSetV17ActionDelta @end
 

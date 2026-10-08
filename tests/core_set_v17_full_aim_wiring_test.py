@@ -36,6 +36,8 @@ for token in (
 for token in (
     "referenceActionActorEligible", "referenceActionWorldPoint", "referenceActionScreenRank",
     "referenceActionCandidateMotion", "referenceActionGeometry", "referenceActionTakeover",
+    "@property(nonatomic) float aimPitch;", "@property(nonatomic) float aimYaw;",
+    "@property(nonatomic) float recoilPitch;", "@property(nonatomic) float recoilYaw;",
 ):
     assert token in probe_mm, token
 
