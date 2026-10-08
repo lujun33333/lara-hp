@@ -13,6 +13,8 @@ app = read("lara/lara.swift")
 plist = read("lara/Info.plist")
 project = read("lara.xcodeproj/project.pbxproj")
 packaging = read("scripts/build_ipa_pe.sh")
+frontboard_stub = read("Config/PrivateFrameworkStubs/FrontBoard.framework/FrontBoard.tbd")
+fbs_stub = read("Config/PrivateFrameworkStubs/FrontBoardServices.framework/FrontBoardServices.tbd")
 metal = read("lara/overlay/CoreSetMetalRenderAdapter.mm")
 imgui = read("lara/third_party/imgui/imgui.h")
 
@@ -60,10 +62,13 @@ for forbidden in ("CALayerHost", "RemoteCall", "remote_getClass", "doRemoteCall"
 for token in (
     '"-Wl,-needed_framework,FrontBoard"',
     '"-Wl,-needed_framework,FrontBoardServices"',
+    '"-F$(SRCROOT)/Config/PrivateFrameworkStubs"',
     "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard",
     "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices",
 ):
     assert token in project + packaging, token
+assert "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard" in frontboard_stub
+assert "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices" in fbs_stub
 
 for token in (
     'UIImage imageNamed:@"CoreSetLoading"',
