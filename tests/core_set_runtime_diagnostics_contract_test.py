@@ -32,7 +32,7 @@ assert "Only ShadowTrackerExtra 1.38.12/build 15915" in header
 connect = body(session, "- (BOOL)connect")
 for stage in (
     "process-not-found", "process-path-unavailable", "profile-mismatch",
-    "task-read-symbol-missing", "task-read-denied",
+    "task-read-symbol-missing", "task-read-denied", "kernel-mapped-read-unavailable",
     "task-port-pid-verification-failed", "main-image-or-uuid-not-found",
     "ready pid=",
 ):
@@ -49,6 +49,7 @@ for fallback in (
     'dlsym(RTLD_DEFAULT, "processor_set_tasks")',
     '"kernel-allproc"', 'profileSource=%@ pidSource=%@ taskSource=%@',
     '@"kernel-proc+mach-uuid"', 'candidate.kernelProc == 0',
+    '@"kernel-mapped-read"', 'findImageWithUUID:CSUUID',
 ):
     assert fallback in session, fallback
 resolver = body(session, "static CSKernelTarget CSResolveKernelTarget")

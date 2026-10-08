@@ -46,9 +46,12 @@ def require_cleanup_contract(source: str) -> None:
     cleanup = body(source, "- (CoreSetReadCleanupResult *)disconnect")
     for gate in ("if (released) _task = MACH_PORT_NULL",
                  "released = releaseResult == KERN_SUCCESS",
-                 "BOOL advanced = _generation != UINT64_MAX", "if (advanced) ++_generation"):
+                 "transportReleased = [_kernelTransport disconnect]",
+                 "BOOL advanced = resourcesReleased && _generation != UINT64_MAX",
+                 "if (advanced) ++_generation"):
         assert gate in cleanup, gate
-    assert "initWithTaskPortReleased:released generationAdvanced:advanced" in cleanup
+    assert "transportReleased:transportReleased" in cleanup
+    assert "generationAdvanced:advanced" in cleanup
 
 
 def require_permission_boundary(source: str) -> None:
@@ -68,6 +71,8 @@ class ReadFailureZeroContract(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = (ROOT / "lara/overlay/CoreSetReadSession.mm").read_text(encoding="utf-8")
         cls.header = (ROOT / "lara/overlay/CoreSetReadSession.h").read_text(encoding="utf-8")
+        cls.kernel_transport = (ROOT / "lara/overlay/CoreSetKernelMappedReadTransport.mm").read_text(encoding="utf-8")
+        cls.kernel_profile = (ROOT / "lara/overlay/CoreSetKernelReadProfile.mm").read_text(encoding="utf-8")
 
     def test_all_bounded_failure_paths_clear_before_read_gates(self) -> None:
         require_read_contract(self.source, self.header)
@@ -94,10 +99,11 @@ class ReadFailureZeroContract(unittest.TestCase):
         self.assertIn("if (released) _task = MACH_PORT_NULL", cleanup)
         self.assertIn("releaseResult = mach_port_deallocate(mach_task_self(), _task)", cleanup)
         self.assertIn("released = releaseResult == KERN_SUCCESS", cleanup)
-        self.assertIn("BOOL advanced = _generation != UINT64_MAX", cleanup)
+        self.assertIn("BOOL advanced = resourcesReleased && _generation != UINT64_MAX", cleanup)
         self.assertIn("if (advanced) ++_generation", cleanup)
-        self.assertIn("initWithTaskPortReleased:released generationAdvanced:advanced", cleanup)
-        for marker in ("task-port-release-failed", "generation-exhausted", "retainedPort=%d",
+        self.assertIn("transportReleased:transportReleased", cleanup)
+        for marker in ("task-port-release-failed", "read-transport-release-failed",
+                       "generation-exhausted", "retainedPort=%d", "retainedTransport=%d",
                        "previousGeneration=%llu sessionGeneration=%llu kr=0x%x",
                        "stage=cleanup", "now - _lastCleanupLogTime >= 30.0"):
             self.assertIn(marker, cleanup)
@@ -106,19 +112,27 @@ class ReadFailureZeroContract(unittest.TestCase):
     def test_failed_cleanup_or_saturated_generation_cannot_claim_success(self) -> None:
         for gate in ("if (released) _task = MACH_PORT_NULL",
                      "released = releaseResult == KERN_SUCCESS",
-                     "_generation != UINT64_MAX", "if (advanced) ++_generation"):
+                     "resourcesReleased && _generation != UINT64_MAX", "if (advanced) ++_generation"):
             with self.subTest(gate=gate), self.assertRaises(AssertionError):
                 require_cleanup_contract(self.source.replace(gate, "REMOVED_GATE"))
 
     def test_transport_permissions_are_unchanged(self) -> None:
         require_permission_boundary(self.source)
-        self.assertIn("There is no", self.header)
-        self.assertIn("RemoteCall or", self.header)
-        self.assertIn("mapped-page fallback", self.header)
+        self.assertIn("private", self.header)
+        self.assertIn("kernel-mapped read transport", self.header)
+        self.assertIn("no mapped", self.header)
+        self.assertIn("target-write API", self.header)
+        for forbidden in ("ds_kwrite", "mach_vm_write", "VM_PROT_WRITE", "RemoteCall"):
+            self.assertNotIn(forbidden, self.kernel_transport)
+        self.assertIn("CoreSetKernelReadProfile matchesCurrentKernel", self.kernel_transport)
+        for exact in ("23A341", "iPhone17,2", "xnu-12377.2.8~1",
+                      "off_task_itk_space == 0x310", "off_ipc_port_ip_kobject == 0x50",
+                      "kernel_base == sPinnedKernelBase", "kernel-uuid-changed"):
+            self.assertIn(exact, self.kernel_profile)
 
     def test_write_or_broker_symbols_are_rejected(self) -> None:
         for forbidden in ("mach_vm_write", "VM_PROT_WRITE", "RemoteCall *broker",
-                          "remoteRead(address)", "vmmapremotepage(map, address)"):
+                          "remoteRead(address)"):
             with self.subTest(symbol=forbidden), self.assertRaises(AssertionError):
                 require_permission_boundary(self.source + "\n" + forbidden)
 

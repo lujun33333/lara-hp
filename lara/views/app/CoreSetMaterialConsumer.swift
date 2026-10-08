@@ -393,6 +393,6 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
         activeToken = nil; pendingApply = nil
         expectedReadSemanticDiagnostic = nil
         let cleanup = worker.sync { session.disconnect() }
-        return cleanup.taskPortReleased && cleanup.generationAdvanced
+        return cleanup.complete
     }
 }

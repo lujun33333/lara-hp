@@ -92,7 +92,7 @@ final class CoreSetActionReadOnlyProbe {
             }
             let cleanup = self.session.disconnect()
             self.lock.lock()
-            self.cleanupConfirmed = cleanup.taskPortReleased && cleanup.generationAdvanced
+            self.cleanupConfirmed = cleanup.complete
             self.inFlight = false
             self.lock.unlock()
         }
@@ -108,7 +108,7 @@ final class CoreSetActionReadOnlyProbe {
             }
             let cleanup = self.session.disconnect()
             self.lock.lock()
-            self.cleanupConfirmed = cleanup.taskPortReleased && cleanup.generationAdvanced
+            self.cleanupConfirmed = cleanup.complete
             let complete = !self.inFlight && self.cleanupConfirmed
             self.lock.unlock()
             DispatchQueue.main.async { completion(complete) }

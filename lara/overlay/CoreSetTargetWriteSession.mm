@@ -256,14 +256,14 @@
         BOOL advanced = _generation != UINT64_MAX;
         if (advanced) ++_generation;
         const BOOL effectsResolved = _effects.targetEffectsResolved();
-        _pendingCleanup = _pendingCleanup || !backendClean || !drained || !readCleanup.taskPortReleased ||
-            !readCleanup.generationAdvanced || !advanced || !mappedReleased || !effectsResolved;
+        _pendingCleanup = _pendingCleanup || !backendClean || !drained || !readCleanup.complete ||
+            !advanced || !mappedReleased || !effectsResolved;
         if (!effectsResolved) {
             NSLog(@"Core-SET: target-write stage=stop ready=0 targetEffectsResolved=0 effectEpoch=%llu reason=explicit-independent-restoration-receipt-unavailable noAutomaticWriteback=1 noRotationInputClear=1",
                   (unsigned long long)_effects.attemptEpoch());
         }
         return [[CoreSetTargetWriteCleanupResult alloc]
-            initWithReadTaskPortReleased:readCleanup.taskPortReleased
+            initWithReadTaskPortReleased:readCleanup.taskPortReleased && readCleanup.transportReleased
             mappedAliasReleased:mappedReleased
             generationAdvanced:advanced && readCleanup.generationAdvanced
             noInFlight:drained && backendClean targetEffectsResolved:effectsResolved];

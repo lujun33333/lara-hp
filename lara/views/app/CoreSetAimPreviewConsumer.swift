@@ -142,6 +142,6 @@ final class CoreSetAimPreviewConsumer {
         stopped = true
         probe?.invalidate(); probe = nil
         let cleanup = worker.sync { session.disconnect() }
-        return cleanup.taskPortReleased && cleanup.generationAdvanced
+        return cleanup.complete
     }
 }

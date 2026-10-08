@@ -193,7 +193,7 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertIn("grenadeMotion.clear()", body(self.player, "private func clearStaleLane("))
         shutdown = body(self.player, "func shutdownReadSession()")
         self.assertIn("let motionClean = grenadeMotion.clear()", shutdown)
-        self.assertIn("motionClean && cleanup.taskPortReleased && cleanup.generationAdvanced", shutdown)
+        self.assertIn("motionClean && cleanup.complete", shutdown)
         render = body(self.player, "private func render(")
         self.assertIn("for segment in mark.predictionSegments", render)
         self.assertIn("if mark.predictionEndpointPresent", render)

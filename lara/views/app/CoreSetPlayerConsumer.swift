@@ -556,6 +556,6 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         let motionClean = grenadeMotion.clear()
         CoreSetWeaponImageCatalog.stop()
         let cleanup = worker.sync { session.disconnect() } // Drain queued connects/captures first.
-        return motionClean && cleanup.taskPortReleased && cleanup.generationAdvanced
+        return motionClean && cleanup.complete
     }
 }

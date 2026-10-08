@@ -1,4 +1,6 @@
 #import "CoreSetReadSession.h"
+#import "CoreSetKernelMappedReadTransport.h"
+#import "CoreSetKernelReadProfile.h"
 #import "../kexploit/darksword.h"
 #import "../kexploit/offsets.h"
 #import "../kexploit/utils.h"
@@ -175,14 +177,22 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
 }
 
 @implementation CoreSetReadCleanupResult
-- (instancetype)initWithTaskPortReleased:(BOOL)released generationAdvanced:(BOOL)advanced {
-    if ((self = [super init])) { _taskPortReleased = released; _generationAdvanced = advanced; }
+- (instancetype)initWithTaskPortReleased:(BOOL)taskPortReleased
+                       transportReleased:(BOOL)transportReleased
+                      generationAdvanced:(BOOL)generationAdvanced {
+    if ((self = [super init])) {
+        _taskPortReleased = taskPortReleased;
+        _transportReleased = transportReleased;
+        _generationAdvanced = generationAdvanced;
+        _complete = taskPortReleased && transportReleased && generationAdvanced;
+    }
     return self;
 }
 @end
 
 @interface CoreSetReadSession () {
     task_t _task;
+    CoreSetKernelMappedReadTransport *_kernelTransport;
     int32_t _pid;
     uint64_t _base;
     uint64_t _generation;
@@ -221,7 +231,7 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
 
 - (BOOL)ready {
     @synchronized (self) {
-        if (_task == MACH_PORT_NULL) return NO;
+        if (_task == MACH_PORT_NULL && !_kernelTransport) return NO;
         if ([self identityStillValid:YES]) return YES;
         [self disconnect];
         [self publishConnectDiagnostic:@"identity-lost stage=ready" ready:NO];
@@ -357,15 +367,23 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
 }
 
 - (BOOL)identityStillValid:(BOOL)verifyImage {
-    if (_task == MACH_PORT_NULL || _pid <= 0 || !_base) return NO;
-    int currentPID = -1;
-    if (pid_for_task(_task, &currentPID) != KERN_SUCCESS || currentPID != _pid) return NO;
+    if ((_task == MACH_PORT_NULL && !_kernelTransport) || _pid <= 0 || !_base) return NO;
+    if (_task != MACH_PORT_NULL) {
+        int currentPID = -1;
+        if (pid_for_task(_task, &currentPID) != KERN_SUCCESS || currentPID != _pid) return NO;
+    } else if (!_kernelTransport || _kernelTransport.processID != _pid ||
+               ![_kernelTransport identityValid]) {
+        return NO;
+    }
     if (_path) {
         NSString *currentPath = [CoreSetReadSession pathForPID:_pid];
         if (![currentPath isEqualToString:_path] ||
             (verifyImage && ![CoreSetReadSession profileMatchesPath:currentPath])) return NO;
     }
-    return !verifyImage || [CoreSetReadSession imageAt:_base task:_task];
+    if (!verifyImage) return YES;
+    return _task != MACH_PORT_NULL
+        ? [CoreSetReadSession imageAt:_base task:_task]
+        : [_kernelTransport imageAt:_base matchesUUID:CSUUID];
 }
 
 - (BOOL)connect {
@@ -378,7 +396,7 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
             return YES;
         }
         CoreSetReadCleanupResult *cleanup = [self disconnect];
-        if (!cleanup.taskPortReleased || _generation == UINT64_MAX) {
+        if (!cleanup.complete || _generation == UINT64_MAX) {
             [self publishConnectDiagnostic:@"cleanup-or-generation-failed" ready:NO]; return NO;
         }
         int pids[4096] = {0};
@@ -417,6 +435,7 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
         kern_return_t lastTaskResult = KERN_FAILURE;
         const char *lastTaskSource = "none";
         NSString *lastProfile = nil;
+        NSString *lastKernelTransportError = nil;
         for (int index = 0; index < candidateCount; ++index) {
             const CSProcessCandidate candidate = candidates[index];
             const int pid = candidate.pid;
@@ -450,27 +469,61 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
             lastTaskResult = acquisition.result;
             lastTaskSource = acquisition.source;
             task_t task = acquisition.task;
-            if (task == MACH_PORT_NULL) continue;
-            sawTask = YES;
-            int verifiedPID = -1;
-            if (pid_for_task(task, &verifiedPID) != KERN_SUCCESS || verifiedPID != pid) {
-                mach_port_deallocate(mach_task_self(), task); continue;
-            }
-            sawPID = YES;
-            uint64_t base = [CoreSetReadSession findImageInTask:task];
-            if (!base) { mach_port_deallocate(mach_task_self(), task); continue; }
-            if (candidate.kernelProc != 0) {
+            if (task != MACH_PORT_NULL) {
+                sawTask = YES;
+                int verifiedPID = -1;
+                if (pid_for_task(task, &verifiedPID) != KERN_SUCCESS || verifiedPID != pid) {
+                    mach_port_deallocate(mach_task_self(), task); continue;
+                }
+                sawPID = YES;
+                uint64_t base = [CoreSetReadSession findImageInTask:task];
+                if (!base) { mach_port_deallocate(mach_task_self(), task); continue; }
+                if (candidate.kernelProc != 0) {
+                    const CSKernelTarget current = CSResolveKernelTarget(true);
+                    if (current.pid != pid || current.kernelProc != candidate.kernelProc) {
+                        kernelIdentityChanged = YES;
+                        mach_port_deallocate(mach_task_self(), task);
+                        continue;
+                    }
+                }
+                _task = task; _pid = pid; _base = base; _path = [path copy];
+                _pidSource = [NSString stringWithUTF8String:candidate.source ?: "unknown"];
+                _taskSource = [NSString stringWithUTF8String:acquisition.source ?: "unknown"];
+                _profileSource = profileSource;
+            } else if (candidate.kernelProc != 0) {
+                CoreSetKernelMappedReadTransport *transport =
+                    [[CoreSetKernelMappedReadTransport alloc]
+                        initWithKernelProcess:candidate.kernelProc expectedPID:pid];
+                uint64_t base = transport ? [transport findImageWithUUID:CSUUID] : 0;
+                lastKernelTransportError = transport
+                    ? transport.lastError : [NSString stringWithFormat:
+                        @"mapped-read-prerequisites-or-identity-invalid profile=%@",
+                        [CoreSetKernelReadProfile lastFailure]];
                 const CSKernelTarget current = CSResolveKernelTarget(true);
-                if (current.pid != pid || current.kernelProc != candidate.kernelProc) {
-                    kernelIdentityChanged = YES;
-                    mach_port_deallocate(mach_task_self(), task);
+                if (!transport || !base || current.pid != pid ||
+                    current.kernelProc != candidate.kernelProc || ![transport identityValid]) {
+                    kernelIdentityChanged = transport &&
+                        (current.pid != pid || current.kernelProc != candidate.kernelProc);
+                    if (transport && ![transport disconnect]) {
+                        // Retain the owner so a later disconnect can retry every
+                        // cached alias/port release. Never orphan cleanup state.
+                        _kernelTransport = transport;
+                        _pid = pid;
+                        _taskSource = @"kernel-mapped-read-cleanup-pending";
+                        lastKernelTransportError = transport.lastError;
+                        break;
+                    }
                     continue;
                 }
+                sawTask = YES;
+                sawPID = YES;
+                _kernelTransport = transport; _pid = pid; _base = base; _path = [path copy];
+                _pidSource = [NSString stringWithUTF8String:candidate.source ?: "unknown"];
+                _taskSource = @"kernel-mapped-read";
+                _profileSource = profileSource;
+            } else {
+                continue;
             }
-            _task = task; _pid = pid; _base = base; _path = [path copy];
-            _pidSource = [NSString stringWithUTF8String:candidate.source ?: "unknown"];
-            _taskSource = [NSString stringWithUTF8String:acquisition.source ?: "unknown"];
-            _profileSource = profileSource;
             if ([self identityStillValid:YES]) {
                 ++_generation;
                 [self publishConnectDiagnostic:[NSString stringWithFormat:
@@ -492,6 +545,9 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
         else if (!sawPath) reason = @"process-path-unavailable";
         else if (!sawProfile) reason = [NSString stringWithFormat:@"profile-mismatch expected=1.38.12/15915 actual={%@}",
             lastProfile ?: @"unreadable"];
+        else if (!sawTask && lastKernelTransportError.length) reason = [NSString stringWithFormat:
+            @"kernel-mapped-read-unavailable reason=%@ machSource=%s machKr=0x%x",
+            lastKernelTransportError, lastTaskSource, lastTaskResult];
         else if (!taskMechanismAvailable) reason = @"task-read-symbol-missing acquisition=task_for_pid/task_read_for_pid/processor_set_tasks";
         else if (!sawTask) reason = [NSString stringWithFormat:@"task-read-denied source=%s kr=0x%x",
             lastTaskSource, lastTaskResult];
@@ -524,7 +580,7 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
             return NO;
         }
         if (![self identityStillValid:NO]) {
-            if (_task != MACH_PORT_NULL) {
+            if (_task != MACH_PORT_NULL || _kernelTransport) {
                 [self disconnect];
                 [self publishConnectDiagnostic:@"identity-lost stage=read-before" ready:NO];
             }
@@ -541,8 +597,17 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
             return NO;
         }
         mach_vm_size_t done = 0;
-        kern_return_t kr = mach_vm_read_overwrite(_task, address, length,
-            (mach_vm_address_t)(uintptr_t)scratch.mutableBytes, &done);
+        kern_return_t kr = KERN_FAILURE;
+        if (_task != MACH_PORT_NULL) {
+            kr = mach_vm_read_overwrite(_task, address, length,
+                (mach_vm_address_t)(uintptr_t)scratch.mutableBytes, &done);
+        } else if (_kernelTransport) {
+            size_t mappedDone = 0;
+            const BOOL mapped = [_kernelTransport readAt:address to:scratch.mutableBytes
+                                                  length:length completedBytes:&mappedDone];
+            done = (mach_vm_size_t)mappedDone;
+            kr = mapped ? KERN_SUCCESS : KERN_FAILURE;
+        }
         if (completedBytes) *completedBytes = (size_t)done;
         const BOOL identityValid = [self identityStillValid:NO] && generation == _generation;
         if (kr != KERN_SUCCESS || done != length || !identityValid) {
@@ -563,15 +628,25 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
 - (CoreSetReadCleanupResult *)disconnect {
     @synchronized (self) {
         BOOL released = YES;
+        BOOL transportReleased = YES;
         kern_return_t releaseResult = KERN_SUCCESS;
         const uint64_t previousGeneration = _generation;
-        const BOOL hadIdentity = _task != MACH_PORT_NULL || _pid > 0 || _base != 0 || _path.length != 0;
+        const BOOL hadIdentity = _task != MACH_PORT_NULL || _kernelTransport ||
+            _pid > 0 || _base != 0 || _path.length != 0;
         if (_task != MACH_PORT_NULL) {
             releaseResult = mach_port_deallocate(mach_task_self(), _task);
             released = releaseResult == KERN_SUCCESS;
         }
         if (released) _task = MACH_PORT_NULL;
-        _pid = -1; _base = 0; _path = nil; _pidSource = nil; _taskSource = nil; _profileSource = nil;
+        if (_kernelTransport) {
+            transportReleased = [_kernelTransport disconnect];
+            if (transportReleased) _kernelTransport = nil;
+        }
+        const BOOL resourcesReleased = released && transportReleased;
+        if (resourcesReleased) {
+            _pid = -1; _base = 0; _path = nil;
+            _pidSource = nil; _taskSource = nil; _profileSource = nil;
+        }
         // Failure sequence stays monotonic for in-flight capture attribution,
         // but old identity diagnostics must not survive a disconnected lease.
         if (hadIdentity) {
@@ -582,13 +657,15 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
             _lastLoggedReadFailureKind = nil;
             _lastReadFailureLogTime = 0;
         }
-        BOOL advanced = _generation != UINT64_MAX;
+        BOOL advanced = resourcesReleased && _generation != UINT64_MAX;
         if (advanced) ++_generation;
         NSString *kind = !released ? @"task-port-release-failed" :
-            (!advanced ? @"generation-exhausted" : @"complete");
+            (!transportReleased ? @"read-transport-release-failed" :
+            (!advanced ? @"generation-exhausted" : @"complete"));
         _lastCleanupDiagnostic = [NSString stringWithFormat:
-            @"%@ taskPortReleased=%d generationAdvanced=%d retainedPort=%d hadIdentity=%d previousGeneration=%llu sessionGeneration=%llu kr=0x%x",
-            kind, released, advanced, _task != MACH_PORT_NULL, hadIdentity,
+            @"%@ taskPortReleased=%d transportReleased=%d generationAdvanced=%d retainedPort=%d retainedTransport=%d hadIdentity=%d previousGeneration=%llu sessionGeneration=%llu kr=0x%x",
+            kind, released, transportReleased, advanced, _task != MACH_PORT_NULL,
+            _kernelTransport != nil, hadIdentity,
             (unsigned long long)previousGeneration, (unsigned long long)_generation,
             (unsigned)releaseResult];
         const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
@@ -597,7 +674,9 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
             NSLog(@"Core-SET: target-read lane=%@ stage=cleanup reason=%@",
                 _diagnosticLabel ?: @"unassigned", _lastCleanupDiagnostic);
         }
-        return [[CoreSetReadCleanupResult alloc] initWithTaskPortReleased:released generationAdvanced:advanced];
+        return [[CoreSetReadCleanupResult alloc] initWithTaskPortReleased:released
+                                                       transportReleased:transportReleased
+                                                      generationAdvanced:advanced];
     }
 }
 @end

@@ -21,8 +21,12 @@ NS_ASSUME_NONNULL_BEGIN
 // A target-specific, read-only lease. This type exposes no remote write/call API.
 @interface CoreSetReadCleanupResult : NSObject
 @property(nonatomic, readonly) BOOL taskPortReleased;
+@property(nonatomic, readonly) BOOL transportReleased;
 @property(nonatomic, readonly) BOOL generationAdvanced;
-- (instancetype)initWithTaskPortReleased:(BOOL)released generationAdvanced:(BOOL)advanced;
+@property(nonatomic, readonly) BOOL complete;
+- (instancetype)initWithTaskPortReleased:(BOOL)taskPortReleased
+                       transportReleased:(BOOL)transportReleased
+                      generationAdvanced:(BOOL)generationAdvanced;
 @end
 
 @interface CoreSetReadSession : NSObject
@@ -47,9 +51,11 @@ NS_ASSUME_NONNULL_BEGIN
 // PID discovery follows the WZ order: libproc first, then a kernel allproc lookup
 // after DarkSword is ready. Readable bundle metadata must match version/build;
 // when proc_pidpath is sandbox-hidden, only a kernel-verified proc plus the exact
-// main-executable UUID may replace that metadata gate. Target bytes still flow
-// only through a PID-verified Mach task acquired by audited system mechanisms.
-// There is no RemoteCall or mapped-page fallback and no target-write API.
+// main-executable UUID may replace that metadata gate. Target bytes prefer a
+// PID-verified Mach task. When system task-port acquisition is denied, a private
+// kernel-mapped read transport may be used after proc/task/vm_map identity and
+// the exact executable UUID are verified. The transport exposes no mapped
+// address, remote-call or target-write API to collectors.
 - (BOOL)connect;
 - (BOOL)readAt:(uint64_t)address to:(void *)destination length:(size_t)length
      generation:(uint64_t)generation completedBytes:(size_t *)completedBytes

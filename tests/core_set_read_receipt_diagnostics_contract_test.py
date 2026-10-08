@@ -54,6 +54,7 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.session = read("lara/overlay/CoreSetReadSession.mm")
+        cls.kernel_transport = read("lara/overlay/CoreSetKernelMappedReadTransport.mm")
         cls.consumers = {name: read(f"lara/views/app/CoreSet{name}Consumer.swift")
                          for name in ("Player", "Material", "Radar")}
 
@@ -76,7 +77,10 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertIn("candidate.kernelProc == 0", connect)
         self.assertIn('@"kernel-proc+mach-uuid"', connect)
         self.assertIn("findImageInTask:task", connect)
-        self.assertIn("imageAt:_base task:_task", body(self.session, "- (BOOL)identityStillValid:"))
+        self.assertIn("findImageWithUUID:CSUUID", connect)
+        identity = body(self.session, "- (BOOL)identityStillValid:")
+        self.assertIn("imageAt:_base task:_task", identity)
+        self.assertIn("imageAt:_base matchesUUID:CSUUID", identity)
 
     def test_read_errors_have_current_generation_range_and_no_payload(self) -> None:
         diagnostic = body(self.session, "- (void)recordReadFailure:")
@@ -157,6 +161,9 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         read_at = body(self.session, "- (BOOL)readAt:")
         self.assertNotRegex(read_at, r"\b(?:task_for_pid|remoteRead|vmmapremotepage|ds_kread\w*)\s*\(")
         self.assertNotIn("mach_vm_write", self.session)
+        self.assertIn("vmmapremotepagereadonly(_kernelVMMap, pageAddress)", self.kernel_transport)
+        for forbidden in ("ds_kwrite", "mach_vm_write", "VM_PROT_WRITE", "RemoteCall"):
+            self.assertNotIn(forbidden, self.kernel_transport)
         for name in ("Aim", "Recoil"):
             source = read(f"lara/views/app/CoreSet{name}Consumer.swift")
             apply = body(source, "func apply(")
