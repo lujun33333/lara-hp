@@ -49,9 +49,13 @@ for fallback in (
     'dlsym(RTLD_DEFAULT, "processor_set_tasks")',
     '"kernel-allproc"', 'profileSource=%@ pidSource=%@ taskSource=%@',
     '@"kernel-proc+mach-uuid"', 'candidate.kernelProc == 0',
-    '@"kernel-page-table-read"', 'findImageWithUUID:CSUUID',
+    '@"kernel-page-table-read"', 'CSAcquireSharedKernelTransport(',
 ):
     assert fallback in session, fallback
+shared_acquire = session[session.index("static BOOL CSAcquireSharedKernelTransport("):
+                         session.index("static BOOL CSValidateSharedKernelLease(")]
+assert "[transport findImageWithUUID:uuid]" in shared_acquire
+assert "candidate.kernelProc, pid, CSUUID" in connect
 resolver = body(session, "static CSKernelTarget CSResolveKernelTarget")
 assert "ds_address_usable(result.kernelProc)" in resolver
 assert "result.kernelProc <= UINT64_MAX - off_proc_p_pid" in resolver

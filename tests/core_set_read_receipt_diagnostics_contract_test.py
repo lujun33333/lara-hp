@@ -77,10 +77,15 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertIn("candidate.kernelProc == 0", connect)
         self.assertIn('@"kernel-proc+mach-uuid"', connect)
         self.assertIn("findImageInTask:task", connect)
-        self.assertIn("findImageWithUUID:CSUUID", connect)
+        self.assertIn("CSAcquireSharedKernelTransport(", connect)
+        shared = body(self.session, "static BOOL CSAcquireSharedKernelTransport(")
+        self.assertIn("findImageWithUUID:uuid", shared)
+        self.assertIn("imageAt:base matchesUUID:uuid", shared)
         identity = body(self.session, "- (BOOL)identityStillValid:")
         self.assertIn("imageAt:_base task:_task", identity)
-        self.assertIn("imageAt:_base matchesUUID:CSUUID", identity)
+        self.assertIn("CSValidateSharedKernelLease(_kernelTransport", identity)
+        validate = body(self.session, "static BOOL CSValidateSharedKernelLease(")
+        self.assertIn("matchesUUID:CSUUID", validate)
 
     def test_read_errors_have_current_generation_range_and_no_payload(self) -> None:
         diagnostic = body(self.session, "- (void)recordReadFailure:")

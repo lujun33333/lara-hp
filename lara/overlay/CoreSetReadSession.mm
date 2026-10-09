@@ -53,9 +53,175 @@ static pthread_mutex_t CSProcessResolverLock = PTHREAD_MUTEX_INITIALIZER;
 static CSKernelTarget CSCachedKernelTarget = {-1, 0, false};
 static CFAbsoluteTime CSCachedKernelTargetAt = 0;
 
-// WZ serializes target discovery around its global transport. Core-SET owns
-// several independent read sessions, so share a short-lived kernel proc lookup
-// rather than walking allproc once per lane every second.
+// Core 1.7 publishes one target context and lets every reader take a lease on
+// that immutable generation.  Keep the mapped transport and its translation
+// cache alive until the final session releases it; task-port sessions remain
+// independently owned because their Mach rights have separate cleanup rules.
+static pthread_mutex_t CSSharedTargetContextLock = PTHREAD_MUTEX_INITIALIZER;
+static CoreSetKernelMappedReadTransport *CSSharedKernelTransport = nil;
+static int32_t CSSharedKernelPID = -1;
+static uint64_t CSSharedKernelProcess = 0;
+static uint64_t CSSharedKernelImageBase = 0;
+static uint64_t CSSharedTargetContextGeneration = 1;
+static uint32_t CSSharedTargetContextLeaseCount = 0;
+
+static void CSAdvanceSharedTargetContextGenerationLocked(void) {
+    if (CSSharedTargetContextGeneration == UINT64_MAX) {
+        CSSharedTargetContextGeneration = 1;
+    } else {
+        ++CSSharedTargetContextGeneration;
+        if (CSSharedTargetContextGeneration == 0)
+            CSSharedTargetContextGeneration = 1;
+    }
+}
+
+static void CSClearSharedTargetContextLocked(void) {
+    CSSharedKernelTransport = nil;
+    CSSharedKernelPID = -1;
+    CSSharedKernelProcess = 0;
+    CSSharedKernelImageBase = 0;
+    CSSharedTargetContextLeaseCount = 0;
+    CSAdvanceSharedTargetContextGenerationLocked();
+}
+
+static BOOL CSSharedTargetContextMatchesLocked(
+    CoreSetKernelMappedReadTransport *transport, int32_t pid,
+    uint64_t kernelProcess, uint64_t generation) {
+    return transport && transport == CSSharedKernelTransport &&
+        pid > 0 && pid == CSSharedKernelPID &&
+        kernelProcess != 0 && kernelProcess == CSSharedKernelProcess &&
+        generation != 0 && generation == CSSharedTargetContextGeneration;
+}
+
+static BOOL CSRevokeSharedTargetContextLocked(void) {
+    if (!CSSharedKernelTransport) {
+        CSClearSharedTargetContextLocked();
+        return YES;
+    }
+    if (![CSSharedKernelTransport disconnect]) return NO;
+    CSClearSharedTargetContextLocked();
+    return YES;
+}
+
+static BOOL CSAcquireSharedKernelTransport(
+    uint64_t kernelProcess, int32_t pid, const uint8_t uuid[16],
+    CoreSetKernelMappedReadTransport **transportOut, uint64_t *baseOut,
+    uint64_t *generationOut, NSString **errorOut) {
+    if (transportOut) *transportOut = nil;
+    if (baseOut) *baseOut = 0;
+    if (generationOut) *generationOut = 0;
+    if (errorOut) *errorOut = nil;
+    if (!uuid || pid <= 0 || !ds_address_usable(kernelProcess)) {
+        if (errorOut) *errorOut = @"shared-target-context-input-invalid";
+        return NO;
+    }
+
+    pthread_mutex_lock(&CSSharedTargetContextLock);
+    if (CSSharedKernelTransport) {
+        const BOOL sameIdentity = pid == CSSharedKernelPID &&
+            kernelProcess == CSSharedKernelProcess;
+        const BOOL sharedLive = [CSSharedKernelTransport identityValid] &&
+            [CSSharedKernelTransport imageAt:CSSharedKernelImageBase matchesUUID:uuid];
+        if (sharedLive && !sameIdentity) {
+            if (errorOut) *errorOut = @"shared-target-context-identity-conflict";
+            pthread_mutex_unlock(&CSSharedTargetContextLock);
+            return NO;
+        }
+        if (sharedLive && CSSharedTargetContextLeaseCount < UINT32_MAX) {
+            ++CSSharedTargetContextLeaseCount;
+            if (transportOut) *transportOut = CSSharedKernelTransport;
+            if (baseOut) *baseOut = CSSharedKernelImageBase;
+            if (generationOut)
+                *generationOut = CSSharedTargetContextGeneration;
+            pthread_mutex_unlock(&CSSharedTargetContextLock);
+            return YES;
+        }
+        if (sharedLive) {
+            if (errorOut) *errorOut = @"shared-target-context-lease-exhausted";
+            pthread_mutex_unlock(&CSSharedTargetContextLock);
+            return NO;
+        }
+        if (![CSSharedKernelTransport disconnect]) {
+            if (errorOut) *errorOut = @"shared-target-context-revoke-failed";
+            pthread_mutex_unlock(&CSSharedTargetContextLock);
+            return NO;
+        }
+        CSClearSharedTargetContextLocked();
+    }
+
+    CoreSetKernelMappedReadTransport *transport =
+        [[CoreSetKernelMappedReadTransport alloc]
+            initWithKernelProcess:kernelProcess expectedPID:pid];
+    const uint64_t base = transport ? [transport findImageWithUUID:uuid] : 0;
+    if (!transport || !base || ![transport identityValid] ||
+        ![transport imageAt:base matchesUUID:uuid]) {
+        NSString *failure = transport ? transport.lastError :
+            [CoreSetKernelMappedReadTransport lastInitializationError];
+        if (transport) (void)[transport disconnect];
+        if (errorOut) *errorOut = failure ?: @"shared-target-context-create-failed";
+        pthread_mutex_unlock(&CSSharedTargetContextLock);
+        return NO;
+    }
+
+    CSAdvanceSharedTargetContextGenerationLocked();
+    CSSharedKernelTransport = transport;
+    CSSharedKernelPID = pid;
+    CSSharedKernelProcess = kernelProcess;
+    CSSharedKernelImageBase = base;
+    CSSharedTargetContextLeaseCount = 1;
+    if (transportOut) *transportOut = transport;
+    if (baseOut) *baseOut = base;
+    if (generationOut) *generationOut = CSSharedTargetContextGeneration;
+    pthread_mutex_unlock(&CSSharedTargetContextLock);
+    return YES;
+}
+
+static BOOL CSValidateSharedKernelLease(
+    CoreSetKernelMappedReadTransport *transport, int32_t pid,
+    uint64_t kernelProcess, uint64_t generation, BOOL verifyImage) {
+    pthread_mutex_lock(&CSSharedTargetContextLock);
+    BOOL valid = CSSharedTargetContextMatchesLocked(
+        transport, pid, kernelProcess, generation);
+    if (valid) {
+        valid = [transport identityValid] &&
+            (!verifyImage || [transport imageAt:CSSharedKernelImageBase
+                                         matchesUUID:CSUUID]);
+    }
+    if (!valid && transport == CSSharedKernelTransport) {
+        (void)CSRevokeSharedTargetContextLocked();
+    }
+    pthread_mutex_unlock(&CSSharedTargetContextLock);
+    return valid;
+}
+
+static BOOL CSReleaseSharedKernelLease(
+    CoreSetKernelMappedReadTransport *transport, int32_t pid,
+    uint64_t kernelProcess, uint64_t generation,
+    BOOL *physicallyDisconnected) {
+    if (physicallyDisconnected) *physicallyDisconnected = NO;
+    pthread_mutex_lock(&CSSharedTargetContextLock);
+    if (!CSSharedTargetContextMatchesLocked(
+            transport, pid, kernelProcess, generation)) {
+        // A different session already invalidated this generation.  This stale
+        // lease owns no live transport and is therefore fully released.
+        pthread_mutex_unlock(&CSSharedTargetContextLock);
+        return YES;
+    }
+    if (CSSharedTargetContextLeaseCount > 1) {
+        --CSSharedTargetContextLeaseCount;
+        pthread_mutex_unlock(&CSSharedTargetContextLock);
+        return YES;
+    }
+    if (CSSharedTargetContextLeaseCount != 1 || ![transport disconnect]) {
+        pthread_mutex_unlock(&CSSharedTargetContextLock);
+        return NO;
+    }
+    if (physicallyDisconnected) *physicallyDisconnected = YES;
+    CSClearSharedTargetContextLocked();
+    pthread_mutex_unlock(&CSSharedTargetContextLock);
+    return YES;
+}
+
 static CSKernelTarget CSResolveKernelTarget(bool forceRefresh) {
     pthread_mutex_lock(&CSProcessResolverLock);
     const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
@@ -211,6 +377,9 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
     NSString *_pidSource;
     NSString *_taskSource;
     NSString *_profileSource;
+    uint64_t _kernelProcess;
+    uint64_t _sharedTargetContextGeneration;
+    BOOL _sharedKernelLease;
 }
 @end
 
@@ -376,8 +545,9 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
     if (_task != MACH_PORT_NULL) {
         int currentPID = -1;
         if (pid_for_task(_task, &currentPID) != KERN_SUCCESS || currentPID != _pid) return NO;
-    } else if (!_kernelTransport || _kernelTransport.processID != _pid ||
-               ![_kernelTransport identityValid]) {
+    } else if (!_kernelTransport || !_sharedKernelLease ||
+               !CSValidateSharedKernelLease(_kernelTransport, _pid,
+                    _kernelProcess, _sharedTargetContextGeneration, verifyImage)) {
         return NO;
     }
     if (_path) {
@@ -387,8 +557,7 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
     }
     if (!verifyImage) return YES;
     return _task != MACH_PORT_NULL
-        ? [CoreSetReadSession imageAt:_base task:_task]
-        : [_kernelTransport imageAt:_base matchesUUID:CSUUID];
+        ? [CoreSetReadSession imageAt:_base task:_task] : YES;
 }
 
 - (BOOL)connect {
@@ -496,26 +665,37 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
                 _taskSource = [NSString stringWithUTF8String:acquisition.source ?: "unknown"];
                 _profileSource = profileSource;
             } else if (candidate.kernelProc != 0) {
-                CoreSetKernelMappedReadTransport *transport =
-                    [[CoreSetKernelMappedReadTransport alloc]
-                        initWithKernelProcess:candidate.kernelProc expectedPID:pid];
-                uint64_t base = transport ? [transport findImageWithUUID:CSUUID] : 0;
-                lastKernelTransportError = transport
-                    ? transport.lastError : [NSString stringWithFormat:
-                        @"%@ profile=%@",
-                        [CoreSetKernelMappedReadTransport lastInitializationError],
+                CoreSetKernelMappedReadTransport *transport = nil;
+                uint64_t base = 0, sharedGeneration = 0;
+                NSString *sharedError = nil;
+                const BOOL sharedReady = CSAcquireSharedKernelTransport(
+                    candidate.kernelProc, pid, CSUUID, &transport, &base,
+                    &sharedGeneration, &sharedError);
+                lastKernelTransportError = sharedReady ? transport.lastError :
+                    [NSString stringWithFormat:@"%@ profile=%@",
+                        sharedError ?: [CoreSetKernelMappedReadTransport lastInitializationError],
                         [CoreSetKernelReadProfile lastFailure]];
                 const CSKernelTarget current = CSResolveKernelTarget(true);
-                if (!transport || !base || current.pid != pid ||
-                    current.kernelProc != candidate.kernelProc || ![transport identityValid]) {
-                    kernelIdentityChanged = transport &&
+                if (!sharedReady || !transport || !base || current.pid != pid ||
+                    current.kernelProc != candidate.kernelProc ||
+                    !CSValidateSharedKernelLease(transport, pid,
+                        candidate.kernelProc, sharedGeneration, YES)) {
+                    kernelIdentityChanged = sharedReady && transport &&
                         (current.pid != pid || current.kernelProc != candidate.kernelProc);
-                    if (transport) (void)[transport disconnect];
+                    if (sharedReady && transport) {
+                        BOOL physicallyDisconnected = NO;
+                        (void)CSReleaseSharedKernelLease(transport, pid,
+                            candidate.kernelProc, sharedGeneration,
+                            &physicallyDisconnected);
+                    }
                     continue;
                 }
                 sawTask = YES;
                 sawPID = YES;
                 _kernelTransport = transport; _pid = pid; _base = base; _path = [path copy];
+                _kernelProcess = candidate.kernelProc;
+                _sharedTargetContextGeneration = sharedGeneration;
+                _sharedKernelLease = YES;
                 _pidSource = [NSString stringWithUTF8String:candidate.source ?: "unknown"];
                 _taskSource = @"kernel-page-table-read";
                 _profileSource = profileSource;
@@ -637,8 +817,18 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
         }
         if (released) _task = MACH_PORT_NULL;
         if (_kernelTransport) {
-            transportReleased = [_kernelTransport disconnect];
-            if (transportReleased) _kernelTransport = nil;
+            BOOL physicallyDisconnected = NO;
+            transportReleased = _sharedKernelLease
+                ? CSReleaseSharedKernelLease(_kernelTransport, _pid,
+                    _kernelProcess, _sharedTargetContextGeneration,
+                    &physicallyDisconnected)
+                : [_kernelTransport disconnect];
+            if (transportReleased) {
+                _kernelTransport = nil;
+                _kernelProcess = 0;
+                _sharedTargetContextGeneration = 0;
+                _sharedKernelLease = NO;
+            }
         }
         const BOOL resourcesReleased = released && transportReleased;
         if (resourcesReleased) {

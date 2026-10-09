@@ -46,7 +46,8 @@ def require_cleanup_contract(source: str) -> None:
     cleanup = body(source, "- (CoreSetReadCleanupResult *)disconnect")
     for gate in ("if (released) _task = MACH_PORT_NULL",
                  "released = releaseResult == KERN_SUCCESS",
-                 "transportReleased = [_kernelTransport disconnect]",
+                 "CSReleaseSharedKernelLease(_kernelTransport",
+                 ": [_kernelTransport disconnect]",
                  "BOOL advanced = resourcesReleased && _generation != UINT64_MAX",
                  "if (advanced) ++_generation"):
         assert gate in cleanup, gate

@@ -1,6 +1,7 @@
 """SPTM page-table fallback contracts; source-only, no device-success claim."""
 
 from pathlib import Path
+import threading
 import unittest
 
 
@@ -148,13 +149,79 @@ class KernelMappedReadTransportContract(unittest.TestCase):
     def test_session_prefers_task_port_then_uses_bounded_fallback(self) -> None:
         connect = body(self.session, "- (BOOL)connect")
         self.assertLess(connect.index("CSAcquireTaskForPID(pid)"),
-                        connect.index("initWithKernelProcess:candidate.kernelProc"))
-        for gate in ("findImageWithUUID:CSUUID", "CSResolveKernelTarget(true)",
-                     "[transport identityValid]", '@"kernel-page-table-read"'):
+                        connect.index("CSAcquireSharedKernelTransport("))
+        for gate in ("CSAcquireSharedKernelTransport(", "CSResolveKernelTarget(true)",
+                     "CSValidateSharedKernelLease(transport", '@"kernel-page-table-read"'):
             self.assertIn(gate, connect)
+        acquire = body(self.session, "static BOOL CSAcquireSharedKernelTransport(")
+        for gate in ("initWithKernelProcess:kernelProcess expectedPID:pid",
+                     "findImageWithUUID:uuid", "imageAt:base matchesUUID:uuid"):
+            self.assertIn(gate, acquire)
         read_at = body(self.session, "- (BOOL)readAt:")
         self.assertIn("to:scratch.mutableBytes", read_at)
         self.assertEqual(read_at.count("memcpy(destination, scratch.bytes, length)"), 1)
+
+    def test_shared_context_refcount_identity_and_final_release(self) -> None:
+        acquire = body(self.session, "static BOOL CSAcquireSharedKernelTransport(")
+        self.assertIn("pthread_mutex_lock(&CSSharedTargetContextLock)", acquire)
+        self.assertIn("pid == CSSharedKernelPID", acquire)
+        self.assertIn("kernelProcess == CSSharedKernelProcess", acquire)
+        self.assertIn("++CSSharedTargetContextLeaseCount", acquire)
+        self.assertIn("CSSharedTargetContextLeaseCount = 1", acquire)
+        validate = body(self.session, "static BOOL CSValidateSharedKernelLease(")
+        self.assertIn("CSSharedTargetContextMatchesLocked", validate)
+        self.assertIn("CSRevokeSharedTargetContextLocked", validate)
+        release = body(self.session, "static BOOL CSReleaseSharedKernelLease(")
+        self.assertIn("CSSharedTargetContextLeaseCount > 1", release)
+        self.assertIn("--CSSharedTargetContextLeaseCount", release)
+        self.assertIn("CSSharedTargetContextLeaseCount != 1", release)
+        self.assertIn("[transport disconnect]", release)
+        self.assertLess(release.index("[transport disconnect]"),
+                        release.index("CSClearSharedTargetContextLocked"))
+        identity = body(self.session, "- (BOOL)identityStillValid:")
+        self.assertIn("CSValidateSharedKernelLease(_kernelTransport", identity)
+        cleanup = body(self.session, "- (CoreSetReadCleanupResult *)disconnect")
+        self.assertIn("CSReleaseSharedKernelLease(_kernelTransport", cleanup)
+
+    def test_shared_context_concurrent_lease_model(self) -> None:
+        class Owner:
+            def __init__(self) -> None:
+                self.lock = threading.Lock()
+                self.identity = None
+                self.leases = 0
+                self.creates = 0
+                self.disconnects = 0
+
+            def acquire(self, identity: tuple[int, int, int]) -> None:
+                with self.lock:
+                    if self.identity is None:
+                        self.identity = identity
+                        self.creates += 1
+                    if self.identity != identity:
+                        raise AssertionError("identity conflict")
+                    self.leases += 1
+
+            def release(self, identity: tuple[int, int, int]) -> None:
+                with self.lock:
+                    if self.identity != identity:
+                        return
+                    self.leases -= 1
+                    if self.leases == 0:
+                        self.identity = None
+                        self.disconnects += 1
+
+        owner = Owner()
+        identity = (475, 0xFFFFFFF03C000000, 0x104AC0000)
+        clients = [threading.Thread(target=owner.acquire, args=(identity,))
+                   for _ in range(32)]
+        for client in clients: client.start()
+        for client in clients: client.join()
+        self.assertEqual((owner.creates, owner.leases), (1, 32))
+        clients = [threading.Thread(target=owner.release, args=(identity,))
+                   for _ in range(32)]
+        for client in clients: client.start()
+        for client in clients: client.join()
+        self.assertEqual((owner.disconnects, owner.leases), (1, 0))
 
     def test_mapped_read_failure_reports_transport_reason(self) -> None:
         diagnostic = body(self.session, "- (void)recordReadFailure:")
@@ -167,8 +234,9 @@ class KernelMappedReadTransportContract(unittest.TestCase):
 
     def test_cleanup_failure_retains_transport_and_blocks_generation(self) -> None:
         cleanup = body(self.session, "- (CoreSetReadCleanupResult *)disconnect")
-        for gate in ("transportReleased = [_kernelTransport disconnect]",
-                     "if (transportReleased) _kernelTransport = nil",
+        for gate in ("CSReleaseSharedKernelLease(_kernelTransport",
+                     ": [_kernelTransport disconnect]",
+                     "if (transportReleased)", "_kernelTransport = nil",
                      "resourcesReleased = released && transportReleased",
                      "BOOL advanced = resourcesReleased && _generation != UINT64_MAX",
                      "read-transport-release-failed", "retainedTransport=%d"):
@@ -198,6 +266,17 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         probe = read("lara/views/app/CoreSetActionReadOnlyProbe.swift")
         self.assertEqual(probe.count("cleanup.complete"), 2)
         self.assertNotIn("cleanup.taskPortReleased && cleanup.generationAdvanced", probe)
+        aim = read("lara/views/app/CoreSetAimConsumer.swift")
+        roster_cleanup = body(aim, "private func drainRosterProducer()")
+        self.assertIn("rosterSession.disconnect()", roster_cleanup)
+        self.assertIn("cleanup.generationAdvanced", roster_cleanup)
+        aim_stop = body(aim, "func stop(_ token:")
+        self.assertIn("drainRosterProducer()", aim_stop)
+        self.assertIn("session.disconnect()", aim_stop)
+        aim_shutdown = body(aim, "func shutdownWriteSession()")
+        self.assertIn("drainRosterProducer()", aim_shutdown)
+        self.assertIn("session.disconnect()", aim_shutdown)
+        self.assertIn("result.generationAdvanced", aim_shutdown)
         writer = read("lara/overlay/CoreSetTargetWriteSession.mm")
         disconnect = body(writer, "- (CoreSetTargetWriteCleanupResult *)disconnect")
         self.assertIn("readCleanup = _ownsReadSession ? [_readSession disconnect] : nil", disconnect)
