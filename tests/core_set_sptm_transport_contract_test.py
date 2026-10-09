@@ -50,7 +50,8 @@ class SPTMTransportContract(unittest.TestCase):
         partial = read("lara/kexploit/Partial.m")
         offsets = read("lara/kexploit/offsets.m")
         self.assertIn("kc_fetch_firmware_images_by_range", partial)
-        self.assertIn("Partial *zip = [Partial partialZipWithURL:url error:&error]", partial)
+        self.assertIn("CoreSetRangeVerifiedPartial *zip =", partial)
+        self.assertIn("[[CoreSetRangeVerifiedPartial alloc] initWithURL:url error:&error]", partial)
         self.assertIn("kc_pick_kernelcache_entry(files)", partial)
         self.assertIn("kc_pick_sptm_entry(files)", partial)
         self.assertIn("Both payloads must belong to the same central-directory snapshot", partial)
@@ -60,6 +61,45 @@ class SPTMTransportContract(unittest.TestCase):
         self.assertIn('firmware_identity_value("kern.osversion")', offsets)
         self.assertIn('firmware_identity_value("hw.machine")', offsets)
         self.assertIn("firmware_cache_identity_matches(defaults)", offsets)
+
+    def test_iphone_cdn_range_capability_uses_real_get_not_head_header(self) -> None:
+        partial = read("lara/kexploit/Partial.m")
+        for marker in (
+            'request.HTTPMethod = @"GET"',
+            'setValue:@"bytes=0-0" forHTTPHeaderField:@"Range"',
+            "timeoutInterval:120.0",
+            'setValue:@"identity" forHTTPHeaderField:@"Accept-Encoding"',
+            'http.statusCode != 206',
+            'valueForHTTPHeaderField:@"Content-Range"',
+            'sscanf(contentRange.UTF8String, "bytes %llu-%llu/%llu%c"',
+            'data.length != 1',
+            'total > (64ULL << 30)',
+            'setValue:@((NSUInteger)self.coreRangeTotal) forKey:@"_size"',
+        ):
+            self.assertIn(marker, partial)
+        self.assertNotIn('HTTPMethod = @"HEAD"', partial)
+
+    def test_every_range_chunk_is_bound_to_one_remote_asset_version(self) -> None:
+        partial = read("lara/kexploit/Partial.m")
+        request = partial.split("- (NSData *)_makeSynchronousRequest", 1)[1].split(
+            "- (NSError *)_getMetadata", 1
+        )[0]
+        for marker in (
+            'valueForHTTPHeaderField:@"Range"',
+            "verifiedRequest.timeoutInterval = 120.0",
+            'setValue:self.coreRangeValidator forHTTPHeaderField:@"If-Range"',
+            'valueForHTTPHeaderField:@"ETag"',
+            'hasPrefix:@"W/"',
+            'valueForHTTPHeaderField:@"Last-Modified"',
+            "actualFirst != requestedFirst || actualLast != requestedLast",
+            "(unsigned long long)data.length != expectedLength",
+            "self.coreRangeTotal != total",
+            "![self.coreRangeValidator isEqualToString:validator]",
+            '@"Range response has no safe resume validator"',
+            '@"Remote asset size changed during range transfer"',
+            '@"Remote asset validator changed during range transfer"',
+        ):
+            self.assertIn(marker, request)
 
     def test_23a341_uses_hash_pinned_apple_restore_url_without_appledb(self) -> None:
         partial = read("lara/kexploit/Partial.m")
