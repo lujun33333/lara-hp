@@ -221,7 +221,8 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) BOOL routeAuthorityResolved;
 // 1 = controller +0x620, 2 = controller +0x828; -1 while unresolved.
 @property(nonatomic, readonly) NSInteger resolvedActionSlotRaw;
-+ (nullable instancetype)authorityWithSnapshot:(CoreSetPlayerSnapshot *)snapshot;
++ (nullable instancetype)authorityWithSnapshot:(CoreSetPlayerSnapshot *)snapshot
+    NS_SWIFT_NAME(authority(with:));
 @end
 
 @interface CoreSetPlayerCollector : NSObject

@@ -221,7 +221,7 @@ final class CoreSetBattleProducer {
         let botInformation: Bool
         let maximumDrawDistance: Double
     }
-    private typealias DisplayCompletion = (CoreSetPlayerSnapshot?, String) -> Void
+    typealias DisplayCompletion = (CoreSetPlayerSnapshot?, String) -> Void
     private let producerWorker = DispatchQueue(label: "coreset.battle.producer", qos: .userInitiated)
     private let demandLock = NSLock()
     private let publicationLock = NSLock()

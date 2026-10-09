@@ -69,6 +69,7 @@ for token in (
 
 assert "@property(nonatomic, readonly) BOOL routeAuthorityResolved;" in snapshot_h
 assert "@property(nonatomic, readonly) NSInteger resolvedActionSlotRaw;" in snapshot_h
+assert "NS_SWIFT_NAME(authority(with:));" in snapshot_h
 assert "拒绝用 firing 字节猜测 +0x620/+0x828" in aim
 assert "routeDynamics.slot(firingSample:" not in aim
 
