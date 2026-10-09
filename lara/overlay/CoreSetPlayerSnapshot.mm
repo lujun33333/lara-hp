@@ -2357,10 +2357,13 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
 
     CSCamera camera = {};
     bool cameraFound = false;
+    uint64_t cameraOffset = 0;
     for (uint64_t offset : {UINT64_C(0x650), UINT64_C(0x14b0), UINT64_C(0x2320)}) {
         CSCamera candidate = {};
         if (CSRead(session, generation, manager + offset, &candidate, sizeof(candidate)) &&
-            CSCameraValid(candidate)) { camera = candidate; cameraFound = true; break; }
+            CSCameraValid(candidate)) {
+            camera = candidate; cameraFound = true; cameraOffset = offset; break;
+        }
     }
     if (!cameraFound) return nil;
     const CSVector localPosition = {source.localWorldPosition.x,
@@ -2449,9 +2452,10 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
     snapshot.captureStartedMonotonicSeconds = startedAt;
     snapshot.captureCompletedMonotonicSeconds = completedAt;
     snapshot.readSemanticDiagnostic = [NSString stringWithFormat:
-        @"presentation-reprojection source=%@ marks=%lu players=%lu bots=%lu duration=%.3f camera=current actorRoots=cached screenPoints=reprojected",
+        @"presentation-reprojection source=%@ marks=%lu players=%lu bots=%lu duration=%.3f camera=current cameraOffset=0x%llx actorRoots=cached screenPoints=reprojected",
         source.snapshotID.UUIDString, (unsigned long)marks.count,
-        (unsigned long)players, (unsigned long)bots, completedAt - startedAt];
+        (unsigned long)players, (unsigned long)bots, completedAt - startedAt,
+        (unsigned long long)cameraOffset];
     return snapshot;
 }
 @end

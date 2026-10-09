@@ -15,7 +15,9 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private let presentationWorker = DispatchQueue(label: "coreset.player.presentation", qos: .userInteractive)
     private var probe: Timer?
     private var refresh: Timer?
-    private var presentationRefresh: Timer?
+    private var presentationTimer: DispatchSourceTimer?
+    private let presentationTickLock = NSLock()
+    private var presentationTickQueued = false
     private var inFlight = false
     private var geometryInFlight = false
     private var presentationInFlight = false
@@ -48,6 +50,8 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private var expectedReadSemanticDiagnostic: String?
     private var lastSemanticLogAt: Double = 0
     private var lastSemanticLogRevision: UInt64?
+    private var presentationReceiptWindowStartedAt: Double?
+    private var presentationReceiptCount = 0
     private var pendingInvalidation: (token: CoreSetRequestToken, snapshot: UUID,
         generation: UInt64, revision: UInt64, reason: String)?
 
@@ -56,7 +60,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         session.diagnosticLabel = "player"
         geometrySession.diagnosticLabel = "player-geometry"
         presentationSession.diagnosticLabel = "player-presentation"
-        NSLog("Core-SET: player-loop contract=latest-snapshot-v8 interval=0.15 presentationInterval=0.033 rosterRetry=0.15 rosterRefresh=1.0 firstFrame=full-capture geometry=independent-camera-root-reprojection presentation=current-camera-cached-world-reprojection configurationApply=immediate renderEvidence=separate")
+        NSLog("Core-SET: player-loop contract=latest-snapshot-v9 interval=0.15 presentationInterval=0.016 presentationClock=dispatch-source rosterRetry=0.15 rosterRefresh=1.0 firstFrame=full-capture geometry=independent-camera-root-reprojection presentation=current-camera-cached-world-reprojection configurationApply=immediate renderEvidence=separate")
         probe = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
@@ -123,7 +127,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             completion(request.token, .notApplied(reason: reason)); return
         }
         refresh?.invalidate(); refresh = nil
-        presentationRefresh?.invalidate(); presentationRefresh = nil
+        presentationTimer?.cancel(); presentationTimer = nil
         revision += 1
         settings = request.desired
         if settings.grenadeWarning != true { _ = grenadeMotion.clear() }
@@ -163,10 +167,29 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
 
     private func armPresentationLoop() {
         precondition(Thread.isMainThread)
-        guard !stopped, activeToken != nil, presentationRefresh == nil else { return }
-        presentationRefresh = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0,
-                                                    repeats: true) { [weak self] _ in
-            self?.refreshPresentation()
+        guard !stopped, activeToken != nil, presentationTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: presentationWorker)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(16),
+                       leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in self?.enqueuePresentationTick() }
+        presentationTimer = timer
+        timer.resume()
+    }
+
+    private func enqueuePresentationTick() {
+        presentationTickLock.lock()
+        guard !presentationTickQueued else {
+            presentationTickLock.unlock()
+            return
+        }
+        presentationTickQueued = true
+        presentationTickLock.unlock()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.presentationTickLock.lock()
+            self.presentationTickQueued = false
+            self.presentationTickLock.unlock()
+            self.refreshPresentation()
         }
     }
 
@@ -205,7 +228,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private func finishUnavailable(_ reason: String, token: CoreSetRequestToken) {
         precondition(Thread.isMainThread)
         refresh?.invalidate(); refresh = nil
-        presentationRefresh?.invalidate(); presentationRefresh = nil
+        presentationTimer?.cancel(); presentationTimer = nil
         awaitingReceipt = false
         awaitingReceiptSince = nil
         currentRoster = nil; currentGeometry = nil
@@ -464,7 +487,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         guard let canvas = coordinator?.playerCanvas, revision < UInt64.max - 1 else { return }
         if !preserveRefresh {
             refresh?.invalidate(); refresh = nil
-            presentationRefresh?.invalidate(); presentationRefresh = nil
+            presentationTimer?.cancel(); presentationTimer = nil
         }
         revision += 1
         let id = UUID()
@@ -747,7 +770,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             } else {
                 pendingApply = nil
                 refresh?.invalidate(); refresh = nil
-                presentationRefresh?.invalidate(); presentationRefresh = nil
+                presentationTimer?.cancel(); presentationTimer = nil
                 pending.1(pending.0, .failed(reason: "玩家帧未被本地渲染器消费"))
             }
             return
@@ -773,6 +796,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             } else {
                 lastGeometryReceiptAt = CACurrentMediaTime()
                 geometryExpired = false
+                recordPresentationCadenceIfNeeded()
                 logReadSemanticReceipt(receipt)
             }
         } else if activeToken == receipt.requestToken && availability != .ready {
@@ -788,6 +812,24 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         NSLog("Core-SET: read-semantic lane=player stage=receipt confirmed=1 evidence=local-renderer-frame parity=partial session=%llu pid=%d host=%llu revision=%llu snapshot=%@ scope=%@",
               geometrySession.generation, geometrySession.processID, receipt.hostGeneration, receipt.configRevision,
               receipt.snapshotID.uuidString, diagnostic)
+    }
+
+    private func recordPresentationCadenceIfNeeded() {
+        guard expectedReadSemanticDiagnostic?.hasPrefix("presentation-reprojection") == true else { return }
+        let now = CACurrentMediaTime()
+        guard let startedAt = presentationReceiptWindowStartedAt else {
+            presentationReceiptWindowStartedAt = now
+            presentationReceiptCount = 1
+            return
+        }
+        presentationReceiptCount += 1
+        let elapsed = now - startedAt
+        guard elapsed >= 2 else { return }
+        let fps = Double(max(0, presentationReceiptCount - 1)) / elapsed
+        NSLog("Core-SET: target-read lane=player stage=presentation-cadence confirmed=1 frames=%d window=%.3f effectiveFPS=%.2f clock=dispatch-source receipt=local-renderer",
+              presentationReceiptCount, elapsed, fps)
+        presentationReceiptWindowStartedAt = now
+        presentationReceiptCount = 1
     }
 
     func stop(_ token: CoreSetRequestToken,
@@ -820,7 +862,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         stopped = true
         probe?.invalidate(); probe = nil
         refresh?.invalidate(); refresh = nil
-        presentationRefresh?.invalidate(); presentationRefresh = nil
+        presentationTimer?.cancel(); presentationTimer = nil
         activeToken = nil; pendingApply = nil
         currentRoster = nil; currentGeometry = nil
         geometryInFlight = false; presentationInFlight = false; geometryExpired = false
@@ -830,6 +872,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         activeSessionGeneration = nil; activeProcessID = nil; activeImageBase = nil
         captureFailureStartedAt = nil; captureLaneClearedForFailure = false
         expectedReadSemanticDiagnostic = nil
+        presentationReceiptWindowStartedAt = nil; presentationReceiptCount = 0
         let motionClean = grenadeMotion.clear()
         CoreSetWeaponImageCatalog.stop()
         let cleanup = worker.sync { session.disconnect() } // Drain queued connects/captures first.

@@ -171,8 +171,8 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertNotIn("pendingApply = (request.token, completion)", apply)
         self.assertLess(apply.index("completion(request.token, .applied(observed: settings))"),
                         apply.index("armCaptureLoop()"))
-        self.assertIn("player-loop contract=latest-snapshot-v8", player)
-        self.assertIn("presentationInterval=0.033", player)
+        self.assertIn("player-loop contract=latest-snapshot-v9", player)
+        self.assertIn("presentationInterval=0.016 presentationClock=dispatch-source", player)
         self.assertIn("rosterRetry=0.15 rosterRefresh=1.0", player)
         self.assertIn("firstFrame=full-capture geometry=independent-camera-root-reprojection", player)
         self.assertIn("presentation=current-camera-cached-world-reprojection", player)
@@ -193,20 +193,30 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
                      "currentGeometry ?? currentRoster", "snapshotID == rosterID", "submitGeometry"):
             self.assertIn(gate, geometry)
         presentation_loop = body(player, "private func armPresentationLoop()")
-        self.assertIn("withTimeInterval: 1.0 / 30.0", presentation_loop)
+        for gate in ("DispatchSource.makeTimerSource(queue: presentationWorker)",
+                     "repeating: .milliseconds(16)", "leeway: .milliseconds(2)",
+                     "enqueuePresentationTick()", "timer.resume()"):
+            self.assertIn(gate, presentation_loop)
+        self.assertNotIn("Timer.scheduledTimer", presentation_loop)
+        enqueue_tick = body(player, "private func enqueuePresentationTick()")
+        for gate in ("presentationTickLock.lock()", "!presentationTickQueued",
+                     "presentationTickQueued = true", "DispatchQueue.main.async",
+                     "presentationTickQueued = false", "refreshPresentation()"):
+            self.assertIn(gate, enqueue_tick)
         presentation = body(player, "private func refreshPresentation()")
         for gate in ("presentationInFlight", "!awaitingReceipt",
                      "CoreSetPlayerCollector.reprojectPresentation",
                      "presentationSession", "snapshotID == geometryID", "submitGeometry"):
             self.assertIn(gate, presentation)
         self.assertIn("presentation-reprojection", collector)
-        self.assertIn("camera=current actorRoots=cached screenPoints=reprojected", collector)
+        self.assertIn("camera=current cameraOffset=0x%llx actorRoots=cached screenPoints=reprojected", collector)
         native_start = collector.index(
             "+ (CoreSetPlayerSnapshot *)reprojectPresentationForSnapshot:")
         native_end = collector.index("\n}\n@end", native_start)
         native_presentation = collector[native_start:native_end]
         for required in ("base + CSWorldSlot", "rosterCameraManagerAddress",
-                         "CSCameraValid(candidate)", "oldMark.actorWorldPosition",
+                         "CSCameraValid(candidate)", "cameraOffset = offset",
+                         "oldMark.actorWorldPosition",
                          "CSRefreshPlayerMark"):
             self.assertIn(required, native_presentation)
         for forbidden in ("CSReadCorePlayerState", "CSPosition(session", "actorAddress +"):
@@ -232,8 +242,12 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
                       "awaitingReceiptSince = nil", "activeSessionGeneration = nil",
                       "captureFailureStartedAt = nil"):
             self.assertIn(reset, shutdown)
-        self.assertIn("presentationRefresh?.invalidate(); presentationRefresh = nil", shutdown)
+        self.assertIn("presentationTimer?.cancel(); presentationTimer = nil", shutdown)
         self.assertIn("presentationSession.disconnect()", shutdown)
+        cadence = body(player, "private func recordPresentationCadenceIfNeeded()")
+        for gate in ("presentation-reprojection", "presentationReceiptCount += 1",
+                     "elapsed >= 2", "effectiveFPS=%.2f", "receipt=local-renderer"):
+            self.assertIn(gate, cadence)
         ordered = [collector.index(f'CSLastCaptureDiagnostic = "{stage}"') for stage in (
             "root-world-netdriver", "root-netdriver-serverconnection",
             "root-connection-playercontroller", "root-controller-camera-manager",
