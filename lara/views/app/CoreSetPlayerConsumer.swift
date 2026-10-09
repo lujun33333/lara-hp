@@ -8,14 +8,19 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private weak var coordinator: CoreSetRuntimeCoordinator?
     private let session = CoreSetReadSession()
     private let geometrySession = CoreSetReadSession()
+    private let presentationSession = CoreSetReadSession()
     private let grenadeMotion = CoreSetGrenadeMotionTracker()
     private let worker = DispatchQueue(label: "coreset.player.read", qos: .userInitiated)
     private let geometryWorker = DispatchQueue(label: "coreset.player.geometry", qos: .userInteractive)
+    private let presentationWorker = DispatchQueue(label: "coreset.player.presentation", qos: .userInteractive)
     private var probe: Timer?
     private var refresh: Timer?
+    private var presentationRefresh: Timer?
     private var inFlight = false
     private var geometryInFlight = false
+    private var presentationInFlight = false
     private var currentRoster: CoreSetPlayerSnapshot?
+    private var currentGeometry: CoreSetPlayerSnapshot?
     private var lastFullCaptureStartedAt: Double = 0
     private var lastGeometrySubmittedAt: Double?
     private var lastGeometryReceiptAt: Double?
@@ -50,7 +55,8 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         self.coordinator = coordinator
         session.diagnosticLabel = "player"
         geometrySession.diagnosticLabel = "player-geometry"
-        NSLog("Core-SET: player-loop contract=latest-snapshot-v7 interval=0.15 rosterRetry=0.15 rosterRefresh=1.0 firstFrame=full-capture geometry=independent-camera-root-reprojection configurationApply=immediate renderEvidence=separate")
+        presentationSession.diagnosticLabel = "player-presentation"
+        NSLog("Core-SET: player-loop contract=latest-snapshot-v8 interval=0.15 presentationInterval=0.033 rosterRetry=0.15 rosterRefresh=1.0 firstFrame=full-capture geometry=independent-camera-root-reprojection presentation=current-camera-cached-world-reprojection configurationApply=immediate renderEvidence=separate")
         probe = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
@@ -81,11 +87,12 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     }
 
     private func probeTarget() {
-        guard !stopped, !session.ready || !geometrySession.ready else { return }
+        guard !stopped, !session.ready || !geometrySession.ready || !presentationSession.ready else { return }
         worker.async { [weak self] in
             guard let self else { return }
             if !self.session.ready { _ = self.session.connect() }
             if !self.geometrySession.ready { _ = self.geometrySession.connect() }
+            if !self.presentationSession.ready { _ = self.presentationSession.connect() }
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.stopped else { return }
                 self.coordinator?.refreshPlayerAvailability()
@@ -116,6 +123,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             completion(request.token, .notApplied(reason: reason)); return
         }
         refresh?.invalidate(); refresh = nil
+        presentationRefresh?.invalidate(); presentationRefresh = nil
         revision += 1
         settings = request.desired
         if settings.grenadeWarning != true { _ = grenadeMotion.clear() }
@@ -141,6 +149,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         pendingApply = nil
         completion(request.token, .applied(observed: settings))
         armCaptureLoop()
+        armPresentationLoop()
         tick()
     }
 
@@ -149,6 +158,15 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         guard !stopped, activeToken != nil, refresh == nil else { return }
         refresh = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
             self?.tick()
+        }
+    }
+
+    private func armPresentationLoop() {
+        precondition(Thread.isMainThread)
+        guard !stopped, activeToken != nil, presentationRefresh == nil else { return }
+        presentationRefresh = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0,
+                                                    repeats: true) { [weak self] _ in
+            self?.refreshPresentation()
         }
     }
 
@@ -181,15 +199,17 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         // geometry is submitted by the secondary session. A renderer receipt
         // is valid when either live owner still matches the exact snapshot
         // identity, so the first frame never depends on the secondary owner.
-        return matches(session) || matches(geometrySession)
+        return matches(session) || matches(geometrySession) || matches(presentationSession)
     }
 
     private func finishUnavailable(_ reason: String, token: CoreSetRequestToken) {
         precondition(Thread.isMainThread)
         refresh?.invalidate(); refresh = nil
+        presentationRefresh?.invalidate(); presentationRefresh = nil
         awaitingReceipt = false
         awaitingReceiptSince = nil
-        currentRoster = nil; lastGeometrySubmittedAt = nil; lastGeometryReceiptAt = nil
+        currentRoster = nil; currentGeometry = nil
+        lastGeometrySubmittedAt = nil; lastGeometryReceiptAt = nil
         geometryExpired = false
         let pending = pendingApply
         pendingApply = nil
@@ -219,6 +239,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                            recordInvalidation: false, preserveRefresh: true)
         }
         armCaptureLoop()
+        armPresentationLoop()
         coordinator?.refreshPlayerAvailability()
     }
 
@@ -258,8 +279,8 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     }
 
     private func refreshGeometry() {
-        guard !stopped, !geometryInFlight, !awaitingReceipt,
-              let roster = currentRoster, let token = activeToken,
+        guard !stopped, !geometryInFlight,
+              let roster = currentGeometry ?? currentRoster, let token = activeToken,
               let canvas = coordinator?.playerCanvas else { return }
         guard geometrySession.ready,
               geometrySession.processID == roster.processID,
@@ -282,7 +303,47 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.geometryInFlight = false
                 guard !self.stopped, self.activeToken == token,
                       self.revision == expectedRevision,
-                      self.currentRoster?.snapshotID == rosterID,
+                      (self.currentGeometry ?? self.currentRoster)?.snapshotID == rosterID,
+                      let currentCanvas = self.coordinator?.playerCanvas,
+                      currentCanvas.generation == canvas.generation,
+                      currentCanvas.size == canvas.size,
+                      let snapshot else { return }
+                self.currentGeometry = snapshot
+                if !self.awaitingReceipt {
+                    self.submitGeometry(snapshot, token: token, revision: expectedRevision,
+                                        canvas: currentCanvas)
+                }
+            }
+        }
+    }
+
+    private func refreshPresentation() {
+        precondition(Thread.isMainThread)
+        guard !stopped, !presentationInFlight, !awaitingReceipt,
+              let geometry = currentGeometry ?? currentRoster, let token = activeToken,
+              let canvas = coordinator?.playerCanvas else { return }
+        guard presentationSession.ready,
+              presentationSession.processID == geometry.processID,
+              presentationSession.imageBase == geometry.imageBase else {
+            probeTarget(); return
+        }
+        presentationInFlight = true
+        let expectedRevision = revision
+        let geometryID = geometry.snapshotID
+        let includeOffscreen = settings.backIndicator?.showIndicator == true
+        let maximumDrawDistance = Double(settings.drawingDistance.value ?? 0)
+        presentationWorker.async { [weak self] in
+            guard let self else { return }
+            let snapshot = CoreSetPlayerCollector.reprojectPresentation(for: geometry,
+                session: self.presentationSession, canvasSize: canvas.size,
+                includeOffscreen: includeOffscreen,
+                maximumDrawDistance: maximumDrawDistance)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.presentationInFlight = false
+                guard !self.stopped, !self.awaitingReceipt,
+                      self.activeToken == token, self.revision == expectedRevision,
+                      (self.currentGeometry ?? self.currentRoster)?.snapshotID == geometryID,
                       let currentCanvas = self.coordinator?.playerCanvas,
                       currentCanvas.generation == canvas.generation,
                       currentCanvas.size == canvas.size,
@@ -297,6 +358,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                                 revision expectedRevision: UInt64,
                                 canvas: (generation: UInt64, size: CGSize)) {
         precondition(Thread.isMainThread)
+        guard !awaitingReceipt else { return }
         if settings.grenadeWarning == true {
             grenadeMotion.decorate(snapshot, canvasSize: canvas.size,
                                     nativeScale: Double(UIScreen.main.nativeScale))
@@ -384,6 +446,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.captureFailureStartedAt = nil
                 self.captureLaneClearedForFailure = false
                 self.currentRoster = snapshot
+                self.currentGeometry = snapshot
                 self.geometryExpired = false
                 // Publish the complete capture immediately. The renderer must
                 // never depend on a second read session succeeding before the
@@ -399,7 +462,10 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                                 recordInvalidation: Bool = true, preserveRefresh: Bool = false) {
         _ = grenadeMotion.clear()
         guard let canvas = coordinator?.playerCanvas, revision < UInt64.max - 1 else { return }
-        if !preserveRefresh { refresh?.invalidate(); refresh = nil }
+        if !preserveRefresh {
+            refresh?.invalidate(); refresh = nil
+            presentationRefresh?.invalidate(); presentationRefresh = nil
+        }
         revision += 1
         let id = UUID()
         if recordInvalidation && pendingApply == nil && pendingStop == nil && activeToken == token {
@@ -681,6 +747,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             } else {
                 pendingApply = nil
                 refresh?.invalidate(); refresh = nil
+                presentationRefresh?.invalidate(); presentationRefresh = nil
                 pending.1(pending.0, .failed(reason: "玩家帧未被本地渲染器消费"))
             }
             return
@@ -753,8 +820,10 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         stopped = true
         probe?.invalidate(); probe = nil
         refresh?.invalidate(); refresh = nil
+        presentationRefresh?.invalidate(); presentationRefresh = nil
         activeToken = nil; pendingApply = nil
-        currentRoster = nil; geometryInFlight = false; geometryExpired = false
+        currentRoster = nil; currentGeometry = nil
+        geometryInFlight = false; presentationInFlight = false; geometryExpired = false
         lastGeometrySubmittedAt = nil; lastGeometryReceiptAt = nil
         awaitingReceipt = false
         awaitingReceiptSince = nil
@@ -765,6 +834,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         CoreSetWeaponImageCatalog.stop()
         let cleanup = worker.sync { session.disconnect() } // Drain queued connects/captures first.
         let geometryCleanup = geometryWorker.sync { geometrySession.disconnect() }
-        return motionClean && cleanup.complete && geometryCleanup.complete
+        let presentationCleanup = presentationWorker.sync { presentationSession.disconnect() }
+        return motionClean && cleanup.complete && geometryCleanup.complete && presentationCleanup.complete
     }
 }

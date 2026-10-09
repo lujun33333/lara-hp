@@ -2335,4 +2335,123 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
         completedAt - startedAt];
     return snapshot;
 }
+
++ (CoreSetPlayerSnapshot *)reprojectPresentationForSnapshot:(CoreSetPlayerSnapshot *)source
+                                                      session:(CoreSetReadSession *)session
+                                                   canvasSize:(CGSize)size
+                                              includeOffscreen:(BOOL)includeOffscreen
+                                          maximumDrawDistance:(double)maximumDrawDistance {
+    if (!source || !session.ready || session.capabilities != 1 ||
+        session.processID != source.processID || session.imageBase != source.imageBase ||
+        !std::isfinite(size.width) || !std::isfinite(size.height) ||
+        size.width <= 0 || size.height <= 0 ||
+        !std::isfinite(maximumDrawDistance) || maximumDrawDistance < 0 ||
+        !source.localWorldPosition) return nil;
+    const double startedAt = CACurrentMediaTime();
+    const uint64_t generation = session.generation, base = session.imageBase;
+    uint64_t world = 0, manager = 0;
+    if (!CSReadValue(session, generation, base + CSWorldSlot, &world) ||
+        world != source.rosterWorldAddress ||
+        !CSReadValue(session, generation, source.rosterControllerAddress + 0x680, &manager) ||
+        manager != source.rosterCameraManagerAddress) return nil;
+
+    CSCamera camera = {};
+    bool cameraFound = false;
+    for (uint64_t offset : {UINT64_C(0x650), UINT64_C(0x14b0), UINT64_C(0x2320)}) {
+        CSCamera candidate = {};
+        if (CSRead(session, generation, manager + offset, &candidate, sizeof(candidate)) &&
+            CSCameraValid(candidate)) { camera = candidate; cameraFound = true; break; }
+    }
+    if (!cameraFound) return nil;
+    const CSVector localPosition = {source.localWorldPosition.x,
+                                    source.localWorldPosition.y,
+                                    source.localWorldPosition.z};
+    if (!CSFinite(localPosition)) return nil;
+
+    NSMutableArray<CoreSetPlayerMark *> *marks =
+        [NSMutableArray arrayWithCapacity:source.marks.count];
+    NSUInteger players = 0, bots = 0;
+    for (CoreSetPlayerMark *oldMark in source.marks) {
+        if (!oldMark.actorWorldPosition) continue;
+        const CSVector position = {oldMark.actorWorldPosition.x,
+                                   oldMark.actorWorldPosition.y,
+                                   oldMark.actorWorldPosition.z};
+        if (!CSFinite(position)) continue;
+        CSCorePlayerState state = {};
+        state.team = oldMark.teamID;
+        state.stateFlags = oldMark.referenceStateWord;
+        state.status = oldMark.healthStatusCode;
+        state.health = oldMark.health;
+        state.maximum = oldMark.maximumHealth;
+        state.rootComponent = oldMark.rosterRootComponent;
+        state.meshComponent = oldMark.rosterMeshComponent;
+        state.ai = oldMark.bot ? 1 : 0;
+        CoreSetPlayerMark *mark = CSRefreshPlayerMark(oldMark, state, position,
+            localPosition, camera, size, includeOffscreen, maximumDrawDistance);
+        if (!mark) continue;
+        [marks addObject:mark];
+        if (mark.bot) ++bots; else ++players;
+    }
+
+    NSMutableArray<CoreSetGrenadeMark *> *grenades =
+        [NSMutableArray arrayWithCapacity:source.grenadeMarks.count];
+    for (CoreSetGrenadeMark *oldMark in source.grenadeMarks) {
+        CGPoint point = CGPointZero;
+        const CSVector position = oldMark.motionPosition;
+        const double dx = (double)position.x - localPosition.x;
+        const double dy = (double)position.y - localPosition.y;
+        const double dz = (double)position.z - localPosition.z;
+        const double distance = std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
+        if (!std::isfinite(distance) || !CSProject(camera, position, size, &point) ||
+            point.x < 0 || point.x > size.width || point.y < 0 || point.y > size.height) continue;
+        CoreSetGrenadeMark *mark = [CoreSetGrenadeMark new];
+        mark.point = point; mark.distanceUnitsDividedBy100 = distance;
+        mark.countdownSeconds = oldMark.countdownSeconds;
+        mark.predictionSegments = @[]; mark.predictionEndpointPresent = NO;
+        mark.predictionEndpoint = CGPointZero;
+        mark.motionPosition = position; mark.motionActor = oldMark.motionActor;
+        mark.motionType = oldMark.motionType; mark.motionNameIndex = oldMark.motionNameIndex;
+        mark.motionExplosionRaw = oldMark.motionExplosionRaw;
+        [grenades addObject:mark];
+    }
+    const double completedAt = CACurrentMediaTime();
+    if (!session.ready || session.generation != generation ||
+        session.processID != source.processID || session.imageBase != base ||
+        !std::isfinite(completedAt - startedAt) || completedAt - startedAt > 0.5) return nil;
+
+    CoreSetPlayerSnapshot *snapshot = [CoreSetPlayerSnapshot new];
+    snapshot.sessionGeneration = generation; snapshot.processID = source.processID;
+    snapshot.imageBase = base; snapshot.snapshotID = [NSUUID UUID];
+    snapshot.rosterWorldAddress = source.rosterWorldAddress;
+    snapshot.rosterLevelAddress = source.rosterLevelAddress;
+    snapshot.rosterControllerAddress = source.rosterControllerAddress;
+    snapshot.rosterCameraManagerAddress = source.rosterCameraManagerAddress;
+    snapshot.rosterLocalActorAddress = source.rosterLocalActorAddress;
+    snapshot.rosterLocalTeam = source.rosterLocalTeam;
+    snapshot.motionCamera = camera;
+    snapshot.cameraYawDegrees = camera.rotation.y;
+    snapshot.cameraPitchDegrees = camera.rotation.x;
+    snapshot.cameraRollDegrees = camera.rotation.z;
+    snapshot.cameraFieldOfViewDegrees = camera.fov;
+    snapshot.cameraWorldPosition = [CoreSetWorldPoint pointWithX:camera.location.x
+        y:camera.location.y z:camera.location.z];
+    snapshot.localWorldPosition = source.localWorldPosition;
+    snapshot.canvasSize = size;
+    snapshot.controllerAddress = source.controllerAddress;
+    snapshot.localActorAddress = source.localActorAddress;
+    snapshot.localADS = source.localADS; snapshot.localFiring = source.localFiring;
+    snapshot.controlPitchDegrees = source.controlPitchDegrees;
+    snapshot.controlYawDegrees = source.controlYawDegrees;
+    snapshot.rotationInputPitch = source.rotationInputPitch;
+    snapshot.rotationInputYaw = source.rotationInputYaw;
+    snapshot.marks = [marks copy]; snapshot.grenadeMarks = [grenades copy];
+    snapshot.observedPlayerCount = players; snapshot.observedBotCount = bots;
+    snapshot.captureStartedMonotonicSeconds = startedAt;
+    snapshot.captureCompletedMonotonicSeconds = completedAt;
+    snapshot.readSemanticDiagnostic = [NSString stringWithFormat:
+        @"presentation-reprojection source=%@ marks=%lu players=%lu bots=%lu duration=%.3f camera=current actorRoots=cached screenPoints=reprojected",
+        source.snapshotID.UUIDString, (unsigned long)marks.count,
+        (unsigned long)players, (unsigned long)bots, completedAt - startedAt];
+    return snapshot;
+}
 @end

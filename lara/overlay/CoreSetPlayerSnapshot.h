@@ -256,6 +256,14 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
                                                includeOffscreen:(BOOL)includeOffscreen
                                            maximumDrawDistance:(double)maximumDrawDistance
     NS_SWIFT_NAME(refreshGeometry(for:session:canvasSize:includeOffscreen:maximumDrawDistance:));
+// Reprojects the latest identity-stable world geometry with the current target
+// camera. No actor fields or roots are reread on this presentation path.
++ (nullable CoreSetPlayerSnapshot *)reprojectPresentationForSnapshot:(CoreSetPlayerSnapshot *)snapshot
+                                                             session:(CoreSetReadSession *)session
+                                                          canvasSize:(CGSize)canvasSize
+                                                     includeOffscreen:(BOOL)includeOffscreen
+                                                 maximumDrawDistance:(double)maximumDrawDistance
+    NS_SWIFT_NAME(reprojectPresentation(for:session:canvasSize:includeOffscreen:maximumDrawDistance:));
 @end
 
 // Pure local projection of an already captured, identity-stable camera delta.
