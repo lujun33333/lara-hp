@@ -342,6 +342,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                                         canvas: currentCanvas)
                 }
             }
+        }
     }
 
     private func refreshPresentation() {
