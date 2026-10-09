@@ -40,9 +40,10 @@ jobs:
 
       - name: validate iOS 26 SPTM patchfinder
         run: |
-          python3 -m pip install --disable-pip-version-check remotezip
+          python3 -m venv build/firmware-venv
+          build/firmware-venv/bin/python -m pip install --disable-pip-version-check remotezip
           mkdir -p build/firmware-fixture build/deps build/test-bin
-          python3 - <<'PY'
+          build/firmware-venv/bin/python - <<'PY'
           import hashlib
           import pathlib
           from remotezip import RemoteZip
