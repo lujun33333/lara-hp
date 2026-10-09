@@ -77,6 +77,19 @@ class SPTMTransportContract(unittest.TestCase):
         self.assertLess(partial.index("kIPhone172Build23A341IPSW.UTF8String"),
                         partial.index("NSString *endpoint ="))
 
+    def test_im4p_validator_accepts_der_83_and_84_length_forms(self) -> None:
+        partial = read("lara/kexploit/Partial.m")
+        self.assertIn("const NSUInteger lengthOctets = bytes[1] & 0x7f", partial)
+        self.assertIn("lengthOctets == 0 || lengthOctets > 4", partial)
+        self.assertIn("contentLength != data.length - contentOffset", partial)
+        self.assertIn('memcmp(bytes + contentOffset + 2, "IM4P", 4) == 0', partial)
+        self.assertNotIn("bytes[1] == 0x84", partial)
+        # Exact fixture prefixes: kernelcache uses DER 0x84, SPTM uses 0x83.
+        kernel = bytes.fromhex("30 84 01 4D 30 81 16 04 49 4D 34 50")
+        sptm = bytes.fromhex("30 83 02 C5 DE 16 04 49 4D 34 50")
+        self.assertEqual(kernel[1] & 0x7F, 4)
+        self.assertEqual(sptm[1] & 0x7F, 3)
+
     def test_xpf_cleanup_releases_optional_images_and_sections(self) -> None:
         xpf = read("vendor/XPF/src/xpf.c")
         for marker in (
