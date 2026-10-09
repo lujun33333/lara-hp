@@ -60,6 +60,10 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         checked = body(self.darksword, "bool ds_kreadbuf_checked(")
         self.assertIn("early_kread(addr + off, &val, chunk)", checked)
         self.assertNotIn("early_kread64", checked)
+        checked_pointer = body(self.darksword, "bool ds_kreadptr_checked(")
+        self.assertIn("decoded & (1ULL << 55)", checked_pointer)
+        self.assertIn("decoded | pac_mask", checked_pointer)
+        self.assertIn("decoded & ~pac_mask", checked_pointer)
 
     def test_identity_binds_proc_pid_task_vm_map_pmap_and_ttep(self) -> None:
         identity = body(self.source, "- (BOOL)identityValidLocked")

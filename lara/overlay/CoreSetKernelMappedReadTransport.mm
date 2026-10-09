@@ -106,7 +106,16 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
     if (pid != (uint32_t)expectedPID || !ds_address_usable(task) ||
         !ds_address_usable(vmMap) || !ds_address_usable(pmap) ||
         ttep == 0 || (ttep & (CSKernelReadPageSize - 1)) != 0) {
-        CSSetPageTableInitError(@"page-table-identity-or-ttep-invalid");
+        CSSetPageTableInitError([NSString stringWithFormat:
+            @"page-table-identity-or-ttep-invalid pid=%u expected=%d "
+             "task=0x%llx/%d vmMap=0x%llx/%d pmap=0x%llx/%d "
+             "ttep=0x%llx aligned=%d",
+            pid, expectedPID,
+            (unsigned long long)task, ds_address_usable(task),
+            (unsigned long long)vmMap, ds_address_usable(vmMap),
+            (unsigned long long)pmap, ds_address_usable(pmap),
+            (unsigned long long)ttep,
+            (ttep & (CSKernelReadPageSize - 1)) == 0]);
         return nil;
     }
     const BOOL ttepIsPhysical = (ttep & 0xF000000000000000ULL) == 0;
