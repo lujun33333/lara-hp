@@ -19,7 +19,10 @@ static const uint64_t CSArmTTEValid = 0x1;
 static const uint64_t CSArmTTETypeMask = 0x2;
 static const uint64_t CSArmTTETypeBlock = 0x0;
 static const uint64_t CSArmTTETypeL3Block = 0x2;
-static const uint64_t CSArmTTETableMask = 0x0000FFFFFFFFF000ULL;
+// 16 KB child translation tables are page-aligned.  The root table is not:
+// with T1SZ=25 and the 0x7000000000 L1 mask it contains only eight entries,
+// so a valid pmap.ttep may be merely 0x40-aligned (for example ...0x5280).
+static const uint64_t CSArmTTETableMask = 0x0000FFFFFFFFC000ULL;
 static const uint64_t CSArmTTEPhysicalMask = 0x0000FFFFFFFFF000ULL;
 static const uint32_t CSPAPTMaximumEntries = 128;
 
@@ -104,18 +107,16 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
         return nil;
     }
     if (pid != (uint32_t)expectedPID || !ds_address_usable(task) ||
-        !ds_address_usable(vmMap) || !ds_address_usable(pmap) ||
-        ttep == 0 || (ttep & (CSKernelReadPageSize - 1)) != 0) {
+        !ds_address_usable(vmMap) || !ds_address_usable(pmap) || ttep == 0) {
         CSSetPageTableInitError([NSString stringWithFormat:
             @"page-table-identity-or-ttep-invalid pid=%u expected=%d "
              "task=0x%llx/%d vmMap=0x%llx/%d pmap=0x%llx/%d "
-             "ttep=0x%llx aligned=%d",
+             "ttep=0x%llx",
             pid, expectedPID,
             (unsigned long long)task, ds_address_usable(task),
             (unsigned long long)vmMap, ds_address_usable(vmMap),
             (unsigned long long)pmap, ds_address_usable(pmap),
-            (unsigned long long)ttep,
-            (ttep & (CSKernelReadPageSize - 1)) == 0]);
+            (unsigned long long)ttep]);
         return nil;
     }
     const BOOL ttepIsPhysical = (ttep & 0xF000000000000000ULL) == 0;

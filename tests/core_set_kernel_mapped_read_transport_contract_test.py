@@ -65,6 +65,22 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         self.assertIn("decoded | pac_mask", checked_pointer)
         self.assertIn("decoded & ~pac_mask", checked_pointer)
 
+    def test_reduced_l1_root_does_not_require_full_page_alignment(self) -> None:
+        observed_ios26_ttep = 0x101D2F25280
+        self.assertEqual(observed_ios26_ttep & 0x3F, 0)
+        self.assertNotEqual(observed_ios26_ttep & 0x3FFF, 0)
+        initialization = body(
+            self.source,
+            "- (instancetype)initWithKernelProcess:",
+        )
+        self.assertIn("ttep == 0", initialization)
+        self.assertNotIn("ttep & (CSKernelReadPageSize - 1)", initialization)
+        self.assertIn(
+            "CSArmTTETableMask = 0x0000FFFFFFFFC000ULL",
+            self.source,
+        )
+        self.assertIn("nextPhysical & (CSKernelReadPageSize - 1)", self.source)
+
     def test_identity_binds_proc_pid_task_vm_map_pmap_and_ttep(self) -> None:
         identity = body(self.source, "- (BOOL)identityValidLocked")
         for gate in ("_kernelProcess", "off_proc_p_pid",
