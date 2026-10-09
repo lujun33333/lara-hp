@@ -859,11 +859,26 @@ void xpf_stop(void)
 	if (gXPF.kernelAMFIStringSection) pfsec_free(gXPF.kernelAMFIStringSection);
 	if (gXPF.kernelSandboxTextSection) pfsec_free(gXPF.kernelSandboxTextSection);
 	if (gXPF.kernelSandboxStringSection) pfsec_free(gXPF.kernelSandboxStringSection);
+	if (gXPF.kernelSandboxAuthStubSection) pfsec_free(gXPF.kernelSandboxAuthStubSection);
+	if (gXPF.kernelIOSurfaceTextSection) pfsec_free(gXPF.kernelIOSurfaceTextSection);
+	if (gXPF.kernelIOSurfaceStringSection) pfsec_free(gXPF.kernelIOSurfaceStringSection);
+	if (gXPF.kernelIOSurfaceOsLogSection) pfsec_free(gXPF.kernelIOSurfaceOsLogSection);
 	if (gXPF.kernelPrelinkTextSection) pfsec_free(gXPF.kernelPrelinkTextSection);
 	if (gXPF.kernelBootdataInit) pfsec_free(gXPF.kernelBootdataInit);
+	if (gXPF.kernelBootcodeSection) pfsec_free(gXPF.kernelBootcodeSection);
 	if (gXPF.kernelPLKTextSection) pfsec_free(gXPF.kernelPLKTextSection);
 	if (gXPF.kernelInfoPlistSection) pfsec_free(gXPF.kernelInfoPlistSection);
 	if (gXPF.kernelContainer) fat_free(gXPF.kernelContainer);
+
+	if (gXPF.sptmTextSection) pfsec_free(gXPF.sptmTextSection);
+	if (gXPF.sptmStringSection) pfsec_free(gXPF.sptmStringSection);
+	if (gXPF.sptmContainer) fat_free(gXPF.sptmContainer);
+	if (gXPF.decompressedSptm) free(gXPF.decompressedSptm);
+
+	if (gXPF.txmTextSection) pfsec_free(gXPF.txmTextSection);
+	if (gXPF.txmStringSection) pfsec_free(gXPF.txmStringSection);
+	if (gXPF.txmContainer) fat_free(gXPF.txmContainer);
+	if (gXPF.decompressedTxm) free(gXPF.decompressedTxm);
 
 	if (gXPF.kernelVersionString) free(gXPF.kernelVersionString);
 	if (gXPF.darwinVersion) free(gXPF.darwinVersion);

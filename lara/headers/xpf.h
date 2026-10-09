@@ -8,11 +8,11 @@ typedef struct MachO MachO;
 typedef struct PFSection PFSection;
 typedef void *xpc_object_t;
 #else
-#include <choma/Fat.h>
-#include <choma/Util.h>
-#include <choma/PatchFinder.h>
-#include <choma/PatchFinder_arm64.h>
-#include <choma/arm64.h>
+#include "Fat.h"
+#include "Util.h"
+#include "PatchFinder.h"
+#include "PatchFinder_arm64.h"
+#include "arm64.h"
 #include <xpc/xpc.h>
 #endif
 

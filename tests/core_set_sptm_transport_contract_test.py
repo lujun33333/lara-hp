@@ -57,6 +57,22 @@ class SPTMTransportContract(unittest.TestCase):
         self.assertIn("kc_fetch_firmware_images_by_range(outpath", offsets)
         self.assertIn('SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"26.0")', offsets)
         self.assertIn("kcpath.UTF8String, sptm.UTF8String, NULL", offsets)
+        self.assertIn('firmware_identity_value("kern.osversion")', offsets)
+        self.assertIn('firmware_identity_value("hw.machine")', offsets)
+        self.assertIn("firmware_cache_identity_matches(defaults)", offsets)
+
+    def test_xpf_cleanup_releases_optional_images_and_sections(self) -> None:
+        xpf = read("vendor/XPF/src/xpf.c")
+        for marker in (
+            "pfsec_free(gXPF.sptmTextSection)",
+            "pfsec_free(gXPF.sptmStringSection)",
+            "fat_free(gXPF.sptmContainer)",
+            "free(gXPF.decompressedSptm)",
+            "pfsec_free(gXPF.txmTextSection)",
+            "fat_free(gXPF.txmContainer)",
+            "free(gXPF.decompressedTxm)",
+        ):
+            self.assertIn(marker, xpf)
 
     def test_ci_runs_hash_pinned_23a341_finder_probe(self) -> None:
         workflow = read(".github/workflows/build.yml")
