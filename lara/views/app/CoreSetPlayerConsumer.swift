@@ -483,7 +483,6 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.refreshPresentation()
             }
         }
-    }
 
     private func clearStaleLane(token: CoreSetRequestToken, reason: String = "player-frame-invalidated",
                                 recordInvalidation: Bool = true, preserveRefresh: Bool = false) {
