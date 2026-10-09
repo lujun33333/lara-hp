@@ -38,6 +38,41 @@ jobs:
       - name: show xcode version
         run: xcodebuild -version
 
+      - name: validate iOS 26 SPTM patchfinder
+        run: |
+          python3 -m pip install --disable-pip-version-check remotezip
+          mkdir -p build/firmware-fixture build/deps build/test-bin
+          python3 - <<'PY'
+          import hashlib
+          import pathlib
+          from remotezip import RemoteZip
+
+          url = "https://updates.cdn-apple.com/2025FallFCS/fullrestores/093-41023/5740BA6D-F4D8-4825-B5BE-CB70E3CF8B79/iPhone17,2_26.0_23A341_Restore.ipsw"
+          expected = {
+              "kernelcache.release.iphone17": "20626b2ffd1f3e72615e2d9f5e7a794de3dff43c8c10ca944ddfa6f0af7b2dd0",
+              "Firmware/sptm.t8140.release.im4p": "26febcbc7b2d20b691ad0d782666b2ea840081953c150f918cc763b603525314",
+          }
+          output = pathlib.Path("build/firmware-fixture")
+          with RemoteZip(url) as archive:
+              for name, digest in expected.items():
+                  data = archive.read(name)
+                  actual = hashlib.sha256(data).hexdigest()
+                  if actual != digest:
+                      raise SystemExit(f"{name}: expected {digest}, got {actual}")
+                  (output / pathlib.Path(name).name).write_bytes(data)
+          PY
+          git clone --no-checkout https://github.com/opa334/ChOma build/deps/ChOma
+          git -C build/deps/ChOma fetch --depth 1 origin 7dccded6bc17081c08f5f5cdbd7a4b051543a825
+          git -C build/deps/ChOma checkout --detach 7dccded6bc17081c08f5f5cdbd7a4b051543a825
+          make -B -C vendor/XPF output/macos/libxpf.dylib CHOMA_PATH="$PWD/build/deps/ChOma"
+          clang -O2 -fblocks -I vendor/XPF/src -I build/deps/ChOma/include \
+            tools/xpf_ios26_probe.c -L vendor/XPF/output/macos -lxpf \
+            -o build/test-bin/xpf-ios26-probe
+          DYLD_LIBRARY_PATH="$PWD/vendor/XPF/output/macos" \
+            build/test-bin/xpf-ios26-probe \
+              build/firmware-fixture/kernelcache.release.iphone17 \
+              build/firmware-fixture/sptm.t8140.release.im4p
+
       - name: hosted input regression tests
         run: |
           mkdir -p build/test-bin

@@ -1200,7 +1200,6 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         stagedConfigurationReadiness.removeValue(forKey: path)
         let hostedSource = configurationSources[path] ?? interactionControlIdentifier
         showConfigurationFeedback("已提交配置；等待消费者实际回执")
-        rebuildMenu()
         consumer.apply(request) { [weak self] token, outcome in
             DispatchQueue.main.async {
                 guard let self, self.featureState[keyPath: path].receive(token, outcome: outcome) else { return }
@@ -1232,7 +1231,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 } else if case .failed(let reason) = channel.phase {
                     self.showConfigurationFeedback("配置已记录；应用失败：\(reason)")
                 } else { self.showConfigurationFeedback("配置已记录；尚未确认生效") }
-                self.rebuildMenu()
+                self.rebuildCurrentPage()
                 if self.featureState[keyPath: path].desired != request.desired,
                    self.canApply(self.featureState[keyPath: path]) { self.applyGame(path) }
             }
@@ -1530,7 +1529,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             guard let self, self.selectedPage == 2, self.viewIfLoaded?.window != nil else {
                 complete(request.token, .notApplied(reason: "Directory preview is not visible")); return
             }
-            self.rebuildMenu()
+            self.rebuildCurrentPage()
             guard let observed = self.observeDirectory(), observed == request.desired else {
                 complete(request.token, .failed(reason: "Directory view observation did not match")); return
             }
@@ -1578,7 +1577,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 guard let self, self.appearanceChannel?.receive(token, outcome: outcome) == true else { return }
                 NSLog("Core-SET: hosted input stage=actual control=%@ capability=localRendering confirmed=%d scope=same-meaning-local-theme-and-persistence floating-effect-confirmed=0 device-effect-verified=0",
                       hostedSource, self.appearanceChannel?.isDesiredConfirmed == true ? 1 : 0)
-                self.rebuildMenu()
+                self.rebuildCurrentPage()
                 if self.appearanceChannel?.desired != request.desired,
                    self.appearanceChannel?.phase == .active { self.applyLocalAppearance() }
             }

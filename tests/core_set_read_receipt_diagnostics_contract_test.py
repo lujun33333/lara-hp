@@ -171,9 +171,9 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertNotIn("pendingApply = (request.token, completion)", apply)
         self.assertLess(apply.index("completion(request.token, .applied(observed: settings))"),
                         apply.index("armCaptureLoop()"))
-        self.assertIn("player-loop contract=core17-roster-plus-live-geometry-v6", player)
-        self.assertIn("transportReads=full-roster+independent-camera-root-reprojection", player)
-        self.assertIn("geometryTTL=0.5", player)
+        self.assertIn("player-loop contract=latest-snapshot-v7", player)
+        self.assertIn("rosterRetry=0.15 rosterRefresh=1.0", player)
+        self.assertIn("firstFrame=full-capture geometry=independent-camera-root-reprojection", player)
         self.assertIn("configurationApply=immediate renderEvidence=separate", player)
         loop = body(player, "private func armCaptureLoop()")
         self.assertIn("withTimeInterval: 0.15, repeats: true", loop)
@@ -195,10 +195,15 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         failed_capture = capture[capture.index("guard let snapshot,"):capture.index("self.lastCaptureFailure = nil")]
         self.assertNotIn("pendingApply = nil", failed_capture)
         self.assertIn("self.currentRoster = snapshot", capture)
+        self.assertIn("self.submitGeometry(snapshot", capture)
+        tick = body(player, "private func tick()")
+        self.assertIn("currentRoster == nil ? 0.15 : 1.0", tick)
         self.assertIn("awaitingReceipt = true", body(player, "private func submitGeometry("))
         receipt = body(player, "func consumed(")
         self.assertGreaterEqual(receipt.count("awaitingReceipt = false"), 2)
         self.assertIn("retryCapture(reason, token: pending.0)", receipt)
+        identity = body(player, "private var expectedReadIdentityMatches:")
+        self.assertIn("matches(session) || matches(geometrySession)", identity)
         shutdown = body(player, "func shutdownReadSession()")
         for reset in ("refresh?.invalidate(); refresh = nil", "awaitingReceipt = false",
                       "awaitingReceiptSince = nil", "activeSessionGeneration = nil",

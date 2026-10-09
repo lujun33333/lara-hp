@@ -50,7 +50,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         self.coordinator = coordinator
         session.diagnosticLabel = "player"
         geometrySession.diagnosticLabel = "player-geometry"
-        NSLog("Core-SET: player-loop contract=core17-roster-plus-live-geometry-v6 interval=0.15 geometryTTL=0.5 transportReads=full-roster+independent-camera-root-reprojection configurationApply=immediate renderEvidence=separate")
+        NSLog("Core-SET: player-loop contract=latest-snapshot-v7 interval=0.15 rosterRetry=0.15 rosterRefresh=1.0 firstFrame=full-capture geometry=independent-camera-root-reprojection configurationApply=immediate renderEvidence=separate")
         probe = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
@@ -157,12 +157,31 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         guard !stopped, activeToken != nil else { return }
         expireGeometryIfNeeded()
         if currentRoster != nil { refreshGeometry() }
-        if !inFlight, CACurrentMediaTime() - lastFullCaptureStartedAt >= 1.0 { capture() }
+        // Root reads can fail transiently on the mapped transport. Until a
+        // usable roster exists, retry at the render tick instead of reducing
+        // the only producer to one attempt per second. Once a roster exists,
+        // the independent geometry lane owns the fast path and enrichment can
+        // return to the slower cadence.
+        let fullCaptureInterval = currentRoster == nil ? 0.15 : 1.0
+        if !inFlight, CACurrentMediaTime() - lastFullCaptureStartedAt >= fullCaptureInterval { capture() }
     }
 
     private var activeSessionMatches: Bool {
         session.ready && session.generation == activeSessionGeneration &&
             session.processID == activeProcessID && session.imageBase == activeImageBase
+    }
+
+    private var expectedReadIdentityMatches: Bool {
+        let matches: (CoreSetReadSession) -> Bool = { candidate in
+            candidate.ready && candidate.generation == self.expectedSessionGeneration &&
+                candidate.processID == self.expectedProcessID &&
+                candidate.imageBase == self.expectedImageBase
+        }
+        // A complete capture is submitted by the primary session; refreshed
+        // geometry is submitted by the secondary session. A renderer receipt
+        // is valid when either live owner still matches the exact snapshot
+        // identity, so the first frame never depends on the secondary owner.
+        return matches(session) || matches(geometrySession)
     }
 
     private func finishUnavailable(_ reason: String, token: CoreSetRequestToken) {
@@ -342,7 +361,11 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.inFlight = false
-                guard !self.stopped else { return }
+                guard !self.stopped, self.activeToken == token,
+                      self.revision == expectedRevision,
+                      let currentCanvas = self.coordinator?.playerCanvas,
+                      currentCanvas.generation == canvas.generation,
+                      currentCanvas.size == canvas.size else { return }
                 let captureAge = snapshot.map { CACurrentMediaTime() - $0.captureCompletedMonotonicSeconds } ?? .nan
                 let failureReason = snapshot != nil && !(0...0.5).contains(captureAge)
                     ? String(format: "snapshot-stale stage=capture ageSeconds=%.3f limit=0.5", captureAge)
@@ -362,7 +385,12 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.captureLaneClearedForFailure = false
                 self.currentRoster = snapshot
                 self.geometryExpired = false
-                self.refreshGeometry()
+                // Publish the complete capture immediately. The renderer must
+                // never depend on a second read session succeeding before the
+                // first valid frame becomes visible. Subsequent ticks replace
+                // this with current camera/root geometry when available.
+                self.submitGeometry(snapshot, token: token, revision: expectedRevision,
+                                    canvas: currentCanvas)
             }
         }
     }
@@ -633,8 +661,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
            receipt.hostGeneration == expectedGeneration {
             awaitingReceipt = false
             awaitingReceiptSince = nil
-            let identityMatches = geometrySession.ready && geometrySession.generation == expectedSessionGeneration &&
-                geometrySession.processID == expectedProcessID && geometrySession.imageBase == expectedImageBase
+            let identityMatches = expectedReadIdentityMatches
             let fresh = expectedCompletedAt.map {
                 CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
             } ?? false
@@ -663,8 +690,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
            receipt.hostGeneration == expectedGeneration {
             awaitingReceipt = false
             awaitingReceiptSince = nil
-            let identityMatches = geometrySession.ready && geometrySession.generation == expectedSessionGeneration &&
-                geometrySession.processID == expectedProcessID && geometrySession.imageBase == expectedImageBase
+            let identityMatches = expectedReadIdentityMatches
             let fresh = expectedCompletedAt.map {
                 CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
             } ?? false

@@ -207,24 +207,17 @@ say "从源码构建并静态链接 XPF / libgrabkernel2 ..."
 XPF_DIR="$ROOT/vendor/XPF"
 [ -f "$XPF_DIR/src/common.c" ] || die "缺少 vendor/XPF/src"
 [ -f "$XPF_DIR/Makefile" ]     || die "缺少 vendor/XPF/Makefile"
-# AX 1.2.8 的入口只接收 kernelcache。Lara 侧同样只传一个参数，因此在编译
-# 出货 dylib 前强制核对声明、实现和全部调用，禁止再次混入三参数 ABI。
-XPF_SINGLE_DECL='int xpf_start_with_kernel_path(const char *kernelPath);'
-LC_ALL=C grep -Fqx -- "$XPF_SINGLE_DECL" "$ROOT/lara/headers/xpf.h" \
-    || die "Lara 的 XPF 声明不是 AX 1.2.8 单参数 ABI"
-LC_ALL=C grep -Fqx -- "$XPF_SINGLE_DECL" "$XPF_DIR/src/xpf.h" \
-    || die "vendor/XPF 的公开声明不是 AX 1.2.8 单参数 ABI"
-LC_ALL=C grep -Fqx -- 'int xpf_start_with_kernel_path(const char *kernelPath)' "$XPF_DIR/src/xpf.c" \
-    || die "vendor/XPF 的实现不是 AX 1.2.8 单参数 ABI"
-if LC_ALL=C grep -nE 'xpf_start_with_kernel_path[[:space:]]*\([^)]*,' \
-        "$ROOT/lara/headers/xpf.h" \
-        "$ROOT/lara/kexploit/offsets.m" \
-        "$ROOT/lara/kexploit/utils.m" \
-        "$XPF_DIR/src/xpf.h" \
-        "$XPF_DIR/src/xpf.c" \
-        "$XPF_DIR/src/cli/main.c"; then
-    die "检测到多参数 xpf_start_with_kernel_path，拒绝构建 ABI 混用产物"
-fi
+# iOS 26 SPTM needs the matching SPTM payload in addition to the kernelcache.
+# Pin the public three-argument ABI in both headers and every production call.
+XPF_MULTI_DECL='int xpf_start_with_kernel_path(const char *kernelPath, const char *optSptmPath, const char *optTxmPath);'
+LC_ALL=C grep -Fqx -- "$XPF_MULTI_DECL" "$ROOT/lara/headers/xpf.h" \
+    || die "Lara 的 XPF 声明不是 SPTM 三参数 ABI"
+LC_ALL=C grep -Fqx -- "$XPF_MULTI_DECL" "$XPF_DIR/src/xpf.h" \
+    || die "vendor/XPF 的公开声明不是 SPTM 三参数 ABI"
+LC_ALL=C grep -Fqx -- 'int xpf_start_with_kernel_path(const char *kernelPath, const char *optSptmPath, const char *optTxmPath)' "$XPF_DIR/src/xpf.c" \
+    || die "vendor/XPF 的实现不是 SPTM 三参数 ABI"
+LC_ALL=C grep -q -- 'xpf_start_with_kernel_path_cleanup_on_failure(' "$ROOT/lara/kexploit/offsets.m" \
+    || die "offsets.m 未使用 SPTM XPF cleanup 入口"
 # Lara 会直接读取导出全局 gXPF 的字段；两份头文件的结构体必须逐字段一致。
 # 2026-09-20 曾因 Lara 仍把 firstItem 当成 +0x110、而 dylib 已移到 +0x1a8，
 # 将 kernelSandboxAuthStubSection 误作链表头并在 Mach-O 魔数地址上崩溃。
@@ -247,32 +240,20 @@ if struct_body(sys.argv[1]) != struct_body(sys.argv[2]):
 
 for path in sys.argv[1:]:
     text = pathlib.Path(path).read_text(encoding="utf-8")
-    for forbidden in (
-        "kernelBootcodeSection", "kernelSandboxAuthStubSection",
-        "kernelIOSurfaceTextSection", "kernelIOSurfaceStringSection",
-        "kernelIOSurfaceOsLogSection", "decompressedSptm", "decompressedTxm",
-        "sptmContainer", "txmContainer",
-    ):
-        if forbidden in text:
-            raise SystemExit(f"forbidden AX 1.2.8 XPF field {forbidden}: {path}")
     for required in (
-        "offsetof(XPF, firstItem) == 0x110",
-        "offsetof(XPF, ignoreBaseSet) == 0x118",
-        "sizeof(XPF) == 0x120",
+        "offsetof(XPF, firstItem) == 0x1a8",
+        "offsetof(XPF, ignoreBaseSet) == 0x1b0",
+        "sizeof(XPF) == 0x1b8",
+        "decompressedSptm", "sptmContainer", "sptmTextSection",
     ):
         if required not in text:
             raise SystemExit(f"missing ABI assertion {required}: {path}")
 PY
-for removed in "$XPF_DIR/src/sptm_txm.c" "$XPF_DIR/src/sptm_txm.h" \
-               "$XPF_DIR/src/im4p_direct.c" "$XPF_DIR/src/im4p_direct.h"; do
-    [[ ! -e "$removed" ]] || die "旧 XPF 构建仍混入可选镜像源：$removed"
-done
-if LC_ALL=C grep -R -nE 'xpf_sptm_txm_init|decompressedSptm|decompressedTxm|kernelBootcodeSection|kernelSandboxAuthStubSection' \
-        "$XPF_DIR/src" "$XPF_DIR/Makefile"; then
-    die "旧 XPF 生产链仍混入 SPTM/TXM 初始化或新版 section"
-fi
+[ -f "$XPF_DIR/src/sptm_txm.c" ] || die "XPF 缺少 SPTM finder"
+LC_ALL=C grep -q -- 'kernelSymbol.libsptm_papt_ranges' "$XPF_DIR/src/sptm_txm.c" \
+    || die "XPF 缺少 libsptm PAPT finder"
 LC_ALL=C grep -q -- 'arm_maxoffset' "$XPF_DIR/src/common.c" \
-    || die "旧 XPF 源码缺少 arm_maxoffset 兼容 finder"
+    || die "XPF 源码缺少 arm_maxoffset 兼容 finder"
 
 verify_xpf_binary_layout() {
     local artifact="$1"
@@ -299,9 +280,9 @@ for required_arch in required_archs:
         raise SystemExit(f"missing architecture {required_arch}: {artifact}")
 
 required_offsets = {
-    "_xpf_item_register": "0x110",
-    "_xpf_item_resolve": "0x110",
-    "_xpf_set_ignore_base_set": "0x118",
+    "_xpf_item_register": "0x1a8",
+    "_xpf_item_resolve": "0x1a8",
+    "_xpf_set_ignore_base_set": "0x1b0",
 }
 for arch in required_archs:
     symbols = subprocess.check_output(
@@ -341,13 +322,13 @@ for arch in required_archs:
             )
 
 binary = artifact.read_bytes()
-for forbidden in (b"xpf_sptm_txm_init", b"decompressedSptm", b"decompressedTxm"):
-    if forbidden in binary:
-        raise SystemExit(f"forbidden optional-image marker {forbidden!r}: {artifact}")
+for required in (b"xpf_sptm_txm_init", b"libsptm_papt_ranges", b"papt_ranges_update"):
+    if required not in binary:
+        raise SystemExit(f"missing SPTM marker {required!r}: {artifact}")
 PY
 }
 
-CHOMA_COMMIT=b1a4f2debf2aff70edc2825c5cfbd05926d7fc18
+CHOMA_COMMIT=7dccded6bc17081c08f5f5cdbd7a4b051543a825
 CHOMA_DIR="$ROOT/build/deps/ChOma"
 if [ ! -d "$CHOMA_DIR/.git" ]; then
     [[ ! -e "$CHOMA_DIR" ]] || die "ChOma 依赖目录存在但不是 Git checkout"
@@ -363,15 +344,14 @@ git -C "$CHOMA_DIR" checkout --detach "$CHOMA_COMMIT" >/dev/null 2>&1 \
 [[ "$(git -C "$CHOMA_DIR" rev-parse HEAD)" == "$CHOMA_COMMIT" ]] \
     || die "ChOma 版本不一致"
 
-# 这里会实际编译头文件中的三条 ABI 断言；失败信息分别包含
-# "AX 1.2.8 firstItem ABI"、ignoreBaseSet ABI 和 XPF size。
+# 这里会实际编译头文件中的三条 SPTM ABI 断言。
 IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 xcrun --sdk iphoneos clang -fsyntax-only -arch arm64 -isysroot "$IOS_SDK" \
     -DXPF_LAYOUT_ONLY "$ROOT/scripts/build_support/xpf_layout_check.c" \
-    || die "XPF AX 1.2.8 布局编译门禁失败"
+    || die "XPF SPTM 布局编译门禁失败"
 xcrun --sdk iphoneos clang -fsyntax-only -arch arm64 -isysroot "$IOS_SDK" \
     -DXPF_LAYOUT_ONLY -DXPF_TEST_LARA_HEADER "$ROOT/scripts/build_support/xpf_layout_check.c" \
-    || die "Lara XPF AX 1.2.8 布局编译门禁失败"
+    || die "Lara XPF SPTM 布局编译门禁失败"
 mkdir -p "$ROOT/build"
 # 该 dylib 只用于 lipo/nm/otool ABI 门禁，不进入 App；覆盖 XPF Makefile 的
 # 可选签名器，避免为这个一次性检查产物引入 Homebrew ldid 依赖。
@@ -389,23 +369,25 @@ STATIC_DIR="$ROOT/build/static-ios"
 reset_build_dir "$STATIC_DIR"
 mkdir -p "$STATIC_DIR/obj/xpf" "$STATIC_DIR/obj/grabkernel"
 
-xpf_sources=(
-    "$XPF_DIR/src/bad_recovery.c"
-    "$XPF_DIR/src/common.c"
-    "$XPF_DIR/src/decompress.c"
-    "$XPF_DIR/src/non_ppl.c"
-    "$XPF_DIR/src/ppl.c"
-    "$XPF_DIR/src/xpf.c"
-)
+xpf_sources=("$XPF_DIR"/src/*.c)
 choma_sources=("$CHOMA_DIR"/src/*.c)
+img4_sources=(
+    "$XPF_DIR/external/img4lib/lzss.c"
+    "$XPF_DIR"/external/img4lib/libvfs/*.c
+    "$XPF_DIR"/external/img4lib/libDER/*.c
+)
 [[ -e "${choma_sources[0]}" ]] || die "ChOma 源码不完整"
 xpf_objects=()
 xpf_index=0
-for source in "${xpf_sources[@]}" "${choma_sources[@]}"; do
+for source in "${xpf_sources[@]}" "${choma_sources[@]}" "${img4_sources[@]}"; do
+    [[ "$source" != *'/vfs_lzvn.c' ]] || continue
     object="$STATIC_DIR/obj/xpf/$xpf_index.o"
     xcrun --sdk iphoneos clang -c -O2 -fblocks -arch arm64e \
         -isysroot "$IOS_SDK" -miphoneos-version-min=17.0 \
-        -I"$XPF_DIR/src" -I"$CHOMA_DIR/include" \
+        -DUSE_COMMONCRYPTO -DUSE_LIBCOMPRESSION -DiOS10 \
+        -DDER_MULTIBYTE_TAGS=1 '-D__unused=__attribute__((unused))' -DDER_TAG_SIZE=8 \
+        -Wno-variadic-macros -Wno-multichar -Wno-four-char-constants -Wno-unused-parameter \
+        -I"$XPF_DIR/src" -I"$CHOMA_DIR/include" -I"$XPF_DIR/external/img4lib" \
         "$source" -o "$object" \
         || die "XPF 静态对象编译失败：$source"
     xpf_objects+=("$object")
@@ -744,7 +726,7 @@ fi
 
 # 字段偏移已经由两份头文件的编译期断言和上面的独立 arm64/arm64e dylib
 # 指令级门禁覆盖。静态库进入主程序后可能被 LTO/内联/linker relaxation 改写为
-# 不再含直接 #0x110/#0x118 immediate 的等价寻址，不能重复套用 dylib 反汇编形态。
+# 不再含直接 #0x1a8/#0x1b0 immediate 的等价寻址，不能重复套用 dylib 反汇编形态。
 LC_ALL=C grep -a -q -- "arm_maxoffset" "$BIN" \
     || die "主 Mach-O 缺少 arm_maxoffset 兼容 finder"
 MAIN_SYMBOLS="$(xcrun nm -g "$BIN")"

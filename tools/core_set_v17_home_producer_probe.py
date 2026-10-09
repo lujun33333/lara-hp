@@ -122,7 +122,7 @@ def current_source_evidence(sources: dict[str, str], swift_sources: dict[str, st
         "kernel_cache_call": [site("coordinator", "let fetched = fetchkcache()"), site("coordinator", "let loaded = fetched && dlkcache()"),
                               site("settings", "let fetched = fetchkcache()"), site("settings", "if fetched {"),
                               site("settings", "try fm.copyItem(at: url, to: dest)"), site("settings", "ok = dlkcache()"),
-                              site("offsets", "fileExistsAtPath:outpath"), site("offsets", "kc_fetch_kernelcache_by_range(outpath)"),
+        site("offsets", "fileExistsAtPath:outpath"), site("offsets", "kc_fetch_firmware_images_by_range(outpath"),
                               site("offsets", "grab_kernelcache(outpath)"), site("offsets", "return resolvekernoffsets(outpath);")],
         "range_fetch": [site("partial", "[Partial partialZipWithURL:url error:&error]"), site("partial", "[zip size]"),
                         site("partial", "[zip getFileForPath:entry error:&error]"), site("partial", "成员解压后 %lu 字节"),

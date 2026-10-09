@@ -265,10 +265,15 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
                   length:(size_t)length generation:(uint64_t)generation
                completed:(size_t)completed result:(kern_return_t)result {
     ++_readFailureSequence;
+    NSString *transportDetail = @"";
+    if (_kernelTransport && [kind isEqualToString:@"read-partial-or-kern-failure"]) {
+        transportDetail = [NSString stringWithFormat:@" mappedTransport=%@",
+                           _kernelTransport.lastError ?: @"unknown"];
+    }
     _lastReadDiagnostic = [NSString stringWithFormat:
-        @"%@ captureGeneration=%llu sessionGeneration=%llu address=0x%llx length=%zu completed=%zu kr=0x%x",
+        @"%@ captureGeneration=%llu sessionGeneration=%llu address=0x%llx length=%zu completed=%zu kr=0x%x%@",
         kind, (unsigned long long)generation, (unsigned long long)_generation,
-        (unsigned long long)address, length, completed, (unsigned)result];
+        (unsigned long long)address, length, completed, (unsigned)result, transportDetail];
     const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
     if (![_lastLoggedReadFailureKind isEqualToString:kind] || now - _lastReadFailureLogTime >= 30.0) {
         _lastLoggedReadFailureKind = [kind copy];

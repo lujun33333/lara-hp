@@ -120,6 +120,15 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         self.assertIn("to:scratch.mutableBytes", read_at)
         self.assertEqual(read_at.count("memcpy(destination, scratch.bytes, length)"), 1)
 
+    def test_mapped_read_failure_reports_transport_reason(self) -> None:
+        diagnostic = body(self.session, "- (void)recordReadFailure:")
+        self.assertIn('[kind isEqualToString:@"read-partial-or-kern-failure"]', diagnostic)
+        self.assertIn('_kernelTransport.lastError', diagnostic)
+        self.assertIn('mappedTransport=%@', diagnostic)
+        read_at = body(self.session, "- (BOOL)readAt:")
+        self.assertIn('mapped ? KERN_SUCCESS : KERN_FAILURE', read_at)
+        self.assertIn('recordReadFailure:identityValid ? @"read-partial-or-kern-failure"', read_at)
+
     def test_cleanup_failure_retains_transport_and_blocks_generation(self) -> None:
         cleanup = body(self.session, "- (CoreSetReadCleanupResult *)disconnect")
         for gate in ("transportReleased = [_kernelTransport disconnect]",

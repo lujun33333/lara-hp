@@ -26,13 +26,23 @@ def body(source: str, signature: str) -> str:
 
 def require_receipt_gates(source: str, immediate_configuration: bool = False) -> None:
     receipt = body(source, "func consumed(")
-    session = "geometrySession" if immediate_configuration else "session"
     for gate in ("receipt.requestToken", "receipt.configRevision == revision",
                  "receipt.snapshotID == expectedSnapshot", "receipt.hostGeneration == expectedGeneration",
-                 "receipt.acceptedByLocalRenderer", f"{session}.generation == expectedSessionGeneration",
-                 f"{session}.processID == expectedProcessID", f"{session}.imageBase == expectedImageBase",
+                 "receipt.acceptedByLocalRenderer",
                  "guard identityMatches && fresh else", "snapshot-stale stage=receipt"):
         assert gate in receipt, gate
+    if immediate_configuration:
+        assert "expectedReadIdentityMatches" in receipt
+        identity = body(source, "private var expectedReadIdentityMatches:")
+        for gate in ("candidate.ready", "candidate.generation == self.expectedSessionGeneration",
+                     "candidate.processID == self.expectedProcessID",
+                     "candidate.imageBase == self.expectedImageBase",
+                     "matches(session) || matches(geometrySession)"):
+            assert gate in identity, gate
+    else:
+        for gate in ("session.generation == expectedSessionGeneration",
+                     "session.processID == expectedProcessID", "session.imageBase == expectedImageBase"):
+            assert gate in receipt, gate
     assert "logReadSemanticReceipt(receipt)" in receipt
     apply = body(source, "func apply(")
     if immediate_configuration:
