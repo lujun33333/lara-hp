@@ -12,6 +12,8 @@ build_ipa.log
 *.pdb
 .codex-tests/
 .codex-temp/
+vendor/XPF/output/
+vendor/XPF/external/img4lib/lzfse/
 
 # Python 辅助脚本的缓存
 __pycache__/
