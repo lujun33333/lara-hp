@@ -135,10 +135,9 @@ class ConsumerConfigurationContract(unittest.TestCase):
             if name == "Player":
                 self.assertIn("expectedReadIdentityMatches", receipt)
                 identity = body(self.sources[name], "private var expectedReadIdentityMatches:")
-                for field in ("candidate.ready", "candidate.generation == self.expectedSessionGeneration",
-                              "candidate.processID == self.expectedProcessID",
-                              "candidate.imageBase == self.expectedImageBase",
-                              "matches(session) || matches(geometrySession)"):
+                for field in ("session.ready", "session.generation == expectedSessionGeneration",
+                              "session.processID == expectedProcessID",
+                              "session.imageBase == expectedImageBase"):
                     self.assertIn(field, identity)
             else:
                 for identity in ("session.ready", "session.generation == expectedSessionGeneration",

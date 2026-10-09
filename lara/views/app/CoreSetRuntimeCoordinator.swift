@@ -360,6 +360,13 @@ final class CoreSetBattleProducer {
         demandLock.lock()
         let aim = aimDemand, recoil = recoilDemand, display = displayDemand
         let displayCallback = displayCompletion
+        // A display request owns exactly one completed frame. Leaving the
+        // callback installed made every action-cadence capture enqueue the
+        // same work on main and eventually starved touch delivery.
+        if display != nil, displayCallback != nil {
+            displayDemand = nil
+            displayCompletion = nil
+        }
         let isClosed = closed
         demandLock.unlock()
         let actionPrimary = aim.map({ ($0.requestID, $0.hostGeneration, $0.revision, $0.canvas) }) ??
@@ -390,11 +397,8 @@ final class CoreSetBattleProducer {
         if !connected { diagnostic = session.lastConnectDiagnostic }
         else if session.readFailureSequence != failureSequence { diagnostic = session.lastReadDiagnostic }
         else { diagnostic = "\(CoreSetPlayerCollector.lastCaptureDiagnostic()) transport-errors=0" }
-        if let display, let displayCallback {
-            demandLock.lock(); let stillCurrent = displayDemand == display; demandLock.unlock()
-            if stillCurrent {
-                DispatchQueue.main.async { displayCallback(snapshot, diagnostic) }
-            }
+        if display != nil, let displayCallback {
+            DispatchQueue.main.async { displayCallback(snapshot, diagnostic) }
         }
         guard let actionPrimary else { candidateStore.clear(); finishCapture(); return }
         guard let snapshot, let input = CoreSetActionInputAuthority.authority(with: snapshot) else {

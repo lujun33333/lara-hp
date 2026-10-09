@@ -1825,8 +1825,10 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
             // when the separate skeleton toggle is off.  Capture that producer
             // for information without applying the skeleton-distance control.
             const bool wantsInformationAnchor = wantsInformation;
-            if (onScreen && (wantsVisibleBones || wantsInformationAnchor) &&
-                (wantsInformationAnchor || boneDistanceLimit == 0 || distance <= boneDistanceLimit) &&
+            const bool wantsBoneProducer = wantsVisibleBones &&
+                (boneDistanceLimit == 0 || distance <= boneDistanceLimit);
+            const bool wantsInformationProducer = wantsInformationAnchor && onScreen;
+            if ((wantsBoneProducer || wantsInformationProducer) &&
                 observedBones.size() < CSMaxBoneActors) {
                 CSBoneState bones;
                 bool present = false;

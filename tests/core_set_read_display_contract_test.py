@@ -34,10 +34,9 @@ def require_receipt_gates(source: str, immediate_configuration: bool = False) ->
     if immediate_configuration:
         assert "expectedReadIdentityMatches" in receipt
         identity = body(source, "private var expectedReadIdentityMatches:")
-        for gate in ("candidate.ready", "candidate.generation == self.expectedSessionGeneration",
-                     "candidate.processID == self.expectedProcessID",
-                     "candidate.imageBase == self.expectedImageBase",
-                     "matches(session) || matches(geometrySession)"):
+        for gate in ("session.ready", "session.generation == expectedSessionGeneration",
+                     "session.processID == expectedProcessID",
+                     "session.imageBase == expectedImageBase"):
             assert gate in identity, gate
     else:
         for gate in ("session.generation == expectedSessionGeneration",
@@ -314,12 +313,13 @@ class ReadDisplayContracts(unittest.TestCase):
         geometry = body(self.player, "private func submitGeometry(")
         self.assertLess(geometry.index("precondition(Thread.isMainThread)"),
                         geometry.index("grenadeMotion.decorate"))
-        self.assertIn("CoreSetPlayerCollector.refreshGeometry", self.player)
+        self.assertNotIn("CoreSetPlayerCollector.refreshGeometry", self.player)
+        self.assertNotIn("CoreSetPlayerCollector.reprojectPresentation", self.player)
         self.assertIn("grenadeMotion.clear()", body(self.player, "private func clearStaleLane("))
         shutdown = body(self.player, "func shutdownReadSession()")
         self.assertIn("let motionClean = grenadeMotion.clear()", shutdown)
         self.assertIn("battleProducer.releaseDisplay(requestID: nil)", shutdown)
-        self.assertIn("motionClean && geometryCleanup.complete && presentationCleanup.complete", shutdown)
+        self.assertIn("return motionClean", shutdown)
         render = body(self.player, "private func render(")
         self.assertIn("for segment in mark.predictionSegments", render)
         self.assertIn("if mark.predictionEndpointPresent", render)
@@ -386,7 +386,7 @@ class ReadDisplayContracts(unittest.TestCase):
         for source in (self.player, self.material, self.radar):
             require_receipt_gates(source, immediate_configuration=source is self.player)
             logger = body(source, "private func logReadSemanticReceipt(")
-            session = "geometrySession" if source is self.player else "session"
+            session = "session"
             for gate in ("lastSemanticLogRevision != receipt.configRevision", "now - lastSemanticLogAt >= 30",
                          "receipt.snapshotID.uuidString", f"{session}.generation", f"{session}.processID",
                          "evidence=local-renderer-frame parity=partial"):
@@ -398,7 +398,7 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertGreaterEqual(radar_receipt.count("if confirmedLanes == ownedLanes {"), 3)
         self.assertIn("confirmedLanes.removeAll() // Each frame", body(self.radar, "private func submit("))
 
-    def test_full_roster_and_live_geometry_are_independent(self) -> None:
+    def test_player_uses_one_complete_frame_without_filtered_roster_feedback(self) -> None:
         refresh = body(self.collector, "+ (CoreSetPlayerSnapshot *)refreshGeometryForSnapshot:")
         for gate in ("session.processID != source.processID", "session.imageBase != source.imageBase",
                      "source.rosterControllerAddress + 0x680", "manager != source.rosterCameraManagerAddress",
@@ -409,13 +409,17 @@ class ReadDisplayContracts(unittest.TestCase):
             self.assertIn(gate, refresh)
         self.assertNotIn("mark.center = source.center", refresh)
         self.assertNotIn("mark.boneSegments = source.boneSegments", refresh)
-        self.assertIn("geometryWorker", self.player)
-        self.assertIn("if currentRoster != nil { refreshGeometry() }", self.player)
+        for removed in ("geometryWorker", "presentationWorker", "currentRoster",
+                        "currentGeometry", "refreshGeometry()", "refreshPresentation()"):
+            self.assertNotIn(removed, self.player)
+        capture = body(self.player, "private func capture()")
+        self.assertIn("self.submitGeometry(snapshot, token: token", capture)
+        self.assertIn("let includeOffscreen = true", capture)
         self.assertIn("now - freshest >= 0.5", self.player)
         self.assertIn("commands: []", body(self.player, "private func expireGeometryIfNeeded()"))
 
     def test_negative_missing_identity_generation_full_length_and_scope_rejected(self) -> None:
-        for removed in ("receipt.snapshotID == expectedSnapshot", "geometrySession.generation == expectedSessionGeneration",
+        for removed in ("receipt.snapshotID == expectedSnapshot", "session.generation == expectedSessionGeneration",
                         "receipt.acceptedByLocalRenderer", "guard identityMatches && fresh else"):
             with self.subTest(removed=removed), self.assertRaises(AssertionError):
                 require_receipt_gates(self.player.replace(removed, "REMOVED"))

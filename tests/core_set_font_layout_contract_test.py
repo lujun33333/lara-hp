@@ -119,8 +119,8 @@ class CoreSetFontLayoutContractTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<I", self.reference_image, 0xBD8B20)[0],
                          0x3F800000)
         for token in ("informationAnchorPresent", "informationAnchor",
-                      "wantsVisibleBones || wantsInformationAnchor",
-                      "wantsInformationAnchor || boneDistanceLimit == 0",
+                      "wantsBoneProducer", "wantsInformationProducer",
+                      "wantsInformationAnchor && onScreen",
                       "CSPublishAimAnchors(mark, bones, camera, size)",
                       "CSPublishAimAnchors(mark, finalBone, cameraAfter, size)",
                       "CSPublishAimAnchors(mark, bone.state, cameraAfter, size)"):

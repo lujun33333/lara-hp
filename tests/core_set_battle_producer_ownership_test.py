@@ -37,6 +37,10 @@ capture = producer.split("private func capture()", 1)[1].split(
 assert capture.index("demandLock.lock()") < capture.index("let isClosed = closed")
 assert capture.index("let isClosed = closed") < capture.index("demandLock.unlock()")
 assert "guard !isClosed" in capture
+assert "displayDemand = nil" in capture
+assert "displayCompletion = nil" in capture
+assert capture.index("displayCompletion = nil") < capture.index("demandLock.unlock()")
+assert "stillCurrent" not in capture
 
 assert "CoreSetPlayerCollector.capture" not in player
 assert "CoreSetPlayerCollector.capture" not in aim
