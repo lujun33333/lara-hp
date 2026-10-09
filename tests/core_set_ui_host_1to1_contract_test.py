@@ -98,3 +98,13 @@ def test_reference_controls_have_values_without_uikit_only_unselected_gate():
     for token in ("stopWhenNotFiring.enabled = true", "verticalEnabled = false",
                   "horizontalEnabled = false", "verticalStrength.set(", "horizontalStrength.set("):
         assert token in recoil, token
+
+
+def test_color_editor_keeps_one_menu_surface_and_one_input_owner():
+    edit = function_body(MENU, "@objc private func editLocalColor(")
+    assert "showHostedColorEditor(sender)" in edit
+    assert "UIColorPickerViewController" not in MENU
+    show = function_body(MENU, "private func showHostedColorEditor(")
+    for token in ("view.addSubview(overlay)", "hostedMenuRevision &+= 1",
+                  "registerHostedColorEditor()", "refreshHostedColorPreview()"):
+        assert token in show, token

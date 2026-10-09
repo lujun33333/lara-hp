@@ -95,8 +95,6 @@ for token in (
     "kCoreSetCoreDrawLevel = 999998.0",
     "kCoreSetCoreMenuLevel = 999999.0",
     "kCoreSetCoreIconLevel = 1000000.0",
-    "kCoreSetWZRemoteDrawLevel = 10000009.0",
-    "kCoreSetWZRemoteMenuLevel = 10000010.0",
     "initWithCoreHosting",
     'CSClass(_process, "CALayerHost")',
     'CSClass(_process, "SBMainWorkspace")',
@@ -126,7 +124,7 @@ for token in (
     "doRemoteCallCheckedWithTimeout:10000",
     "remoteSideObserved",
     "localSideObserved",
-    '@"core-sbs-three-surface-wz-fallback-v4"',
+    '@"core-three-surface-sbs-or-remote-v5"',
 ):
     assert token in adapter, token
 hosting_class = adapter[adapter.index("static void CSLoadCoreHostingFrameworks"):
@@ -154,6 +152,12 @@ assert register_three.index("createSide:draw level:kCoreSetCoreDrawLevel") < \
        register_three.index("createSide:menu level:kCoreSetCoreMenuLevel")
 assert register_three.index("createSide:menu level:kCoreSetCoreMenuLevel") < \
        register_three.index("installCoreLifecycleForDraw:draw icon:icon menu:menu")
+assert "if (_coreHosting)" in register_three
+assert "dispatch_async(_readbackQueue" in register_three
+assert "[self remoteSideObserved:icon]" in adapter
+requires_icon = adapter[adapter.index("- (BOOL)requiresDedicatedIconSurface"):
+                        adapter.index("- (NSString *)hostingDiagnosticSnapshot")]
+assert "return YES;" in requires_icon and "return _coreHosting" not in requires_icon
 lifecycle = adapter[adapter.index("- (BOOL)installCoreLifecycleForDraw:"):
                     adapter.index("- (void)observeBothSurfacesAsync:")]
 assert lifecycle.index("UIApplicationProtectedDataWillBecomeUnavailable") < \
@@ -238,4 +242,4 @@ for token in (
 for forbidden in ("CIContext", "CoreSetCoreAnimationConsumer", "renderInContext"):
     assert forbidden not in metal, forbidden
 
-print("PASS: Core SBS preferred host, WZ fallback, hosted input and ImGui/Metal host path; source only")
+print("PASS: Core three-surface SBS/RemoteCall host, hosted input and ImGui/Metal path; source only")

@@ -15,9 +15,7 @@ extern "C" int proc_name(int pid, void *buffer, uint32_t buffersize);
 static const double kCoreSetCoreDrawLevel = 999998.0;
 static const double kCoreSetCoreMenuLevel = 999999.0;
 static const double kCoreSetCoreIconLevel = 1000000.0;
-static const double kCoreSetWZRemoteDrawLevel = 10000009.0;
-static const double kCoreSetWZRemoteMenuLevel = 10000010.0;
-static NSString *const CSHostBuildMarker = @"core-sbs-three-surface-wz-fallback-v4";
+static NSString *const CSHostBuildMarker = @"core-three-surface-sbs-or-remote-v5";
 
 static void CSLoadCoreHostingFrameworks(void) {
     // Core 1.7 resolves the hosting class again for every registration attempt.
@@ -205,14 +203,19 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     return self;
 }
 - (uint64_t)hostGeneration { return _hostGeneration; }
-- (BOOL)requiresDedicatedIconSurface { return _coreHosting; }
+- (BOOL)requiresDedicatedIconSurface {
+    // Core 1.7 publishes draw/icon/menu as three distinct source contexts.
+    // Keep that topology when the SBS controller is unavailable and the
+    // existing SpringBoard RemoteCall transport is used.
+    return YES;
+}
 - (NSString *)hostingDiagnosticSnapshot {
     // Called from scene lifecycle on the main thread. Never wait for the
     // remote worker's process lock merely to print a diagnostic.
     if (_busy) return @"remote-operation-pending";
     return [NSString stringWithFormat:
         @"build=%@ mode=%@ cachedObserved=%d menuPublished=%d iconPublished=%d drawPublished=%d hostGeneration=%llu",
-        CSHostBuildMarker, _coreHosting ? @"core-sbs" : @"wz-remote", _lastBothObserved,
+        CSHostBuildMarker, _coreHosting ? @"core-sbs" : @"core-remote", _lastBothObserved,
         _menu.observed, _icon.observed, _draw.observed,
         (unsigned long long)_hostGeneration];
 }
@@ -227,8 +230,8 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     return NSThread.isMainThread && !_busy && _lastBothObserved &&
         (_coreHosting || (_process && _process.pid == _pid && _process.trojanMem != 0 &&
         !_process.trojanMemIsStackFallback)) &&
-        _menu.observed && (!_coreHosting || _icon.observed) && _draw.observed &&
-        [self localSideObserved:_menu] && (!_coreHosting || [self localSideObserved:_icon]) &&
+        _menu.observed && _icon.observed && _draw.observed &&
+        [self localSideObserved:_menu] && [self localSideObserved:_icon] &&
         [self localSideObserved:_draw];
 }
 - (void)prepareForHostGeneration:(uint64_t)generation {
@@ -432,9 +435,9 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     CoreSetRemoteHostSide *menu = _menu;
     CoreSetRemoteHostSide *icon = _icon;
     CoreSetRemoteHostSide *draw = _draw;
-    const BOOL localReady = !_busy && generation && menu.observed && draw.observed &&
-        (!_coreHosting || icon.observed) && [self localSideObserved:menu] &&
-        (!_coreHosting || [self localSideObserved:icon]) && [self localSideObserved:draw];
+    const BOOL localReady = !_busy && generation && menu.observed && icon.observed &&
+        draw.observed && [self localSideObserved:menu] &&
+        [self localSideObserved:icon] && [self localSideObserved:draw];
     if (!localReady) {
         dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, generation); });
         return;
@@ -463,14 +466,16 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
             self->_observationSequence++;
             self->_lastIdentityObserved = [self identityValid];
             observed = self->_lastIdentityObserved &&
-                [self remoteSideObserved:menu] && [self remoteSideObserved:draw];
+                [self remoteSideObserved:menu] && [self remoteSideObserved:icon] &&
+                [self remoteSideObserved:draw];
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             const BOOL current = !self->_busy &&
                 (self->_hostGeneration == generation || self->_pendingHostGeneration == generation) &&
-                self->_menu == menu && self->_draw == draw &&
-                menu.observed && draw.observed &&
-                [self localSideObserved:menu] && [self localSideObserved:draw];
+                self->_menu == menu && self->_icon == icon && self->_draw == draw &&
+                menu.observed && icon.observed && draw.observed &&
+                [self localSideObserved:menu] && [self localSideObserved:icon] &&
+                [self localSideObserved:draw];
             if (observed && current && self->_pendingHostGeneration == generation) {
                 self->_hostGeneration = generation;
                 self->_pendingHostGeneration = 0;
@@ -687,9 +692,9 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
         BOOL menuReady = NO, drawReady = NO;
         @synchronized (self->_process) {
             if (!self->_registerCancelled.load())
-                menuReady = [self createSide:menu level:kCoreSetWZRemoteMenuLevel];
+                menuReady = [self createSide:menu level:kCoreSetCoreMenuLevel];
             if (menuReady && !self->_registerCancelled.load())
-                drawReady = [self createSide:draw level:kCoreSetWZRemoteDrawLevel];
+                drawReady = [self createSide:draw level:kCoreSetCoreDrawLevel];
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             const BOOL current = self->_busy && self->_menu == menu && self->_draw == draw &&
@@ -712,7 +717,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
                          completion:(void (^)(BOOL, uint64_t))completion {
     if (!completion) return;
     const uint64_t generation = _hostGeneration;
-    if (!_coreHosting || !NSThread.isMainThread || _busy || _menu || _icon || _draw ||
+    if (!NSThread.isMainThread || _busy || _menu || _icon || _draw ||
         !generation || !menuWindow || !iconWindow || !drawWindow || ![self identityValid] ||
         !menuWindow.windowScene || menuWindow.windowScene != iconWindow.windowScene ||
         menuWindow.windowScene != drawWindow.windowScene) {
@@ -762,21 +767,54 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     draw.role = @"darkswordOverlayDrawHostController";
     _menu = menu; _icon = icon; _draw = draw; _busy = YES; _registrationInFlight = YES;
     _lastBothObserved = NO; _registerCancelled.store(false);
-    // Core 1.7 registers draw, icon, then menu at the three adjacent levels.
-    const BOOL drawReady = [self createSide:draw level:kCoreSetCoreDrawLevel];
-    const BOOL iconReady = drawReady && [self createSide:icon level:kCoreSetCoreIconLevel];
-    const BOOL menuReady = iconReady && [self createSide:menu level:kCoreSetCoreMenuLevel];
-    const BOOL lifecycleReady = drawReady && iconReady && menuReady &&
-        [self installCoreLifecycleForDraw:draw icon:icon menu:menu];
-    const BOOL current = lifecycleReady &&
-        [self localSideObserved:draw] && [self localSideObserved:icon] &&
-        [self localSideObserved:menu] && !_registerCancelled.load();
-    if (!current && lifecycleReady) {
-        (void)[self removeCoreLifecycleForSides:@[draw, icon, menu]];
+    // Core 1.7 registers draw, icon, then menu at these adjacent levels. SBS
+    // performs the calls locally; the compatibility transport performs the
+    // same three registrations on its serialized SpringBoard worker.
+    void (^finish)(BOOL, BOOL, BOOL, BOOL) = ^(BOOL drawReady, BOOL iconReady,
+                                               BOOL menuReady, BOOL lifecycleReady) {
+        const BOOL current = drawReady && iconReady && menuReady && lifecycleReady &&
+            self->_busy && self->_hostGeneration == generation && self->_menu == menu &&
+            self->_icon == icon && self->_draw == draw &&
+            menuWindow.windowScene == scene && iconWindow.windowScene == scene &&
+            drawWindow.windowScene == scene && !self->_registerCancelled.load() &&
+            [self localSideObserved:draw] && [self localSideObserved:icon] &&
+            [self localSideObserved:menu];
+        if (!current && self->_coreHosting && lifecycleReady)
+            (void)[self removeCoreLifecycleForSides:@[draw, icon, menu]];
+        self->_busy = NO; self->_registrationInFlight = NO;
+        self->_lastBothObserved = current;
+        draw.observed = current; icon.observed = current; menu.observed = current;
+        dispatch_block_t deferred = self->_deferredCleanup;
+        self->_deferredCleanup = nil;
+        if (deferred) deferred();
+        completion(current, generation);
+    };
+    if (_coreHosting) {
+        const BOOL drawReady = [self createSide:draw level:kCoreSetCoreDrawLevel];
+        const BOOL iconReady = drawReady && [self createSide:icon level:kCoreSetCoreIconLevel];
+        const BOOL menuReady = iconReady && [self createSide:menu level:kCoreSetCoreMenuLevel];
+        const BOOL lifecycleReady = drawReady && iconReady && menuReady &&
+            [self installCoreLifecycleForDraw:draw icon:icon menu:menu];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            finish(drawReady, iconReady, menuReady, lifecycleReady);
+        });
+        return;
     }
-    _busy = NO; _registrationInFlight = NO; _lastBothObserved = current;
-    draw.observed = current; icon.observed = current; menu.observed = current;
-    dispatch_async(dispatch_get_main_queue(), ^{ completion(current, generation); });
+    dispatch_async(_readbackQueue, ^{
+        BOOL drawReady = NO, iconReady = NO, menuReady = NO;
+        @synchronized (self->_process) {
+            if (!self->_registerCancelled.load())
+                drawReady = [self createSide:draw level:kCoreSetCoreDrawLevel];
+            if (drawReady && !self->_registerCancelled.load())
+                iconReady = [self createSide:icon level:kCoreSetCoreIconLevel];
+            if (iconReady && !self->_registerCancelled.load())
+                menuReady = [self createSide:menu level:kCoreSetCoreMenuLevel];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            finish(drawReady, iconReady, menuReady,
+                   drawReady && iconReady && menuReady);
+        });
+    });
 }
 - (void)unregisterBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
                          completion:(void (^)(BOOL, BOOL))completion {
@@ -822,7 +860,7 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
                            drawWindow:(UIWindow *)drawWindow
                            completion:(void (^)(BOOL, BOOL, BOOL))completion {
     if (!completion) return;
-    if (!_coreHosting || !NSThread.isMainThread ||
+    if (!NSThread.isMainThread ||
         (_menu && _menu.source != menuWindow) || (_icon && _icon.source != iconWindow) ||
         (_draw && _draw.source != drawWindow)) {
         dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, NO, NO); });
@@ -844,24 +882,42 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     CoreSetRemoteHostSide *menu = _menu;
     CoreSetRemoteHostSide *icon = _icon;
     CoreSetRemoteHostSide *draw = _draw;
-    _lastBothObserved = NO;
+    _busy = YES; _lastBothObserved = NO;
     // Core 1.7 teardown follows draw, icon, then menu and clears each owner.
     NSMutableArray<CoreSetRemoteHostSide *> *sides = [NSMutableArray arrayWithCapacity:3];
     if (draw) [sides addObject:draw];
     if (icon) [sides addObject:icon];
     if (menu) [sides addObject:menu];
-    const BOOL lifecycleRemoved = [self removeCoreLifecycleForSides:sides];
-    const BOOL drawRemoved = lifecycleRemoved && (!draw || [self removeSide:draw]);
-    const BOOL iconRemoved = lifecycleRemoved && (!icon || [self removeSide:icon]);
-    const BOOL menuRemoved = lifecycleRemoved && (!menu || [self removeSide:menu]);
-    if (drawRemoved) _draw = nil;
-    if (iconRemoved) _icon = nil;
-    if (menuRemoved) _menu = nil;
-    _busy = NO;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    void (^finish)(BOOL, BOOL, BOOL) = ^(BOOL drawRemoved, BOOL iconRemoved,
+                                         BOOL menuRemoved) {
+        if (drawRemoved && self->_draw == draw) self->_draw = nil;
+        if (iconRemoved && self->_icon == icon) self->_icon = nil;
+        if (menuRemoved && self->_menu == menu) self->_menu = nil;
+        self->_busy = NO;
         completion(menuRemoved && self->_menu == nil,
                    iconRemoved && self->_icon == nil,
                    drawRemoved && self->_draw == nil);
+    };
+    if (_coreHosting) {
+        const BOOL lifecycleRemoved = [self removeCoreLifecycleForSides:sides];
+        const BOOL drawRemoved = lifecycleRemoved && (!draw || [self removeSide:draw]);
+        const BOOL iconRemoved = lifecycleRemoved && (!icon || [self removeSide:icon]);
+        const BOOL menuRemoved = lifecycleRemoved && (!menu || [self removeSide:menu]);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            finish(drawRemoved, iconRemoved, menuRemoved);
+        });
+        return;
+    }
+    dispatch_async(_readbackQueue, ^{
+        BOOL drawRemoved = NO, iconRemoved = NO, menuRemoved = NO;
+        @synchronized (self->_process) {
+            drawRemoved = !draw || [self removeSide:draw];
+            iconRemoved = !icon || [self removeSide:icon];
+            menuRemoved = !menu || [self removeSide:menu];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            finish(drawRemoved, iconRemoved, menuRemoved);
+        });
     });
 }
 @end

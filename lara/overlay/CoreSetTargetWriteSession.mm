@@ -273,7 +273,7 @@
         // explicit abandonment policy instead of claiming verified restore.
         const BOOL effectsResolved = _effects.abandonWithoutRestoration();
         const BOOL effectsAbandoned = _effects.targetEffectsAbandoned();
-        _pendingCleanup = _pendingCleanup || !backendClean || !drained || !readReleased || !readAdvanced ||
+        _pendingCleanup = !backendClean || !drained || !readReleased || !readAdvanced ||
             !advanced || !mappedReleased || !effectsResolved;
         return [[CoreSetTargetWriteCleanupResult alloc]
             initWithReadTaskPortReleased:readReleased

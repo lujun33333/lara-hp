@@ -176,7 +176,12 @@ static BOOL CSVerifiedKernelProfile(void) {
                 released = [self releaseMapping:&_mappings[index]] && released;
         }
         _aliasesReleased = released;
-        return _aliasesReleased && !_pendingCleanup;
+        // pendingCleanup describes unreleased mapped aliases, not a permanent
+        // session fault. Once every alias/port is actually gone, allow the
+        // serial owner to retire this worker and create a fresh binding.
+        _pendingCleanup = !released;
+        if (released) _mappingCount = 0;
+        return released;
     }
 }
 @end

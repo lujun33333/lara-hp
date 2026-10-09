@@ -16,7 +16,6 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     private var selectedGeneration: UInt64 = 0
     private var selectedStartedAt: Double = 0
     private var timer: DispatchSourceTimer?
-    private var recoilTimer: DispatchSourceTimer?
     private var readinessTimer: Timer?
     private var active: CoreSetApplyRequest<State>?
     private var pendingCompletion: ((CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void)?
@@ -56,6 +55,9 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     private var lastAimCaptureFailureLogAt: Double = 0
     private var lastRecoilCaptureFailure = ""
     private var lastRecoilCaptureFailureLogAt: Double = 0
+    private var pendingStatusText: String?
+    private var statusPublishScheduled = false
+    private var lastStatusPublishedAt: Double = 0
     private(set) var status = "目标只读会话未就绪"
 
     var recoilAvailability: CoreSetAvailability { availability }
@@ -181,9 +183,10 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                 DispatchQueue.main.async { completion(request.token, .failed(reason: "开始前请求已撤销")) }
                 return
             }
+            self.pendingStatusText = nil
             self.timer?.cancel(); self.timer = nil
             // Move the live-token handoff onto the same serial queue as the
-            // recoil timer. Main-thread invalidation used to leave a window in
+            // action timer. Main-thread invalidation used to leave a window in
             // which an already queued recoil tick observed the new Aim token
             // and incorrectly failed the still-active recoil request.
             self.invalidateHost()
@@ -261,6 +264,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         }
         worker.async { [weak self] in
             guard let self else { return }
+            self.pendingStatusText = nil
             if let previous = self.activeRecoil, let callback = self.pendingRecoilCompletion {
                 DispatchQueue.main.async { callback(previous.token, .failed(reason: "压枪请求已替换")) }
             }
@@ -282,21 +286,22 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                 self.nextBattleCaptureAt = 0
                 self.lastRecoilCaptureFailure = ""
                 self.lastRecoilCaptureFailureLogAt = 0
-                self.ensureRecoilTimer(canvas: canvas.size, hostGeneration: canvas.generation, revision: revision)
-            } else {
-                self.ensureRecoilTimer(canvas: canvas.size, hostGeneration: canvas.generation,
-                                       revision: self.activeRevision)
+                self.replaceActionTimerWithRecoil(canvas: canvas.size,
+                    hostGeneration: canvas.generation, revision: revision)
             }
         }
     }
-    private func ensureRecoilTimer(canvas: CGSize, hostGeneration: UInt64, revision: UInt64) {
-        recoilTimer?.cancel()
+    // Core owns one continuous action worker. Recoil-only operation replaces
+    // that worker's timer; when Aim is active its tick already merges recoil.
+    private func replaceActionTimerWithRecoil(canvas: CGSize, hostGeneration: UInt64,
+                                               revision: UInt64) {
+        timer?.cancel()
         let source = DispatchSource.makeTimerSource(queue: worker)
         source.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
         source.setEventHandler { [weak self] in
             self?.tickRecoilOnly(canvas: canvas, hostGeneration: hostGeneration, revision: revision)
         }
-        recoilTimer = source
+        timer = source
         source.resume()
     }
     private func configuration(_ settings: State) -> CoreSetV17AimConfiguration? {
@@ -617,7 +622,37 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         }
     }
     private func publish(_ text: String) {
-        DispatchQueue.main.async { [weak self] in self?.status = text; self?.coordinator?.refreshPlayerAvailability() }
+        // The action loop runs at 60 Hz. Status is UI telemetry, not part of the
+        // action receipt, so collapse it before crossing onto the main queue.
+        // Enqueuing one main-thread block per action tick starves touch delivery.
+        pendingStatusText = text
+        guard !statusPublishScheduled else { return }
+        let now = CACurrentMediaTime()
+        let delay = max(0, 0.25 - max(0, now - lastStatusPublishedAt))
+        statusPublishScheduled = true
+        worker.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.statusPublishScheduled = false
+            guard !self.closed, let next = self.pendingStatusText else {
+                self.pendingStatusText = nil
+                return
+            }
+            self.pendingStatusText = nil
+            self.lastStatusPublishedAt = CACurrentMediaTime()
+            self.cancellation.lock()
+            let requestID = self.liveToken?.requestID
+            let hostGeneration = self.liveHostGeneration
+            let revision = self.liveRevision
+            self.cancellation.unlock()
+            guard let requestID else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      self.actionWorkerLive(requestID, host: hostGeneration,
+                                            revision: revision) else { return }
+                self.status = next
+                self.coordinator?.refreshPlayerAvailability()
+            }
+        }
     }
     private func fail(_ request: CoreSetApplyRequest<State>, _ reason: String) {
         guard active?.token == request.token else { return }
@@ -628,6 +663,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         timer?.cancel(); timer = nil
         triggerState.reset()
         resetAimRuntime()
+        pendingStatusText = nil
         _ = retireActionWorker()
         let completion = pendingCompletion; pendingCompletion = nil
         active = nil
@@ -649,7 +685,8 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     }
     private func failRecoil(_ request: CoreSetApplyRequest<CoreSetRecoilSettings>, _ reason: String) {
         guard activeRecoil?.token == request.token else { return }
-        recoilTimer?.cancel(); recoilTimer = nil
+        pendingStatusText = nil
+        if active == nil { timer?.cancel(); timer = nil }
         recoilDynamics.reset()
         let callback = pendingRecoilCompletion
         pendingRecoilCompletion = nil
@@ -667,7 +704,8 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         completion: @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) {
         worker.async { [weak self] in
             guard let self else { return }
-            self.recoilTimer?.cancel(); self.recoilTimer = nil
+            self.pendingStatusText = nil
+            if self.active == nil { self.timer?.cancel(); self.timer = nil }
             self.recoilDynamics.reset()
             let canceled = self.activeRecoil
             let callback = self.pendingRecoilCompletion
@@ -706,6 +744,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     func stop(_ token: CoreSetRequestToken, completion: @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) {
         worker.async { [weak self] in
             guard let self else { return }
+            self.pendingStatusText = nil
             self.timer?.cancel(); self.timer = nil
             self.triggerState.reset()
             self.resetAimRuntime()
@@ -727,7 +766,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                 self.liveHostGeneration = self.activeHostGeneration
                 self.cancellation.unlock()
                 self.activeRevision = revision
-                self.ensureRecoilTimer(canvas: self.activeCanvasSize,
+                self.replaceActionTimerWithRecoil(canvas: self.activeCanvasSize,
                     hostGeneration: self.activeHostGeneration, revision: revision)
                 self.aimWritesCommitted = false
                 DispatchQueue.main.async {
@@ -738,13 +777,11 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             if let recoil = self.activeRecoil {
                 let recoilCallback = self.pendingRecoilCompletion
                 self.activeRecoil = nil; self.pendingRecoilCompletion = nil
-                self.recoilTimer?.cancel(); self.recoilTimer = nil
                 DispatchQueue.main.async {
                     recoilCallback?(recoil.token, .failed(reason: "Aim停止时共享动作旧映射未清理，压枪同步终止"))
                 }
             }
             self.invalidateHost()
-            self.recoilTimer?.cancel(); self.recoilTimer = nil
             let clean = self.pendingProbes.isEmpty
             if clean {
                 self.aimWritesCommitted = false
@@ -765,7 +802,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         closed = true; readinessTimer?.invalidate(); readinessTimer = nil
         return worker.sync {
             timer?.cancel(); timer = nil
-            recoilTimer?.cancel(); recoilTimer = nil
+            pendingStatusText = nil
             invalidateHost()
             triggerState.reset()
             resetAimRuntime()

@@ -1552,11 +1552,19 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
             if (!CSUserPointerValid(actor)) continue;
             ++coreAddressValid;
             if (actor == local) localInActorArray = true;
+            // Keep one immutable copied-page view for this actor's first-pass
+            // fields.  The mapped transport otherwise maps/releases the same
+            // target page once per scalar read.  Final validation deliberately
+            // uses a new cache, so this optimization does not weaken the
+            // capture's end-reread freshness boundary.
+            CSCaptureReadCache actorReadCache;
+            actorReadCache.reserve(6);
 
             // Core v1.7 exact branch order, 0x1000d5460..0x1000d549c:
             // float32 DefaultSpeedValue(+0x10bc), finite, |value-479.5| < 0.1.
             float coreSpeed = 0;
-            const bool speedRead = CSReadValue(session, generation, actor + 0x10bc, &coreSpeed);
+            const bool speedRead = CSCaptureReadValue(session, generation, actor + 0x10bc,
+                                                      &coreSpeed, &actorReadCache);
             if (speedRead) {
                 ++coreSpeedRead;
                 if (std::isfinite(coreSpeed)) ++coreSpeedFinite;
@@ -1570,7 +1578,8 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
               if (collectGrenades) {
                 uint32_t nameIndex = 0;
                 bool grenade = false;
-                const bool nameIndexReady = CSReadValue(session, generation, actor + 0x18, &nameIndex);
+                const bool nameIndexReady = CSCaptureReadValue(session, generation, actor + 0x18,
+                                                               &nameIndex, &actorReadCache);
                 if (nameIndexReady) {
                     auto cached = grenadeNames.find(nameIndex);
                     if (cached != grenadeNames.end()) grenade = cached->second;
@@ -1592,7 +1601,8 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
                     bool timerObserved = false;
                     if (eliteProjectileClass) {
                         bool typed = false;
-                        if (!CSReadValue(session, generation, actor + 0x10, &grenadeClass) || !grenadeClass) continue;
+                        if (!CSCaptureReadValue(session, generation, actor + 0x10, &grenadeClass,
+                                                &actorReadCache) || !grenadeClass) continue;
                         auto cached = grenadeClassCache.find(grenadeClass);
                         if (cached != grenadeClassCache.end()) typed = cached->second;
                         else {
@@ -1602,9 +1612,12 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
                         }
                         if (typed) {
                             ++grenadeTyped;
-                            if (!CSReadValue(session, generation, actor + 0x20, &grenadeOuter) ||
-                                !CSReadValue(session, generation, actor + 0x7fd, &grenadeFlags) ||
-                                !CSReadValue(session, generation, actor + 0x88c, &explosionRaw)) continue;
+                            if (!CSCaptureReadValue(session, generation, actor + 0x20, &grenadeOuter,
+                                                    &actorReadCache) ||
+                                !CSCaptureReadValue(session, generation, actor + 0x7fd, &grenadeFlags,
+                                                    &actorReadCache) ||
+                                !CSCaptureReadValue(session, generation, actor + 0x88c, &explosionRaw,
+                                                    &actorReadCache)) continue;
                             timerObserved = grenadeOuter == level;
                             if (!timerObserved) ++grenadeActorWorldMismatch;
                             if (!(grenadeFlags & 8) || (grenadeFlags & 4)) {
@@ -1614,7 +1627,8 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
                     }
                     CSVector grenadePosition = {0};
                     bool present = false;
-                    if (!CSPosition(session, generation, base, actor, &grenadePosition, &present)) continue;
+                    if (!CSPosition(session, generation, base, actor, &grenadePosition, &present,
+                                    &actorReadCache)) continue;
                     if (present) {
                         ++grenadePositionPresent;
                         CGPoint point = CGPointZero;
@@ -1659,7 +1673,8 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
             // 0x1000d54ac..0x1000d54d8: uint32 team, valid 1...100,
             // and different from the local character's team.
             uint32_t team = 0;
-            if (!CSReadValue(session, generation, actor + 0xb78, &team)) continue;
+            if (!CSCaptureReadValue(session, generation, actor + 0xb78, &team,
+                                    &actorReadCache)) continue;
             ++coreTeamRead;
             if (team < 1 || team > 100) continue;
             ++coreTeamRange;
@@ -1675,29 +1690,37 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
             // 0x1000d54e0..0x1000d5544: PawnStateRepSyncData is at +0x1700;
             // its CurrentStatesMask.Array data pointer is followed to the
             // leading uint32 state word. Bit20 and status byte 4 reject.
-            if (!CSReadValue(session, generation, actor + 0x1700, &coreStateMaskData) ||
+            if (!CSCaptureReadValue(session, generation, actor + 0x1700, &coreStateMaskData,
+                                    &actorReadCache) ||
                 !CSUserPointerValid(coreStateMaskData)) continue;
             ++coreStatePointerValid;
-            if (!CSReadValue(session, generation, coreStateMaskData, &coreStateFlags)) continue;
+            if (!CSCaptureReadValue(session, generation, coreStateMaskData, &coreStateFlags,
+                                    &actorReadCache)) continue;
             ++coreStateFlagsRead;
             if (coreStateFlags & (1u << 20)) continue;
             ++coreStateBit20Clear;
-            if (!CSReadValue(session, generation, actor + 0x3be0, &status)) continue;
+            if (!CSCaptureReadValue(session, generation, actor + 0x3be0, &status,
+                                    &actorReadCache)) continue;
             ++coreLifecycleRead;
             if (status == 4) continue;
             ++coreLifecyclePass;
-            if (!CSReadValue(session, generation, actor + 0x1060, &health) ||
-                !CSReadValue(session, generation, actor + 0x1068, &maximum)) continue;
+            if (!CSCaptureReadValue(session, generation, actor + 0x1060, &health,
+                                    &actorReadCache) ||
+                !CSCaptureReadValue(session, generation, actor + 0x1068, &maximum,
+                                    &actorReadCache)) continue;
             ++coreHealthRead;
             if (!CSCorePlayerHealthMatches(health, maximum)) continue;
             ++coreHealthPass;
-            if (!CSReadValue(session, generation, actor + 0x260, &rootComponent) ||
+            if (!CSCaptureReadValue(session, generation, actor + 0x260, &rootComponent,
+                                    &actorReadCache) ||
                 !CSUserPointerValid(rootComponent)) continue;
             ++coreRootValid;
-            if (!CSReadValue(session, generation, actor + 0x658, &meshComponent) ||
+            if (!CSCaptureReadValue(session, generation, actor + 0x658, &meshComponent,
+                                    &actorReadCache) ||
                 !CSUserPointerValid(meshComponent)) continue;
             ++coreMeshValid;
-            if (!CSReadValue(session, generation, actor + 0xb94, &ai)) continue;
+            if (!CSCaptureReadValue(session, generation, actor + 0xb94, &ai,
+                                    &actorReadCache)) continue;
             ++coreAIRead;
             ++coreAccepted;
 
@@ -1705,7 +1728,8 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
             // diagnostic-only and cannot remove a Core-qualified candidate.
             if (wantedObserved) {
                 uint64_t actorClass = 0;
-                if (CSReadValue(session, generation, actor + 0x10, &actorClass) &&
+                if (CSCaptureReadValue(session, generation, actor + 0x10, &actorClass,
+                                       &actorReadCache) &&
                     CSUserPointerValid(actorClass)) {
                     ++classObserved;
                     bool character = false;
@@ -1722,13 +1746,15 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
 
             uint32_t warningYawRaw = 0;
             if (includeWarningYaw &&
-                !CSReadValue(session, generation, actor + 0x2758, &warningYawRaw)) continue;
+                !CSCaptureReadValue(session, generation, actor + 0x2758, &warningYawRaw,
+                                    &actorReadCache)) continue;
             const uint8_t countStatus = status;
             const bool countEligible = includeCounts && CoreSet::playerCountEligible(health, maximum, countStatus);
             if (health == 0 && !countEligible) continue;
             CSVector position = {0};
             bool present = false;
-            if (!CSPosition(session, generation, base, actor, &position, &present)) continue;
+            if (!CSPosition(session, generation, base, actor, &position, &present,
+                            &actorReadCache, rootComponent)) continue;
             if (!present) continue;
             double dx = (double)position.x - localPosition.x;
             double dy = (double)position.y - localPosition.y;
@@ -1743,7 +1769,8 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
             if (includeWarningYaw && !CoreSet::warningYawRawValid(warningYawRaw)) {
                 // Actor.ReplicatedMovement.Rotation.Yaw, target descriptor chain:
                 // 1107bbb70(+168) -> 11083e2d0(+24) -> 1103e7118(+4).
-                if (!CSReadValue(session, generation, actor + 0x190, &warningFallbackRaw)) continue;
+                if (!CSCaptureReadValue(session, generation, actor + 0x190,
+                                        &warningFallbackRaw, &actorReadCache)) continue;
                 warningFallbackObserved = true;
             }
             if (countEligible) {
@@ -1833,7 +1860,8 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
                 CSBoneState bones;
                 bool present = false;
                 ++boneRequested;
-                if (!CSReadBoneState(session, generation, base, actor, &bones, &present)) {
+                if (!CSReadBoneState(session, generation, base, actor, &bones, &present,
+                                     meshComponent)) {
                     present = false;
                 }
                 if (present) {

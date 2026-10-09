@@ -90,6 +90,9 @@ class ActionCycleContractTests(unittest.TestCase):
                        "generationAdvanced:advanced && readAdvanced",
                        "noInFlight:drained && backendClean"):
             self.assertIn(marker, source)
+        self.assertIn("pending_ = false", gate := (ROOT / "lara/overlay/CoreSetTargetWriteContract.h").read_text(encoding="utf-8"))
+        self.assertIn("Target-effect uncertainty is retained", gate)
+        self.assertNotIn("_pendingCleanup = _pendingCleanup ||", source)
         self.assertIn("readCleanup = _ownsReadSession ? [_readSession disconnect] : nil", source)
         for marker in ("receipt.attemptEpoch != attemptEpoch_", "receipt.producerStopped",
                        "receipt.writerDrained", "receipt.identityStable",
@@ -98,12 +101,29 @@ class ActionCycleContractTests(unittest.TestCase):
                        "bool abandonWithoutRestoration()", "bool targetEffectsAbandoned() const"):
             self.assertIn(marker, ledger)
 
-    def test_aim_token_handoff_is_serialized_with_recoil_timer(self):
+    def test_mapped_alias_cleanup_can_retire_a_failed_worker(self):
+        source = (ROOT / "lara/overlay/CoreSetMappedPageWriteBackend.mm").read_text(encoding="utf-8")
+        disconnect = source.split("- (BOOL)disconnect", 1)[1]
+        self.assertIn("_pendingCleanup = !released", disconnect)
+        self.assertIn("if (released) _mappingCount = 0", disconnect)
+        self.assertIn("return released", disconnect)
+
+    def test_aim_and_recoil_share_one_serial_timer_and_coalesce_ui_status(self):
         aim = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
         apply = aim.split("func apply(_ request: CoreSetApplyRequest<State>,", 1)[1].split(
             "private func recoilConfiguration", 1)[0]
         self.assertLess(apply.index("worker.async"), apply.index("self.invalidateHost()"))
         self.assertLess(apply.index("self.invalidateHost()"), apply.index("self.liveToken = request.token"))
+        self.assertNotIn("recoilTimer", aim)
+        self.assertIn("replaceActionTimerWithRecoil", aim)
+        self.assertEqual(aim.count("private var timer: DispatchSourceTimer?"), 1)
+        publish = aim.split("private func publish(_ text: String)", 1)[1].split(
+            "private func fail(", 1)[0]
+        self.assertIn("pendingStatusText = text", publish)
+        self.assertIn("guard !statusPublishScheduled else { return }", publish)
+        self.assertIn("0.25", publish)
+        self.assertIn("let requestID = self.liveToken?.requestID", publish)
+        self.assertIn("self.actionWorkerLive(requestID, host: hostGeneration", publish)
 
     def test_31_point_fixture_never_promotes_component_parity_to_original_effect(self):
         evidence = json.loads((ROOT / "tests/fixtures/core_set_v17_action_cycle_evidence.json").read_text(encoding="utf-8"))

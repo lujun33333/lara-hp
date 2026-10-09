@@ -315,6 +315,14 @@ def replay(path):
     assert "ec3f0/ec478/ec4ec" in owner["runtime_reads"]["B"]
     assert "do not continuously carry one identity" in owner["runtime_reads"]["A"]
     assert "identity continuity into builder x21 is not proved" in owner["runtime_reads"]["B"]
+    pair = owner["builder_pair_continuity"]
+    assert "e4f84..e4fa0" in pair["A_call"] and "sp+0xa8" in pair["A_call"]
+    assert "ec6a4..ec6cc" in pair["B_call"] and "sp+0x48" in pair["B_call"]
+    assert "one 16-byte pair" in pair["pair_iteration"] and "ldp x0,x24" in pair["pair_iteration"]
+    assert "source0 0x100 bytes" in pair["same_local_row"]
+    assert "source1 0xd0 bytes" in pair["same_local_row"]
+    assert "pair-to-local-row continuity" in pair["limit"]
+    assert "does not identify" in pair["limit"]
     read_exact = "0x100064d04"
     for name in ("cover_collector_a", "cover_collector_b"):
         assert [edge["callee"] for edge in evidence["functions"][name]["calls"]].count(read_exact) == 3
@@ -366,6 +374,12 @@ def replay(path):
         "a_row_d0": "bl #0x1000e5638", "a_row_100": "bl #0x1000e5638",
         "b_read_1": "bl #0x100064d04", "b_read_2": "bl #0x100064d04",
         "b_read_3": "bl #0x100064d04", "b_table_copy": "bl #0x1000e5638",
+        "a_builder_call": "bl #0x1000e60bc", "a_builder_pair": "ldp x0, x24, [x8]",
+        "a_builder_source0_copy": "bl #0x1000e5638", "a_builder_source1_copy": "bl #0x1000e5638",
+        "a_builder_row_select": "madd x21, x25, x9, x8",
+        "b_builder_call": "bl #0x1000ed220", "b_builder_pair": "ldp x0, x24, [x8]",
+        "b_builder_source0_copy": "bl #0x1000e5638", "b_builder_source1_copy": "bl #0x1000e5638",
+        "b_builder_row_select": "madd x21, x25, x9, x8",
     }.items():
         assert bootstrap["proof_sites"][label]["instructions"][0]["instruction"] == instruction
     assert bootstrap["proof_sites"]["adapter_ac_stride"]["instructions"][0]["instruction"] == "add x20, x20, #0xa0"

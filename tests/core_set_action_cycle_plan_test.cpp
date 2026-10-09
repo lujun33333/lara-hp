@@ -102,7 +102,9 @@ static void negativeAndTransactionCases() {
     };
     const auto partial = badReadback.transact(lease, draft.expectedOld, draft.newValue, identity, read, partialWrite);
     assert(partial.status == ControlRotationWriteStatus::partialWrite && partial.pending);
-    assert(!badReadback.stopAfterDrain());
+    // The serial transaction is drained; effect uncertainty remains in the
+    // separate ledger and must not keep mapped resources alive forever.
+    assert(badReadback.stopAfterDrain() && !badReadback.pending());
     assert(!effects.targetEffectsResolved());
     ControlRotationWriteGate zeroReturn;
     ActionEffectLedger zeroEffects;

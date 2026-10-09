@@ -131,7 +131,6 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private final class ColorButton: UIButton { var colorTarget: ColorTarget? }
     private final class MaterialGroupButton: UIButton { var observedSelection = CoreSetGroupSelection.unknown }
     private final class UnavailableInfoButton: UIButton { weak var explainedView: UIView? }
-    private var editingColorTarget: ColorTarget?
     private let floatingThemeKey = "DSESPThemeColorV1"
     private let floatingThemeValues = [6, 4, 1, 0, 2, 3, 5]
     private var floatingThemeValue: Int {
@@ -1563,18 +1562,14 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         }
         let stop: (CoreSetRequestToken, @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) -> Void = { [weak self] token, complete in
             guard let self else { complete(token, .failed(reason: "Local menu released")); return }
-            self.editingColorTarget = nil
             self.dismissHostedColorEditor()
             let observedStop = {
-                let cleared = self.editingColorTarget == nil && self.hostedColorOverlay == nil &&
-                    !(self.presentedViewController is UIColorPickerViewController)
+                let cleared = self.hostedColorOverlay == nil
                 NSLog("Core-SET: local-menu stage=stop token=%@/%@/%@ confirmed=%d persisted-config-retained=1 scope=local-editor-lifecycle",
                       token.generation.uuidString, token.consumerID.uuidString, token.requestID.uuidString, cleared ? 1 : 0)
                 complete(token, cleared ? .restored : .failed(reason: "Local editor dismissal did not match"))
             }
-            if self.presentedViewController is UIColorPickerViewController {
-                self.dismiss(animated: false, completion: observedStop)
-            } else { observedStop() }
+            observedStop()
         }
         appearanceConsumer = CoreSetMenuConsumer(capability: .localRendering, readiness: readiness, apply: { [weak self] request, complete in
             // Hosted dispatch owns the old controls until its End callback returns.
@@ -2912,20 +2907,10 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
 
     @objc private func editLocalColor(_ sender: UIButton) {
         refreshBeforeInteraction(sender)
-        guard presentedViewController == nil else { return }
-        guard let target = (sender as? ColorButton)?.colorTarget, colorTargetReady(target) else { return }
-        editingColorTarget = target
-        if #available(iOS 14.0, *) {
-            let picker = UIColorPickerViewController()
-            let current = colorValue(target).map(uiColor)
-            // UIKit requires a seed. Unknown reference colors remain nil until
-            // the user changes the picker; opening/dismissing it saves nothing.
-            picker.selectedColor = current ?? defaultAccent
-            picker.title = current == nil ? "本地编辑初值（原版颜色未验证）" : "本地颜色预览"
-            picker.supportsAlpha = target != .theme
-            picker.delegate = self
-            present(picker, animated: true)
-        }
+        // Core opens its color editor inside the same ImGui menu/context. Use
+        // the same in-menu editor for local and hosted input so no UIKit modal
+        // window steals ownership from the mirrored menu surface.
+        _ = showHostedColorEditor(sender)
     }
 
     private func colorEditRow(_ title: String, target: ColorTarget, in card: UIView,
@@ -4151,17 +4136,5 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             note.accessibilityHint = "原版说明文案；压枪由共享动作 worker 应用并等待写后回读"
             recoil.addSubview(note)
         }
-    }
-}
-
-@available(iOS 14.0, *)
-extension CoreSetMenuViewController: UIColorPickerViewControllerDelegate {
-    func colorPickerViewControllerDidSelectColor(_ viewController: UIColorPickerViewController) {
-        guard let target = editingColorTarget else { return }
-        applyEditedColor(viewController.selectedColor, target: target)
-    }
-
-    func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {
-        editingColorTarget = nil
     }
 }

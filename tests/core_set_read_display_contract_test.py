@@ -53,7 +53,7 @@ def require_receipt_gates(source: str, immediate_configuration: bool = False) ->
 
 def require_yaw_reread(source: str) -> None:
     for stable in ("includeWarningYaw && !CoreSet::warningYawRawValid(warningYawRaw)",
-                   "actor + 0x190, &warningFallbackRaw)) continue",
+                   "actor + 0x190,", "&warningFallbackRaw, &actorReadCache",
                    "actor.warningFallbackObserved", "actor.address + 0x190,",
                    "CSReadCorePlayerState(session, generation, actor.address",
                    "actor.address + 0x2758, &warningYawRaw"):
@@ -223,11 +223,29 @@ class ReadDisplayContracts(unittest.TestCase):
                       "std::memcpy(output, found->bytes.data() + offset, length)"):
             self.assertIn(token, self.collector if token == "CSCaptureReadPageSize = 0x4000" else cached)
         self.assertNotIn("static CSCaptureReadCache", self.collector)
+        scan = self.collector[self.collector.index("for (int32_t start = 0; start < array.count;"):
+                              self.collector.index('CSLastCaptureDiagnostic = "stability-roots"')]
+        self.assertIn("CSCaptureReadCache actorReadCache", scan)
+        self.assertIn("actorReadCache.reserve(6)", scan)
+        self.assertLess(scan.index("CSCaptureReadCache actorReadCache"),
+                        scan.index("actor + 0x10bc"))
+        for field in ("actor + 0x10bc", "actor + 0xb78", "actor + 0x1700",
+                      "actor + 0x3be0", "actor + 0x1060", "actor + 0x1068",
+                      "actor + 0x260", "actor + 0x658", "actor + 0xb94"):
+            line = next(value for value in scan.splitlines() if field in value)
+            self.assertIn("CSCaptureReadValue", line)
+        self.assertIn("&actorReadCache, rootComponent", scan)
+        final = self.collector[self.collector.index('CSLastCaptureDiagnostic = "stability-player-actors"'):]
+        self.assertIn("CSCaptureReadCache readCache", final)
+        self.assertNotIn("actorReadCache", final)
         reread = body(self.collector, "static bool CSReadCorePlayerState(")
         self.assertGreaterEqual(reread.count("CSCaptureReadValue("), 10)
         bones = body(self.collector, "static bool CSReadBoneState(")
         self.assertIn("std::vector<uint8_t> transforms((size_t)array.count * 0x30)", bones)
         self.assertIn("CSRead(session, generation, array.data, transforms.data(), transforms.size())", bones)
+        scan = self.collector[self.collector.index("for (int32_t start = 0; start < array.count;"):
+                              self.collector.index('CSLastCaptureDiagnostic = "stability-roots"')]
+        self.assertIn("&bones, &present,\n                                     meshComponent", scan)
         sample_loop = bones[bones.index("for (unsigned edge = 0; edge < 28; ++edge)"):]
         self.assertNotIn("array.data + (uint64_t)index * 0x30", sample_loop)
         self.assertIn("finalActorObservations.find(count.address)", self.collector)

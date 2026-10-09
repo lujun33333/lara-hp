@@ -137,12 +137,15 @@ public:
         return result;
     }
 
-    // A caller must have drained its worker before stop. Pending uncertainty
-    // cannot be turned into a restored receipt by merely clearing this object.
+    // A caller must have drained its serial worker before stop. pending_ blocks
+    // further writes during the live session; after this mutex is acquired no
+    // transaction remains in flight. Target-effect uncertainty is retained by
+    // ActionEffectLedger and reported as abandoned, never promoted to restored.
     bool stopAfterDrain() {
         std::lock_guard<std::mutex> guard(mutex_);
         stopped_ = true;
-        return !pending_;
+        pending_ = false;
+        return true;
     }
     bool pending() const { std::lock_guard<std::mutex> guard(mutex_); return pending_; }
 

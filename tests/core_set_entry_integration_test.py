@@ -284,12 +284,11 @@ need(remote_adapter_header,
      "- (nullable instancetype)initWithCoreHosting:(BOOL)coreHosting")
 need(remote_adapter, "CALayerHost", "SBMainWorkspace", "mainWindowScene", "setContextId:",
      "kCoreSetCoreMenuLevel", "kCoreSetCoreIconLevel", "kCoreSetCoreDrawLevel", "RemoteCall",
-     "doRemoteCallCheckedWithTimeout", '@"core-sbs-three-surface-wz-fallback-v4"',
+     "doRemoteCallCheckedWithTimeout", '@"core-three-surface-sbs-or-remote-v5"',
      "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
      "unregisterWindowWithContextID:", "registerThreeSurfacesAsync",
      "kCoreSetCoreDrawLevel = 999998.0", "kCoreSetCoreMenuLevel = 999999.0",
-     "kCoreSetCoreIconLevel = 1000000.0",
-     "kCoreSetWZRemoteDrawLevel = 10000009.0", "kCoreSetWZRemoteMenuLevel = 10000010.0")
+     "kCoreSetCoreIconLevel = 1000000.0", "return YES;")
 core_host = swift(coordinator, "prepareCoreHosting")
 need(core_host, "CoreSetRemoteHostingAdapter(coreHosting: true)", "host.attach(adapter)",
      "verifyHostedWindows")
@@ -299,7 +298,7 @@ need(open_game, "requestMenuVisibility(true)", "CoreSetGameTarget.openApplicatio
 assert "confirmHostedReadbackAsync" in open_game
 assert "CoreSetGameTarget.openApplication" not in swift(launcher, "launchApplication")
 need(swift(launcher, "launchApplication"), "coreSetRuntime.launchGame")
-print("PASS: D1 project/owner/host contracts, Core SBS primary and WZ fallback registration; source only")
+print("PASS: D1 project/owner/host contracts, Core three-surface SBS/RemoteCall registration; source only")
 print("LIMIT: no Swift/ObjC/UIKit compile, cross-app physical touch or device lifecycle execution")
 for name in paths:
     print(name + "=" + hashlib.sha256((ROOT / name).read_bytes()).hexdigest())

@@ -3,7 +3,9 @@
 @class RemoteCall;
 NS_ASSUME_NONNULL_BEGIN
 
-// Core mode owns draw/menu/icon SBS contexts; the WZ fallback owns menu/draw.
+// Both hosting transports own draw/icon/menu source contexts. Core mode uses
+// SBSAccessibilityWindowHostingController; the compatibility transport mirrors
+// the same three contexts into SpringBoard through the existing RemoteCall.
 // No RemoteCall is created or destroyed here. Failed cleanup retains handles
 // and makes the capability unavailable until an explicit retry succeeds.
 @interface CoreSetRemoteHostingAdapter : NSObject <CoreSetHUDHostingAdapter>
