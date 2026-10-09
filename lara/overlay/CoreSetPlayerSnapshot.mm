@@ -7,6 +7,7 @@
 #import "CoreSetGrenadeClock.h"
 #import "CoreSetPlayerCount.h"
 #import "CoreSetBoneHead.h"
+#import "CoreSetBoneArray.h"
 #import "CoreSetGrenadeMotion.h"
 #import <QuartzCore/QuartzCore.h>
 #import <algorithm>
@@ -460,26 +461,20 @@ static const uint8_t *CSBoneProfile(int32_t count) {
 }
 
 struct CSBoneSample { uint8_t index; std::array<uint8_t, 0x2c> bytes; };
-struct CSBoneArrayState { uint64_t data; int32_t count; int32_t capacity; };
+using CSBoneArrayState = CoreSet::BoneArrayState;
 struct CSBoneState {
     uint64_t mesh = 0;
     uint64_t callback = 0;
     uint32_t flags = 0, key = 0;
     uint8_t registered = 0;
     uint16_t arrayOffset = 0;
+    bool arrayCountFromCapacity = false;
     uint8_t status = 0; // 1 missing mesh, 2 unregistered, 3 invalid array, 4 bounds, 5 unknown decoder, 6 plain, 7 XOR.
     CSBoneArrayState array = {0};
     std::array<uint8_t, 0x2c> component = {};
     std::vector<CSBoneSample> samples;
     const uint8_t *edges = nullptr;
 };
-
-static bool CSBoneArrayValid(const CSBoneArrayState &array) {
-    return array.count >= 6 && array.count <= 256 &&
-        array.capacity >= array.count && array.capacity <= 256 &&
-        array.data >= 0x100000000ULL &&
-        array.data <= 0x8000000000ULL - 256 * 0x30;
-}
 
 static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation, uint64_t base,
                             uint64_t actor, CSBoneState *state, bool *present,
@@ -499,16 +494,20 @@ static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation, ui
     if (!CSCaptureRead(session, generation, state->mesh + 0x838, &state->array,
                        sizeof(state->array), &cache)) return false;
     state->arrayOffset = 0x838;
-    if (!CSBoneArrayValid(state->array)) {
-        // Core v1.7 falls through to the adjacent transform array when its
-        // primary ComponentSpaceTransforms TArray is empty. Keep both reads
-        // bounded by the same Num/Max/data/stride contract.
+    if (!CoreSet::normalizeBoneArray(&state->array, &state->arrayCountFromCapacity)) {
+        // Core v1.7 e3394 retries the adjacent TArray header after the primary
+        // ComponentSpaceTransforms header fails its data/Num/Max contract.
         CSBoneArrayState fallback = {};
         if (!CSCaptureRead(session, generation, state->mesh + 0x848, &fallback,
                            sizeof(fallback), &cache)) return false;
-        if (!CSBoneArrayValid(fallback)) { state->status = 3; return true; }
+        bool fallbackCountFromCapacity = false;
+        if (!CoreSet::normalizeBoneArray(&fallback, &fallbackCountFromCapacity)) {
+            state->status = 3;
+            return true;
+        }
         state->array = fallback;
         state->arrayOffset = 0x848;
+        state->arrayCountFromCapacity = fallbackCountFromCapacity;
     }
     const auto &array = state->array;
     state->edges = CSBoneProfile(array.count);
@@ -1206,7 +1205,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
     NSUInteger warningPrimaryValid = 0, warningPrimaryInvalid = 0;
     NSUInteger warningFallbackRead = 0, warningFallbackValid = 0, warningUnavailable = 0;
     NSUInteger boneRequested = 0, bonePresent = 0, bonePlain = 0, boneDecoded = 0;
-    NSUInteger boneArrayPrimary = 0, boneArrayFallback = 0;
+    NSUInteger boneArrayPrimary = 0, boneArrayFallback = 0, boneArrayCapacityRecovered = 0;
     NSUInteger boneUnavailable[6] = {};
     NSUInteger boneHeadKnownProfile = 0, boneHeadProjected = 0, boneHeadUnknownProfile = 0;
     NSUInteger nameRequested = 0, namePresent = 0, weaponRequested = 0, weaponKnown = 0;
@@ -1547,6 +1546,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
                 if (present) {
                     ++bonePresent;
                     if (bones.arrayOffset == 0x848) ++boneArrayFallback; else ++boneArrayPrimary;
+                    if (bones.arrayCountFromCapacity) ++boneArrayCapacityRecovered;
                     if (bones.status == 7) ++boneDecoded; else ++bonePlain;
                     mark.boneSegments = CSProjectBones(bones, camera, size);
                     CSPublishAimAnchors(mark, bones);
@@ -2202,7 +2202,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
          "grenadeTimer=target-server-clock-clamped grenadeRadius=unproven grenadeAnimation=local-prediction-partial "
          "warningRequested=%d warningPrimaryValid=%lu warningPrimaryInvalid=%lu warningFallbackRead=%lu warningFallbackValid=%lu "
          "warningUnavailable=%lu warningFallbackOwner=actor-replicated-movement-rotation-yaw "
-         "boneRequested=%lu bonePresent=%lu bonePlain=%lu boneDecoded=%lu boneArrayPrimary=%lu boneArrayFallback=%lu boneMissing=%lu boneUnregistered=%lu boneArrayInvalid=%lu boneBounds=%lu boneDecoderUnknown=%lu "
+         "boneRequested=%lu bonePresent=%lu bonePlain=%lu boneDecoded=%lu boneArrayPrimary=%lu boneArrayFallback=%lu boneArrayCapacityRecovered=%lu boneMissing=%lu boneUnregistered=%lu boneArrayInvalid=%lu boneBounds=%lu boneDecoderUnknown=%lu "
          "boneHeadKnownProfile=%lu boneHeadProjected=%lu boneHeadUnknownProfile=%lu headScope=requested-bones-only headParity=partial "
          "networkFreshness=unproven captureStability=stable-identity-plus-bounded-dynamic-reread grenadeAnimationScope=local-position-history grenadeRadiusGap=no-verified-elite-blast-field "
          "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationLayout=local-subset informationGap=native-font-icons-and-anchors "
@@ -2233,6 +2233,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
         (unsigned long)warningFallbackRead, (unsigned long)warningFallbackValid, (unsigned long)warningUnavailable,
         (unsigned long)boneRequested, (unsigned long)bonePresent, (unsigned long)bonePlain, (unsigned long)boneDecoded,
         (unsigned long)boneArrayPrimary, (unsigned long)boneArrayFallback,
+        (unsigned long)boneArrayCapacityRecovered,
         (unsigned long)boneUnavailable[1], (unsigned long)boneUnavailable[2], (unsigned long)boneUnavailable[3],
         (unsigned long)boneUnavailable[4], (unsigned long)boneUnavailable[5],
         (unsigned long)boneHeadKnownProfile, (unsigned long)boneHeadProjected, (unsigned long)boneHeadUnknownProfile,

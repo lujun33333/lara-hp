@@ -89,6 +89,10 @@ jobs:
             tests/core_set_single_attempt_test.cpp \
             -o build/test-bin/core-set-single-attempt-test
           build/test-bin/core-set-single-attempt-test
+          clang++ -std=c++17 -Wall -Wextra -Werror -I lara/overlay \
+            tests/core_set_bone_array_test.cpp \
+            -o build/test-bin/core-set-bone-array-test
+          build/test-bin/core-set-bone-array-test
 
       - name: build
         env:

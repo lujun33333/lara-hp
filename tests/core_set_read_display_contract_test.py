@@ -278,9 +278,10 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertIn("point->y <= size.height", head)
         bones = body(self.collector, "static bool CSReadBoneState(")
         for gate in ("state->registered & 4", "state->flags", "state->callback != base + CSPositionCallbackRVA",
-                     "CoreSet::decodePositionBlock", "CSBoneArrayValid(state->array)",
+                     "CoreSet::decodePositionBlock", "CoreSet::normalizeBoneArray(&state->array",
                      "state->mesh + 0x848", "state->edges[edge] >= array.count"):
             self.assertIn(gate, bones)
+        self.assertIn("boneArrayCapacityRecovered=%lu", self.collector)
         for stable in ("CSReadBoneState(session, generation, base, bone.actor,",
                        "finalBoneObservations.push_back",
                        "CSProjectBoneWorldSegments(mark.boneWorldSegments, cameraAfter, size)",
