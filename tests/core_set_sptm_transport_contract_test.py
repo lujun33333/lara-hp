@@ -61,6 +61,22 @@ class SPTMTransportContract(unittest.TestCase):
         self.assertIn('firmware_identity_value("hw.machine")', offsets)
         self.assertIn("firmware_cache_identity_matches(defaults)", offsets)
 
+    def test_23a341_uses_hash_pinned_apple_restore_url_without_appledb(self) -> None:
+        partial = read("lara/kexploit/Partial.m")
+        workflow = read(".github/workflows/build.yml")
+        pieces = (
+            "https://updates.cdn-apple.com/2025FallFCS/fullrestores/093-41023/",
+            "5740BA6D-F4D8-4825-B5BE-CB70E3CF8B79/",
+            "iPhone17,2_26.0_23A341_Restore.ipsw",
+        )
+        for piece in pieces:
+            self.assertIn(piece, partial)
+            self.assertIn(piece, workflow)
+        self.assertIn('[build isEqualToString:@"23A341"]', partial)
+        self.assertIn('[machine isEqualToString:@"iPhone17,2"]', partial)
+        self.assertLess(partial.index("kIPhone172Build23A341IPSW.UTF8String"),
+                        partial.index("NSString *endpoint ="))
+
     def test_xpf_cleanup_releases_optional_images_and_sections(self) -> None:
         xpf = read("vendor/XPF/src/xpf.c")
         for marker in (
