@@ -16,7 +16,7 @@ def has_target_receipt_gate(source: str) -> bool:
     if marker not in source:
         return False
     guarded = source.split(marker, 1)[1].split("pendingApply = nil", 1)[0]
-    return "armRefresh()" in guarded and ".applied" not in guarded
+    return "armRefresh(targetPresent: false)" in guarded and ".applied" not in guarded
 
 
 class CoreSetAimPreviewContractTest(unittest.TestCase):
@@ -87,7 +87,8 @@ class CoreSetAimPreviewContractTest(unittest.TestCase):
         self.assertIn("preview.capture(canvas:", self.display)
         self.assertNotRegex(self.preview, r"\b(ds_kwrite|vm_write|mach_vm_write|RemoteCall)\b")
         self.assertIn("CoreSetIsolatedWriteProbe", self.action)
-        self.assertIn("includeBattleInputs: true", self.action)
+        self.assertIn("includeBattleInputs: false", self.action)
+        self.assertIn("refreshAction(for: roster", self.action)
         self.assertIn("result.committed", self.action)
 
     def test_display_link_and_record_expiry_preserve_exact_receipt_gating(self) -> None:
@@ -107,6 +108,12 @@ class CoreSetAimPreviewContractTest(unittest.TestCase):
         self.assertIn("source.hostGeneration == generation", consumed)
         self.assertIn("receipt.aimSourceIdentity == source", consumed)
         self.assertIn("aimSourceIdentity: frame?.sourceIdentity", self.display)
+
+    def test_missing_target_uses_bounded_cadence_and_throttled_diagnostics(self) -> None:
+        self.assertIn("targetPresent && settings.dynamicCircle == true ? 30 : 8", self.display)
+        self.assertIn("link.preferredFramesPerSecond = framesPerSecond", self.display)
+        self.assertIn("now - lastNoTargetLogAt >= 3", self.display)
+        self.assertIn("suppressedNoTargetReceipts += 1", self.display)
 
     def test_v17_aim_option_text_is_preserved(self) -> None:
         self.assertIn(

@@ -34,7 +34,8 @@ for token in ("CSReferenceFlag14", "status == 1 ? 1", "(stateFlags >> 19) & 1",
     assert token in snapshot_mm, token
 
 for token in (
-    "playerBones: true", "botBones: true", "excludeKnocked:",
+    "playerBones: demand.playerBones", "botBones: demand.botBones", "includeBones: true",
+    "excludeKnocked:",
     "publicationID: snapshot.snapshotID", "CoreSetV17AimConfiguration",
     "configuration: configuration", "CoreSetBasicAimDelta.circleRadius", "actionSlot(snapshot:",
     "routeDynamics.slot(firingSample:", "snapshot.localFiringRaw",

@@ -354,6 +354,33 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertLess(self.material_collector.index("for (const ObservedMetro &item"),
                         self.material_collector.index("snapshot.captureCompletedMonotonicSeconds"))
 
+    def test_material_controls_are_not_color_gated_and_incomplete_state_is_explicit(self) -> None:
+        menu = read("lara/views/app/CoreSetMenuViewController.swift")
+        editor = body(menu, "private func editMaterials(")
+        self.assertIn("guard materialEditingReady else { return }", editor)
+        self.assertNotIn("colorTargetStageReady", editor)
+        group_ready = body(menu, "private var materialGroupEditingReady:")
+        self.assertIn("controlAvailability(.materialGroupSelection", group_ready)
+        for unrelated in ("desired.enabled", "distance.minimum", "distance.maximum", ".color"):
+            self.assertNotIn(unrelated, group_ready)
+        notice = body(menu, "private func materialConfigurationNotice(")
+        for message in ("总开关仍关闭", "当前绘制命令为 0", "请先补全"):
+            self.assertIn(message, notice)
+        apply_game = body(menu, "private func applyGame<")
+        self.assertIn("materialConfigurationNotice(self.featureState.materials.desired)", apply_game)
+        self.assertNotIn("as? CoreSetMaterialSettings", apply_game)
+        validation = body(self.material, "private func configurationIssue(")
+        for gate in ("category.distance.minimum", "category.distance.maximum",
+                     "category.color == nil", "category.category.displayName"):
+            self.assertIn(gate, validation)
+        apply = body(self.material, "func apply(")
+        self.assertIn("configurationIssue(request.desired)", apply)
+        self.assertNotIn("所选物资的距离区间或颜色未完整选择", apply)
+        total = menu.split('title == "显示物资"', 1)[1].split(
+            '} else if materialGrid && title == "持枪屏蔽物资"', 1)[0]
+        self.assertIn("button.isEnabled = ready", total)
+        self.assertNotIn("&& (featureState.materials.desired.enabled", total)
+
     def test_exact_receipts_and_throttled_no_sensitive_output(self) -> None:
         for source in (self.player, self.material, self.radar):
             require_receipt_gates(source, immediate_configuration=source is self.player)

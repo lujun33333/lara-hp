@@ -1287,10 +1287,15 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                       hostedSource, channel.capability.rawValue,
                       channel.isSupportedDesiredConfirmed ? 1 : 0, result)
                 if channel.isSupportedDesiredConfirmed {
-                    self.showConfigurationFeedback(channel.capability == .localAimDisplay
-                        ? "替代预览回执已确认；不算v1.7原效果闭合"
-                        : (channel.capability == .frameScheduling ? "Metal调度器参数回读已确认；不是实测呈现FPS"
-                            : "消费者声明字段回执已确认；v1.7设备效果仍需验证"))
+                    if channel.capability == .materialFiltering,
+                       let notice = self.materialConfigurationNotice(self.featureState.materials.desired) {
+                        self.showConfigurationFeedback(notice)
+                    } else {
+                        self.showConfigurationFeedback(channel.capability == .localAimDisplay
+                            ? "替代预览回执已确认；不算v1.7原效果闭合"
+                            : (channel.capability == .frameScheduling ? "Metal调度器参数回读已确认；不是实测呈现FPS"
+                                : "消费者声明字段回执已确认；v1.7设备效果仍需验证"))
+                    }
                 }
                 else if case .unavailable(let reason) = channel.availability {
                     self.showConfigurationFeedback("配置已记录；尚未生效：\(reason)")
@@ -2318,18 +2323,17 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 } else if materialGrid && title == "显示物资" {
                     let ready = canStage(featureState.materials) &&
                         controlAvailability(.materialEnabled, in: featureState.materials) == .ready
-                    let configured = featureState.materials.desired.categories.allSatisfy { category in
-                        !category.groups.contains(where: { $0.members.contains(true) }) ||
-                        (category.distance.minimum != nil && category.distance.maximum != nil && category.color != nil)
-                    }
                     let button = UIButton(type: .custom)
                     button.frame = row.bounds
-                    button.isEnabled = ready && (featureState.materials.desired.enabled == true || configured)
+                    // Core's C+0x2a total checkbox is independent from every
+                    // category range/color record. Keep it clickable and let
+                    // the consumer return the exact missing configuration.
+                    button.isEnabled = ready
                     button.isSelected = featureState.materials.desired.enabled == true
                     button.accessibilityLabel = title
                     button.accessibilityValue = featureState.materials.desired.enabled.map { $0 ? "开启" : "关闭" } ?? "未选择"
-                    button.accessibilityHint = button.isEnabled ? "请求独立物资 lane；生效需精确回执" :
-                        "先为所选分类设置最小/最大距离及颜色，或目标只读会话未就绪"
+                    button.accessibilityHint = button.isEnabled ? "请求独立物资 lane；缺少距离或颜色时会明确提示" :
+                        "目标只读会话未就绪"
                     button.addTarget(self, action: #selector(toggleMaterialEnabled(_:)), for: .touchUpInside)
                     registerHosted(button, .materialEnabled, field: .materialEnabled, capability: .materialFiltering)
                     box.backgroundColor = button.isSelected ? accent : .clear
@@ -3048,13 +3052,37 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private var materialGroupEditingReady: Bool {
         guard materialEditingReady else { return false }
         if gameConsumers[\CoreSetFeatureState.materials] == nil { return true }
-        guard controlAvailability(.materialGroupSelection, in: featureState.materials) == .ready else { return false }
-        if featureState.materials.desired.enabled != true { return true }
-        let category = featureState.materials.desired.categories[previewMaterialCategory]
-        return category.distance.minimum != nil && category.distance.maximum != nil && category.color != nil
+        // Core's group buttons write their own bool-pointer set independently
+        // of the total-visibility byte, range and packed colour.  Keeping group
+        // editing available also lets the user clear an incomplete selection.
+        return controlAvailability(.materialGroupSelection, in: featureState.materials) == .ready
+    }
+    private func materialConfigurationNotice(_ state: CoreSetMaterialSettings) -> String? {
+        let selected = state.categories.filter { category in
+            category.groups.contains { $0.members.contains(true) }
+        }
+        guard !selected.isEmpty else {
+            return state.enabled == true ? "显示物资已开启，但尚未选择任何物资；当前绘制命令为 0" : nil
+        }
+        if state.enabled != true {
+            return "物资筛选已保存，但“显示物资”总开关仍关闭；当前绘制命令为 0"
+        }
+        let incomplete = selected.compactMap { category -> String? in
+            var missing: [String] = []
+            if category.distance.minimum == nil || category.distance.maximum == nil { missing.append("距离") }
+            if category.color == nil { missing.append("颜色") }
+            guard !missing.isEmpty else { return nil }
+            return "\(category.category.displayName)(\(missing.joined(separator: "/")))"
+        }
+        guard !incomplete.isEmpty else { return nil }
+        return "显示物资尚未生效；请先补全：\(incomplete.joined(separator: "、"))"
     }
     private func editMaterials(_ edit: (inout CoreSetMaterialSettings) -> Void) {
-        guard colorTargetStageReady(.material(previewMaterialCategory)) else { return }
+        // Each material control already checks its own field contract before
+        // reaching this shared editor.  Requiring materialColor here coupled
+        // the total switch, distance and group controls to an unrelated field
+        // and made otherwise configurable controls appear unresponsive.
+        guard materialEditingReady else { return }
         if gameConsumers[\CoreSetFeatureState.materials] != nil { editGame(\.materials, edit) }
         else { featureState.materials.updateDesired(edit); applyLocalDirectory() }
     }

@@ -16,13 +16,15 @@ coordinator = read("lara/views/app/CoreSetRuntimeCoordinator.swift")
 manifest = read("scripts/build_ipa_pe.sh")
 
 for token in (
-    "CoreSetIsolatedWriteProbe", "includeBattleInputs: true",
+    "CoreSetIsolatedWriteProbe", "includeBattleInputs: false", "refreshAction(for: roster",
     "triggerState.update(", "dynamics.permitsTakeover(",
     "CoreSetBasicAimDelta.select(", "dynamics.plan(",
     "persistentActionWorker(snapshot:", "guard result.committed, isLive(",
     "submitMergedAction(snapshot:", "applyRecoil(", "tickRecoilOnly(",
 ):
     assert token in aim, token
+
+assert "snapshot.battleInputsPresent = YES" in snapshot_mm
 
 for token in (
     "CoreSetWorldPoint", "actorWorldPosition", "cameraWorldPosition",

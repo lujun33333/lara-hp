@@ -217,7 +217,7 @@ launch = swift(coordinator, "launchGame")
 aim_consumer = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
 feature_state = (ROOT / "lara/views/app/CoreSetFeatureState.swift").read_text(encoding="utf-8")
 need(coordinator, "aimConsumer = CoreSetAimConsumer(coordinator: self)")
-need(aim_consumer, "CoreSetIsolatedWriteProbe", "includeBattleInputs: true",
+need(aim_consumer, "CoreSetIsolatedWriteProbe", "includeBattleInputs: false", "refreshAction(for: roster",
      "result.committed", "cleanup.complete")
 need(feature_state, "case basicAimScene")
 need(launch, "axDeviceSupportStatus()", "init_offsets()", "offsets_init()", "manager.run", "prepareKernelOffsets")

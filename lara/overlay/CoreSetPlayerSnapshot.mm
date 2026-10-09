@@ -996,6 +996,31 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
     return mark;
 }
 
+static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation,
+                                uint64_t base, uint64_t actor, uint64_t mesh,
+                                CSCamera camera, CGSize size, CoreSetPlayerMark *mark) {
+    CSBoneState bone = {};
+    bool present = false;
+    if (!CSReadBoneState(session, generation, base, actor, &bone, &present, mesh) || !present)
+        return false;
+    mark.boneWorldSegments = CSBoneWorldSegments(bone);
+    mark.boneSegments = CSProjectBoneWorldSegments(mark.boneWorldSegments, camera, size);
+    CSPublishAimAnchors(mark, bone, camera, size);
+    uint8_t headIndex = 0;
+    CGPoint head = CGPointZero;
+    if (CoreSet::referenceBoneHeadIndex(bone.array.count, &headIndex) &&
+        CSProjectBoneHead(bone, camera, size, &head, &headIndex)) {
+        mark.head = head;
+        mark.headBoneIndex = @(headIndex);
+        mark.headWorldPosition = CSBoneWorldPoint(bone, headIndex);
+    } else {
+        mark.headBoneIndex = nil;
+        mark.headWorldPosition = nil;
+    }
+    return mark.referenceAnchor1e0WorldPosition != nil &&
+        mark.referenceAnchor1ecWorldPosition != nil;
+}
+
 @implementation CoreSetPlayerCollector
 + (NSString *)lastCaptureDiagnostic {
     return [NSString stringWithUTF8String:CSLastCaptureDiagnostic.c_str()];
@@ -2148,23 +2173,22 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
     }
     const double captureCompletedAt = CACurrentMediaTime();
     const double finalReprojectionAge = captureCompletedAt - finalReprojectionStartedAt;
-    if (!std::isfinite(finalReprojectionAge) || finalReprojectionAge < 0 ||
-        finalReprojectionAge > 0.45) {
-        CSLastCaptureDiagnostic = "final-reprojection-stale age=" +
-            std::to_string(finalReprojectionAge) + " limit=0.45 actors=" +
-            std::to_string(observedActors.size()) + " counts=" +
-            std::to_string(observedCounts.size()) + " grenades=" +
-            std::to_string(observedGrenades.size()) + " bones=" +
-            std::to_string(observedBones.size()) + " coreAccepted=" +
-            std::to_string(coreAccepted) + " marks=" + std::to_string(marks.count) +
-            " phasePlayers=" + std::to_string(finalPlayersCompletedAt - finalValidationStartedAt) +
-            " phaseCounts=" + std::to_string(finalCountsCompletedAt - finalPlayersCompletedAt) +
-            " phaseGrenades=" + std::to_string(finalGrenadesCompletedAt - finalCountsCompletedAt) +
-            " phaseBones=" + std::to_string(finalBonesCompletedAt - finalGrenadesCompletedAt);
-        return nil;
-    }
+    // This is roster production, not presentation. On mapped reads a complete
+    // identity-stable roster can legitimately take longer than one display
+    // frame. Rejecting it here left the presentation reprojector with no world
+    // geometry at all. The Swift consumer never presents these producer-time
+    // screen points directly; it first reprojects the retained world geometry
+    // with a current camera sample.
+    if (!std::isfinite(finalReprojectionAge) || finalReprojectionAge < 0) return nil;
     CSLastCaptureDiagnostic = "identity-final";
-    if (!session.ready || session.generation != generation) return nil;
+    uint64_t finalWorld = 0, finalLevel = 0, finalController = 0;
+    uint64_t finalLocal = 0, finalManager = 0;
+    if (!session.ready || session.generation != generation ||
+        !CSReadValue(session, generation, base + CSWorldSlot, &finalWorld) || finalWorld != world ||
+        !CSReadValue(session, generation, world + 0xb8, &finalLevel) || finalLevel != level ||
+        !CSReadValue(session, generation, connection + 0x30, &finalController) || finalController != controller ||
+        !CSReadValue(session, generation, controller + 0x3540, &finalLocal) || finalLocal != local ||
+        !CSReadValue(session, generation, controller + 0x680, &finalManager) || finalManager != manager) return nil;
     CoreSetPlayerSnapshot *snapshot = [CoreSetPlayerSnapshot new];
     snapshot.sessionGeneration = generation; snapshot.processID = pid;
     snapshot.imageBase = base; snapshot.snapshotID = [NSUUID UUID];
@@ -2233,7 +2257,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
          "boneHeadKnownProfile=%lu boneHeadProjected=%lu boneHeadUnknownProfile=%lu headScope=requested-bones-only headParity=partial "
          "networkFreshness=unproven captureStability=stable-identity-plus-bounded-dynamic-reread grenadeAnimationScope=local-position-history grenadeRadiusGap=no-verified-elite-blast-field "
          "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationRecord=core17-first-projection scaleProducer=core17-frame-literal-1 botOrdinal=frame-local "
-         "captureDuration=%.3f finalReprojectionAge=%.3f freshnessBasis=final-reprojected",
+         "captureDuration=%.3f finalReprojectionAge=%.3f phasePlayers=%.3f phaseCounts=%.3f phaseGrenades=%.3f phaseBones=%.3f freshnessBasis=final-reprojected",
         actorArraySource == CSActorArraySource::primary ? "core17-primary" : "core17-level-a0-a8-fallback",
         array.count, (unsigned long)nonzeroActors, (unsigned long)coreAddressValid,
         (unsigned long)coreSpeedRead, (unsigned long)coreSpeedFinite, (unsigned long)coreSpeedMatched,
@@ -2266,7 +2290,11 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
         (unsigned long)boneHeadKnownProfile, (unsigned long)boneHeadProjected, (unsigned long)boneHeadUnknownProfile,
         (unsigned long)nameRequested, (unsigned long)namePresent,
         (unsigned long)weaponRequested, (unsigned long)weaponKnown,
-        snapshot.captureCompletedMonotonicSeconds - captureStartedAt, finalReprojectionAge];
+         snapshot.captureCompletedMonotonicSeconds - captureStartedAt, finalReprojectionAge,
+         finalPlayersCompletedAt - finalValidationStartedAt,
+         finalCountsCompletedAt - finalPlayersCompletedAt,
+         finalGrenadesCompletedAt - finalCountsCompletedAt,
+         finalBonesCompletedAt - finalGrenadesCompletedAt];
     CSLastCaptureDiagnostic = "ready";
     return snapshot;
 }
@@ -2513,6 +2541,193 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
         source.snapshotID.UUIDString, (unsigned long)marks.count,
         (unsigned long)players, (unsigned long)bots, completedAt - startedAt,
         (unsigned long long)cameraOffset];
+    return snapshot;
+}
+
++ (CoreSetPlayerSnapshot *)refreshActionForSnapshot:(CoreSetPlayerSnapshot *)source
+                                         targetActor:(uint64_t)targetActor
+                                             session:(CoreSetReadSession *)session
+                                          canvasSize:(CGSize)size
+                                 maximumDrawDistance:(double)maximumDrawDistance {
+    CSLastCaptureDiagnostic = "action-refresh-request";
+    if (!source || !session.ready || session.capabilities != 1 ||
+        session.processID != source.processID || session.imageBase != source.imageBase ||
+        !std::isfinite(size.width) || !std::isfinite(size.height) ||
+        size.width <= 0 || size.height <= 0 ||
+        !std::isfinite(maximumDrawDistance) || maximumDrawDistance < 1 ||
+        maximumDrawDistance > 1000) return nil;
+    const double startedAt = CACurrentMediaTime();
+    const uint64_t generation = session.generation, base = session.imageBase;
+    uint64_t world = 0, level = 0, driver = 0, connection = 0;
+    uint64_t controller = 0, local = 0, manager = 0;
+    CSLastCaptureDiagnostic = "action-refresh-identity-initial";
+    if (!CSReadValue(session, generation, base + CSWorldSlot, &world) ||
+        world != source.rosterWorldAddress ||
+        !CSReadValue(session, generation, world + 0xb8, &level) ||
+        level != source.rosterLevelAddress ||
+        !CSReadValue(session, generation, world + 0xc0, &driver) ||
+        !CSUserPointerValid(driver) ||
+        !CSReadValue(session, generation, driver + 0x88, &connection) ||
+        !CSUserPointerValid(connection) ||
+        !CSReadValue(session, generation, connection + 0x30, &controller) ||
+        controller != source.rosterControllerAddress ||
+        !CSReadValue(session, generation, controller + 0x3540, &local) ||
+        local != source.rosterLocalActorAddress ||
+        !CSReadValue(session, generation, controller + 0x680, &manager) ||
+        manager != source.rosterCameraManagerAddress) return nil;
+
+    uint32_t localTeam = 0;
+    CSVector localPosition = {};
+    bool localPresent = false;
+    if (!CSReadValue(session, generation, local + 0xb78, &localTeam) ||
+        localTeam != source.rosterLocalTeam ||
+        !CSPosition(session, generation, base, local, &localPosition, &localPresent) ||
+        !localPresent) return nil;
+
+    CSCamera camera = {};
+    bool cameraFound = false;
+    uint64_t cameraOffset = 0;
+    for (uint64_t offset : {UINT64_C(0x650), UINT64_C(0x14b0), UINT64_C(0x2320)}) {
+        CSCamera candidate = {};
+        if (CSRead(session, generation, manager + offset, &candidate, sizeof(candidate)) &&
+            CSCameraValid(candidate)) {
+            camera = candidate; cameraFound = true; cameraOffset = offset; break;
+        }
+    }
+    if (!cameraFound) return nil;
+
+    NSMutableArray<CoreSetPlayerMark *> *marks = [NSMutableArray arrayWithCapacity:
+        targetActor ? 1 : source.marks.count];
+    NSUInteger players = 0, bots = 0;
+    bool targetFound = targetActor == 0;
+    CSLastCaptureDiagnostic = targetActor ? "action-refresh-target" : "action-refresh-candidates";
+    for (CoreSetPlayerMark *oldMark in source.marks) {
+        if (targetActor && oldMark.actorAddress != targetActor) continue;
+        CSCorePlayerState state = {};
+        CSVector position = {};
+        if (targetActor) {
+            CSCaptureReadCache cache;
+            cache.reserve(10);
+            if (!CSReadCorePlayerState(session, generation, oldMark.actorAddress, local,
+                                       localTeam, &state, &cache) ||
+                state.rootComponent != oldMark.rosterRootComponent ||
+                state.meshComponent != oldMark.rosterMeshComponent) return nil;
+            bool present = false;
+            if (!CSPosition(session, generation, base, oldMark.actorAddress, &position,
+                            &present, &cache, state.rootComponent) || !present) return nil;
+        } else {
+            if (!oldMark.actorWorldPosition) continue;
+            state.team = oldMark.teamID;
+            state.stateFlags = oldMark.referenceStateWord;
+            state.status = oldMark.healthStatusCode;
+            state.health = oldMark.health;
+            state.maximum = oldMark.maximumHealth;
+            state.rootComponent = oldMark.rosterRootComponent;
+            state.meshComponent = oldMark.rosterMeshComponent;
+            state.ai = oldMark.bot ? 1 : 0;
+            position = {oldMark.actorWorldPosition.x, oldMark.actorWorldPosition.y,
+                        oldMark.actorWorldPosition.z};
+        }
+        CoreSetPlayerMark *mark = CSRefreshPlayerMark(oldMark, state, position,
+            localPosition, camera, size, NO, maximumDrawDistance);
+        if (!mark) {
+            if (targetActor) return nil;
+            continue;
+        }
+        if (targetActor && !CSRefreshActionBone(session, generation, base,
+                oldMark.actorAddress, state.meshComponent, camera, size, mark)) return nil;
+        [marks addObject:mark];
+        targetFound = targetFound || oldMark.actorAddress == targetActor;
+        if (mark.bot) ++bots; else ++players;
+    }
+    if (!targetFound || (targetActor && marks.count != 1)) return nil;
+
+    // Bind action values to the completed geometry sample, rather than copying
+    // the slow-roster inputs. Recoil absence remains a valid input publication.
+    CSLastCaptureDiagnostic = "action-refresh-inputs-final";
+    uint8_t localADS = 0, localFiring = 0;
+    float controlRotation[2] = {}, rotationInput[2] = {};
+    CSRecoilInputState recoilInputs;
+    if (!CSReadValue(session, generation, local + 0x1848, &localADS) ||
+        !CSReadValue(session, generation, local + 0x2750, &localFiring) ||
+        !CSRead(session, generation, controller + 0x620,
+                controlRotation, sizeof(controlRotation)) ||
+        !CSRead(session, generation, controller + 0x828,
+                rotationInput, sizeof(rotationInput)) ||
+        !std::isfinite(controlRotation[0]) || !std::isfinite(controlRotation[1]) ||
+        !std::isfinite(rotationInput[0]) || !std::isfinite(rotationInput[1]) ||
+        std::fabs(controlRotation[0]) > 360 || std::fabs(controlRotation[1]) > 360 ||
+        std::fabs(rotationInput[0]) > 360 || std::fabs(rotationInput[1]) > 360 ||
+        !CSCaptureRecoilInputs(session, generation, controller, local,
+                               localFiring, &recoilInputs)) return nil;
+
+    uint64_t finalWorld = 0, finalLevel = 0, finalController = 0;
+    uint64_t finalLocal = 0, finalManager = 0;
+    CSLastCaptureDiagnostic = "action-refresh-identity-final";
+    if (!session.ready || session.generation != generation ||
+        !CSReadValue(session, generation, base + CSWorldSlot, &finalWorld) || finalWorld != world ||
+        !CSReadValue(session, generation, world + 0xb8, &finalLevel) || finalLevel != level ||
+        !CSReadValue(session, generation, connection + 0x30, &finalController) ||
+        finalController != controller ||
+        !CSReadValue(session, generation, controller + 0x3540, &finalLocal) || finalLocal != local ||
+        !CSReadValue(session, generation, controller + 0x680, &finalManager) ||
+        finalManager != manager) return nil;
+    const double completedAt = CACurrentMediaTime();
+    if (!std::isfinite(completedAt - startedAt) || completedAt < startedAt ||
+        completedAt - startedAt > 0.45) return nil;
+
+    CoreSetPlayerSnapshot *snapshot = [CoreSetPlayerSnapshot new];
+    snapshot.sessionGeneration = generation; snapshot.processID = source.processID;
+    snapshot.imageBase = base; snapshot.snapshotID = [NSUUID UUID];
+    snapshot.rosterWorldAddress = world; snapshot.rosterLevelAddress = level;
+    snapshot.rosterControllerAddress = controller;
+    snapshot.rosterCameraManagerAddress = manager;
+    snapshot.rosterLocalActorAddress = local; snapshot.rosterLocalTeam = localTeam;
+    snapshot.motionCamera = camera;
+    snapshot.cameraYawDegrees = camera.rotation.y;
+    snapshot.cameraPitchDegrees = camera.rotation.x;
+    snapshot.cameraRollDegrees = camera.rotation.z;
+    snapshot.cameraFieldOfViewDegrees = camera.fov;
+    snapshot.cameraWorldPosition = [CoreSetWorldPoint pointWithX:camera.location.x
+        y:camera.location.y z:camera.location.z];
+    snapshot.localWorldPosition = [CoreSetWorldPoint pointWithX:localPosition.x
+        y:localPosition.y z:localPosition.z];
+    snapshot.canvasSize = size;
+    snapshot.battleInputsPresent = YES;
+    snapshot.controllerAddress = controller; snapshot.localActorAddress = local;
+    snapshot.localADS = localADS != 0; snapshot.localFiring = localFiring != 0;
+    snapshot.localFiringRaw = localFiring;
+    snapshot.controlPitchDegrees = controlRotation[0];
+    snapshot.controlYawDegrees = controlRotation[1];
+    snapshot.rotationInputPitch = rotationInput[0];
+    snapshot.rotationInputYaw = rotationInput[1];
+    const uint32_t recoilBinding = (uint32_t)generation;
+    snapshot.recoilInputsPresent = recoilInputs.present && recoilBinding != 0;
+    snapshot.recoilBinding = snapshot.recoilInputsPresent ? recoilBinding : 0;
+    if (snapshot.recoilInputsPresent) {
+        CoreSetRecoilPostSample *sample = [CoreSetRecoilPostSample new];
+        sample.key = recoilInputs.key; sample.ownerToken = recoilInputs.ownerToken;
+        sample.active = recoilInputs.active;
+        sample.value0 = recoilInputs.values[0]; sample.value1 = recoilInputs.values[1];
+        sample.value2 = recoilInputs.values[2]; sample.value3 = recoilInputs.values[3];
+        sample.value4 = recoilInputs.values[4]; sample.value5 = recoilInputs.values[5];
+        snapshot.recoilPostSample = sample;
+        snapshot.recoilFirstWeight = recoilInputs.scales[0];
+        snapshot.recoilFirstBindingScale = recoilInputs.scales[1];
+        snapshot.recoilSecondWeight = recoilInputs.scales[2];
+        snapshot.recoilSecondBindingScale = recoilInputs.scales[3];
+    }
+    snapshot.marks = [marks copy]; snapshot.grenadeMarks = @[];
+    snapshot.observedPlayerCount = players; snapshot.observedBotCount = bots;
+    snapshot.captureStartedMonotonicSeconds = startedAt;
+    snapshot.captureCompletedMonotonicSeconds = completedAt;
+    snapshot.readSemanticDiagnostic = [NSString stringWithFormat:
+        @"action-refresh source=%@ target=0x%llx marks=%lu duration=%.3f actorArrayScan=0 camera=current inputs=current targetGeometry=%@ cameraOffset=0x%llx",
+        source.snapshotID.UUIDString, (unsigned long long)targetActor,
+        (unsigned long)marks.count, completedAt - startedAt,
+        targetActor ? @"state-root-bones-current" : @"cached-world-reprojected",
+        (unsigned long long)cameraOffset];
+    CSLastCaptureDiagnostic = "ready-action-refresh";
     return snapshot;
 }
 @end

@@ -98,7 +98,8 @@ assert '@"observedOffsetsAudited": @NO' in profile_diagnostic
 assert '#import "overlay/CoreSetKernelWriteProfile.h"' in read("lara/lara-Bridging-Header.h")
 aim = read("lara/views/app/CoreSetAimConsumer.swift")
 assert "CoreSetIsolatedWriteProbe" in aim
-assert "includeBattleInputs: true" in aim
+assert "includeBattleInputs: false" in aim and "refreshAction(for: roster" in aim
+assert "snapshot.battleInputsPresent = YES" in read("lara/overlay/CoreSetPlayerSnapshot.mm")
 assert "result.committed" in aim and "cleanup.complete" in aim
 recoil = read("lara/views/app/CoreSetRecoilConsumer.swift")
 assert "writeControllerAction" not in recoil

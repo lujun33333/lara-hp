@@ -9,6 +9,8 @@ final class CoreSetAimDisplayConsumer: NSObject, CoreSetFeatureConsumer {
     private weak var coordinator: CoreSetRuntimeCoordinator?
     private let preview: CoreSetAimPreviewConsumer
     private var refresh: CADisplayLink?
+    private var lastNoTargetLogAt: CFTimeInterval = 0
+    private var suppressedNoTargetReceipts = 0
     private var inFlight = false
     private var activeToken: CoreSetRequestToken?
     private var settings = CoreSetAimDisplaySettings()
@@ -65,9 +67,14 @@ final class CoreSetAimDisplayConsumer: NSObject, CoreSetFeatureConsumer {
         dynamicStartedAt = nil
     }
 
-    private func armRefresh() {
-        guard refresh == nil else { return }
+    private func armRefresh(targetPresent: Bool = false) {
+        let framesPerSecond = targetPresent && settings.dynamicCircle == true ? 30 : 8
+        if let refresh {
+            refresh.preferredFramesPerSecond = framesPerSecond
+            return
+        }
         let link = CADisplayLink(target: self, selector: #selector(refreshFrame))
+        link.preferredFramesPerSecond = framesPerSecond
         link.add(to: .main, forMode: .common)
         refresh = link
     }
@@ -230,13 +237,15 @@ final class CoreSetAimDisplayConsumer: NSObject, CoreSetFeatureConsumer {
         expectedSnapshot = nil; expectedGeneration = nil
         expectedSourceIdentity = nil; expectedCompletedAt = nil
         awaitingTargetEvidence = false
+        lastNoTargetLogAt = 0
+        suppressedNoTargetReceipts = 0
         expectedCommandCount = nil
         expectedTargetPresent = nil
         revision += 1
         settings = request.desired; activeToken = request.token
         pendingApply = (request.token, request.desired, completion)
         capture()
-        if needsTarget(request.desired) { armRefresh() }
+        if needsTarget(request.desired) { armRefresh(targetPresent: false) }
     }
 
     private func capture() {
@@ -444,8 +453,15 @@ final class CoreSetAimDisplayConsumer: NSObject, CoreSetFeatureConsumer {
                 expectedSourceIdentity = nil; expectedCompletedAt = nil
                 expectedCommandCount = nil; expectedTargetPresent = nil
                 awaitingTargetEvidence = true
-                NSLog("Core-SET: target-read lane=aim-preview stage=receipt confirmed=0 reason=no-target-evidence commands=\(count)")
-                armRefresh()
+                let now = CACurrentMediaTime()
+                if lastNoTargetLogAt == 0 || now - lastNoTargetLogAt >= 3 {
+                    NSLog("Core-SET: target-read lane=aim-preview stage=receipt confirmed=0 reason=no-target-evidence commands=\(count) suppressed=\(suppressedNoTargetReceipts) cadence=8")
+                    lastNoTargetLogAt = now
+                    suppressedNoTargetReceipts = 0
+                } else {
+                    suppressedNoTargetReceipts += 1
+                }
+                armRefresh(targetPresent: false)
                 return
             }
             pendingApply = nil; expectedSnapshot = nil; expectedGeneration = nil
@@ -453,7 +469,7 @@ final class CoreSetAimDisplayConsumer: NSObject, CoreSetFeatureConsumer {
             expectedCommandCount = nil; expectedTargetPresent = nil
             awaitingTargetEvidence = false
             pending.2(pending.0, .applied(observed: pending.1))
-            if needsTarget(pending.1) { armRefresh() }
+            if needsTarget(pending.1) { armRefresh(targetPresent: true) }
             return
         }
         if !receipt.acceptedByLocalRenderer, activeToken == receipt.requestToken {
@@ -480,6 +496,8 @@ final class CoreSetAimDisplayConsumer: NSObject, CoreSetFeatureConsumer {
         expectedSourceIdentity = nil; expectedCompletedAt = nil
         expectedCommandCount = nil; expectedTargetPresent = nil
         awaitingTargetEvidence = false
+        lastNoTargetLogAt = 0
+        suppressedNoTargetReceipts = 0
         guard revision < UInt64.max else {
             completion(token, .failed(reason: "本地预览圈序号耗尽")); return
         }

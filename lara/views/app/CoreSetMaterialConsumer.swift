@@ -68,18 +68,31 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
         }
     }
 
-    private func accepts(_ state: State) -> Bool {
-        guard state.categories.count == 13 else { return false }
-        guard state.enabled == true else { return true }
+    private func configurationIssue(_ state: State) -> String? {
+        guard state.categories.count == 13 else { return "物资分类数量与目录不匹配" }
+        guard state.enabled == true else { return nil }
+        var incomplete: [String] = []
         for category in state.categories {
-            guard category.groups.count == CoreSetMaterialCatalog.names[category.category.rawValue].count else { return false }
+            guard category.groups.count == CoreSetMaterialCatalog.names[category.category.rawValue].count else {
+                return "\(category.category.displayName)目录数量不匹配"
+            }
             let selected = category.groups.contains { $0.members.contains(true) }
             if selected {
-                guard let min = category.distance.minimum, let max = category.distance.maximum,
-                      min <= max, category.color != nil else { return false }
+                var missing: [String] = []
+                if let min = category.distance.minimum, let max = category.distance.maximum {
+                    if min > max { missing.append("距离区间") }
+                } else { missing.append("距离") }
+                if category.color == nil { missing.append("颜色") }
+                if !missing.isEmpty {
+                    incomplete.append("\(category.category.displayName)(\(missing.joined(separator: "/")))")
+                }
             }
         }
-        return true
+        return incomplete.isEmpty ? nil : "请先补全：\(incomplete.joined(separator: "、"))"
+    }
+
+    private func accepts(_ state: State) -> Bool {
+        configurationIssue(state) == nil
     }
 
     func apply(_ request: CoreSetApplyRequest<State>,
@@ -88,7 +101,9 @@ final class CoreSetMaterialConsumer: CoreSetFeatureConsumer {
         guard !stopped, availability == .ready, accepts(request.desired), revision < UInt64.max else {
             let reason: String
             if case .unavailable(let detail) = availability { reason = detail }
-            else { reason = "所选物资的距离区间或颜色未完整选择，或会话已停止" }
+            else if stopped { reason = "物资会话已停止" }
+            else if revision == UInt64.max { reason = "物资配置序号耗尽" }
+            else { reason = configurationIssue(request.desired) ?? "物资配置未通过校验" }
             completion(request.token, .notApplied(reason: reason)); return
         }
         refresh?.invalidate(); refresh = nil

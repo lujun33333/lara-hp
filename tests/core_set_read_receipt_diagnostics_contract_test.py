@@ -153,8 +153,13 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertIn("snapshot.captureCompletedMonotonicSeconds = captureCompletedAt", collector)
         self.assertIn("freshnessBasis=final-reprojected", collector)
         self.assertIn("displayFields=final-reprojected", collector)
-        self.assertIn("finalReprojectionAge > 0.45", collector)
-        self.assertIn("final-reprojection-stale age=", collector)
+        self.assertNotIn("finalReprojectionAge > 0.45", collector)
+        self.assertNotIn("final-reprojection-stale age=", collector)
+        self.assertIn("This is roster production, not presentation", collector)
+        for final_identity in ("finalWorld != world", "finalLevel != level",
+                               "finalController != controller", "finalLocal != local",
+                               "finalManager != manager"):
+            self.assertIn(final_identity, collector)
         for counter in ("speedMatched=%lu", "enemyTeam=%lu", "stateBit20Clear=%lu",
                         "lifecyclePass=%lu", "healthPass=%lu", "rootValid=%lu",
                         "meshValid=%lu", "coreAccepted=%lu", "producedPlayers=%lu",
@@ -174,10 +179,10 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertNotIn("pendingApply = (request.token, completion)", apply)
         self.assertLess(apply.index("completion(request.token, .applied(observed: settings))"),
                         apply.index("armCaptureLoop()"))
-        self.assertIn("player-loop contract=latest-snapshot-v9", player)
+        self.assertIn("player-loop contract=latest-snapshot-v10", player)
         self.assertIn("presentationInterval=0.016 presentationClock=dispatch-source", player)
         self.assertIn("rosterRetry=0.15 rosterRefresh=1.0", player)
-        self.assertIn("firstFrame=full-capture geometry=independent-camera-root-reprojection", player)
+        self.assertIn("firstFrame=current-camera-reprojection geometry=independent-camera-root-reprojection", player)
         self.assertIn("presentation=current-camera-cached-world-reprojection", player)
         self.assertIn("configurationApply=immediate renderEvidence=separate", player)
         loop = body(player, "private func armCaptureLoop()")
@@ -215,7 +220,8 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertIn("camera=current cameraOffset=0x%llx actorRoots=cached screenPoints=reprojected", collector)
         native_start = collector.index(
             "+ (CoreSetPlayerSnapshot *)reprojectPresentationForSnapshot:")
-        native_end = collector.index("\n}\n@end", native_start)
+        native_end = collector.index(
+            "+ (CoreSetPlayerSnapshot *)refreshActionForSnapshot:", native_start)
         native_presentation = collector[native_start:native_end]
         for required in ("base + CSWorldSlot", "rosterCameraManagerAddress",
                          "CSCameraValid(candidate)", "cameraOffset = offset",
@@ -229,9 +235,13 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         failed_capture = capture[capture.index("guard let snapshot,"):capture.index("self.lastCaptureFailure = nil")]
         self.assertNotIn("pendingApply = nil", failed_capture)
         self.assertIn("self.currentRoster = snapshot", capture)
-        self.assertIn("self.submitGeometry(snapshot", capture)
+        self.assertIn("self.refreshPresentation()", capture)
+        self.assertNotIn("self.submitGeometry(snapshot", capture)
         tick = body(player, "private func tick()")
         self.assertIn("currentRoster == nil ? 0.15 : 1.0", tick)
+        self.assertIn("CACurrentMediaTime() - lastFullCaptureAttemptEndedAt", tick)
+        capture = body(player, "private func capture()")
+        self.assertIn("lastFullCaptureAttemptEndedAt = CACurrentMediaTime()", capture)
         submit = body(player, "private func submitGeometry(")
         self.assertIn("guard !awaitingReceipt else { return }", submit)
         self.assertIn("awaitingReceipt = true", submit)

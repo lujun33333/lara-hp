@@ -275,6 +275,19 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
                                                      includeOffscreen:(BOOL)includeOffscreen
                                                  maximumDrawDistance:(double)maximumDrawDistance
     NS_SWIFT_NAME(reprojectPresentation(for:session:canvasSize:includeOffscreen:maximumDrawDistance:));
+// Fast action path over an immutable, identity-stable producer publication.
+// The action session may have its own generation; process/image plus initial
+// and final roots bind the publication to that independent session. A zero targetActor
+// reprojects cached candidate world points with the current camera and refreshes
+// exact battle inputs. A nonzero targetActor additionally rereads only that
+// actor's state, root position and physical bones. Producer battle inputs are
+// neither required nor copied. No actor-array scan occurs.
++ (nullable CoreSetPlayerSnapshot *)refreshActionForSnapshot:(CoreSetPlayerSnapshot *)snapshot
+                                                  targetActor:(uint64_t)targetActor
+                                                      session:(CoreSetReadSession *)session
+                                                   canvasSize:(CGSize)canvasSize
+                                          maximumDrawDistance:(double)maximumDrawDistance
+    NS_SWIFT_NAME(refreshAction(for:targetActor:session:canvasSize:maximumDrawDistance:));
 @end
 
 // Pure local projection of an already captured, identity-stable camera delta.

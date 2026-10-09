@@ -8,7 +8,10 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     let capability = CoreSetCapability.aimControl
     private weak var coordinator: CoreSetRuntimeCoordinator?
     private let worker = DispatchQueue(label: "coreset.basic.aim", qos: .userInitiated)
+    private let rosterWorker = DispatchQueue(label: "coreset.basic.aim.roster", qos: .utility)
     private var session = CoreSetReadSession()
+    private var rosterSession = CoreSetReadSession()
+    private let rosterLock = NSLock()
     private let triggerState = CoreSetBasicAimTriggerState()
     private let dynamics = CoreSetV17AimDynamics()
     private let recoilDynamics = CoreSetV17RecoilDynamics()
@@ -49,6 +52,32 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     private var activeHostGeneration: UInt64 = 0
     private var activeRevision: UInt64 = 0
     private var activeCanvasSize: CGSize = .zero
+    // A mapped target read can fail transiently while another overlay lane is
+    // walking the same process.  A missing sample is not a terminal request
+    // failure: keep the action worker alive and retry at a bounded cadence.
+    private var nextBattleCaptureAt: Double = 0
+    private var lastAimCaptureFailure = ""
+    private var lastAimCaptureFailureLogAt: Double = 0
+    private var lastRecoilCaptureFailure = ""
+    private var lastRecoilCaptureFailureLogAt: Double = 0
+    private struct ActionRosterDemand: Equatable {
+        let requestID: UUID
+        let hostGeneration: UInt64
+        let revision: UInt64
+        let canvasSize: CGSize
+        let maximumDistance: Int
+        let playerBones: Bool
+        let botBones: Bool
+    }
+    private struct ActionRosterPublication {
+        let demand: ActionRosterDemand
+        let snapshot: CoreSetPlayerSnapshot
+        let publishedAt: Double
+    }
+    private var rosterDemand: ActionRosterDemand?
+    private var rosterPublication: ActionRosterPublication?
+    private var rosterCaptureInFlight = false
+    private var rosterDiagnostic = "candidate-publication-empty"
     private(set) var status = "目标只读会话未就绪"
 
     var recoilAvailability: CoreSetAvailability { availability }
@@ -59,6 +88,8 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
 
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
+        session.diagnosticLabel = "aim-action"
+        rosterSession.diagnosticLabel = "aim-roster-producer"
         readinessTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
         refresh()
     }
@@ -212,6 +243,9 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             self.activeHostGeneration = canvas.generation
             self.activeRevision = revision
             self.activeCanvasSize = canvas.size
+            self.nextBattleCaptureAt = 0
+            self.lastAimCaptureFailure = ""
+            self.lastAimCaptureFailureLogAt = 0
             self.triggerState.reset()
             self.resetAimRuntime()
             let timer = DispatchSource.makeTimerSource(queue: self.worker)
@@ -270,6 +304,9 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                 self.cancellation.unlock()
                 self.activeHostGeneration = canvas.generation
                 self.activeRevision = revision
+                self.nextBattleCaptureAt = 0
+                self.lastRecoilCaptureFailure = ""
+                self.lastRecoilCaptureFailureLogAt = 0
                 self.ensureRecoilTimer(canvas: canvas.size, hostGeneration: canvas.generation, revision: revision)
             } else {
                 self.ensureRecoilTimer(canvas: canvas.size, hostGeneration: canvas.generation,
@@ -319,13 +356,142 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             customLockThreshold: lockThreshold ?? 0,
             customTakeoverPauseMilliseconds: pause ?? 0)
     }
-    private func capture(_ size: CGSize, distance: Int) -> CoreSetPlayerSnapshot? {
-        CoreSetPlayerCollector.capture(session, canvasSize: size,
-            playerBones: true, botBones: true, boneDistanceLimit: Double(distance),
-            includeOffscreen: false, includeRadar: false, includeBattleInputs: true,
+    private struct BattleCaptureResult {
+        let snapshot: CoreSetPlayerSnapshot?
+        let failure: String
+    }
+    private func demand(primaryToken: CoreSetRequestToken, hostGeneration: UInt64,
+                        revision: UInt64, canvas: CGSize, distance: Int,
+                        includeBones: Bool, includeBots: Bool) -> ActionRosterDemand {
+        ActionRosterDemand(requestID: primaryToken.requestID,
+            hostGeneration: hostGeneration, revision: revision, canvasSize: canvas,
+            maximumDistance: distance, playerBones: includeBones,
+            botBones: includeBones && includeBots)
+    }
+    private func requestRoster(_ demand: ActionRosterDemand, freshCandidates: Bool) {
+        rosterLock.lock()
+        rosterDemand = demand
+        let publicationReady = rosterPublication.map {
+            $0.demand == demand && (!freshCandidates ||
+                CACurrentMediaTime() - $0.publishedAt <= 1.0)
+        } == true
+        guard !publicationReady, !rosterCaptureInFlight else {
+            rosterLock.unlock(); return
+        }
+        rosterCaptureInFlight = true
+        rosterLock.unlock()
+        rosterWorker.async { [weak self] in self?.produceRoster() }
+    }
+    private func produceRoster() {
+        rosterLock.lock()
+        guard let demand = rosterDemand else {
+            rosterCaptureInFlight = false; rosterLock.unlock(); return
+        }
+        rosterLock.unlock()
+        let connected = rosterSession.connect() && rosterSession.capabilities == 1
+        let failureSequence = rosterSession.readFailureSequence
+        let snapshot = connected ? CoreSetPlayerCollector.capture(rosterSession,
+            canvasSize: demand.canvasSize, playerBones: demand.playerBones,
+            botBones: demand.botBones,
+            boneDistanceLimit: demand.playerBones || demand.botBones
+                ? Double(demand.maximumDistance) : 0,
+            includeOffscreen: false, includeRadar: false, includeBattleInputs: false,
             playerWeaponText: false, botWeaponText: false, includeGrenadeWarning: false,
-            includeCounts: false, playerInformation: false, botInformation: false,
-            includeWarningYaw: false, maximumDrawDistance: Double(distance))
+            includeCounts: !demand.playerBones, playerInformation: false, botInformation: false,
+            includeWarningYaw: false,
+            maximumDrawDistance: Double(demand.maximumDistance)) : nil
+        let diagnostic: String
+        if !connected { diagnostic = rosterSession.lastConnectDiagnostic }
+        else if rosterSession.readFailureSequence != failureSequence {
+            diagnostic = rosterSession.lastReadDiagnostic
+        } else { diagnostic = CoreSetPlayerCollector.lastCaptureDiagnostic() }
+        let publishedAt = CACurrentMediaTime()
+        rosterLock.lock()
+        let stillCurrent = rosterDemand == demand
+        if stillCurrent, let snapshot,
+           snapshot.processID == rosterSession.processID,
+           snapshot.imageBase == rosterSession.imageBase {
+            rosterPublication = ActionRosterPublication(demand: demand,
+                snapshot: snapshot, publishedAt: publishedAt)
+            rosterDiagnostic = "ready snapshot=\(snapshot.snapshotID.uuidString)"
+        } else if stillCurrent {
+            rosterPublication = nil
+            rosterDiagnostic = diagnostic
+        }
+        rosterCaptureInFlight = false
+        let changed = rosterDemand != nil && rosterDemand != demand
+        if changed { rosterCaptureInFlight = true }
+        rosterLock.unlock()
+        if changed { rosterWorker.async { [weak self] in self?.produceRoster() } }
+    }
+    private func publishedRoster(for demand: ActionRosterDemand,
+                                 freshCandidates: Bool) -> (CoreSetPlayerSnapshot?, String) {
+        rosterLock.lock(); defer { rosterLock.unlock() }
+        guard let publication = rosterPublication, publication.demand == demand,
+              !freshCandidates || CACurrentMediaTime() - publication.publishedAt <= 1.0 else {
+            return (nil, rosterDiagnostic)
+        }
+        return (publication.snapshot, rosterDiagnostic)
+    }
+    private func invalidatePublishedRoster(_ demand: ActionRosterDemand) {
+        rosterLock.lock()
+        if rosterPublication?.demand == demand { rosterPublication = nil }
+        rosterDiagnostic = "candidate-publication-invalidated"
+        rosterLock.unlock()
+    }
+    private func captureAction(_ size: CGSize, distance: Int, includeBones: Bool,
+                               includeBots: Bool, targetActor: UInt64,
+                               primaryToken: CoreSetRequestToken, hostGeneration: UInt64,
+                               revision: UInt64) -> BattleCaptureResult {
+        let expected = demand(primaryToken: primaryToken, hostGeneration: hostGeneration,
+            revision: revision, canvas: size, distance: distance,
+            includeBones: includeBones, includeBots: includeBots)
+        let freshCandidates = targetActor == 0 && includeBones
+        requestRoster(expected, freshCandidates: freshCandidates)
+        let publication = publishedRoster(for: expected, freshCandidates: freshCandidates)
+        guard let roster = publication.0 else {
+            return BattleCaptureResult(snapshot: nil,
+                failure: "candidate-publication-waiting \(publication.1)")
+        }
+        let failureSequence = session.readFailureSequence
+        let snapshot = CoreSetPlayerCollector.refreshAction(for: roster,
+            targetActor: targetActor, session: session, canvasSize: size,
+            maximumDrawDistance: Double(distance))
+        if snapshot == nil { invalidatePublishedRoster(expected) }
+        let failure = session.readFailureSequence != failureSequence
+            ? session.lastReadDiagnostic
+            : "\(CoreSetPlayerCollector.lastCaptureDiagnostic()) transport-errors=0"
+        return BattleCaptureResult(snapshot: snapshot, failure: failure)
+    }
+    private func shouldAttemptBattleCapture(now: Double) -> Bool {
+        now.isFinite && now >= 0 && now >= nextBattleCaptureAt
+    }
+    private func deferBattleCapture(now: Double) {
+        nextBattleCaptureAt = now + 0.15
+    }
+    private func noteCaptureFailure(_ reason: String, lane: String, now: Double) {
+        let first: Bool
+        let due: Bool
+        if lane == "aim" {
+            first = lastAimCaptureFailure.isEmpty
+            due = now - lastAimCaptureFailureLogAt >= 3
+            lastAimCaptureFailure = reason
+            if first || due { lastAimCaptureFailureLogAt = now }
+        } else {
+            first = lastRecoilCaptureFailure.isEmpty
+            due = now - lastRecoilCaptureFailureLogAt >= 3
+            lastRecoilCaptureFailure = reason
+            if first || due { lastRecoilCaptureFailureLogAt = now }
+        }
+        guard first || due else { return }
+        NSLog("Core-SET: action-sample lane=%@ stage=retry terminal=0 reason=%@", lane, reason)
+        publish(lane == "aim" ? "战斗采样暂不可用，保留自瞄请求并重试" :
+            "战斗采样暂不可用，保留压枪请求并重试")
+    }
+    private func noteCaptureSuccess(lane: String) {
+        nextBattleCaptureAt = 0
+        if lane == "aim" { lastAimCaptureFailure = "" }
+        else { lastRecoilCaptureFailure = "" }
     }
     private func displayPoint(target: CoreSetWorldPoint,
                               snapshot: CoreSetPlayerSnapshot) -> CGPoint? {
@@ -398,6 +564,24 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         dynamics.reset(); selectedActor = 0; selectedGeneration = 0; selectedStartedAt = 0
         CoreSetAimDisplayRecordStore.shared.clear()
     }
+    private func clearRosterPublication() {
+        rosterLock.lock()
+        rosterDemand = nil; rosterPublication = nil
+        rosterDiagnostic = "candidate-publication-empty"
+        rosterLock.unlock()
+    }
+    private func drainRosterProducer() -> Bool {
+        clearRosterPublication()
+        return rosterWorker.sync {
+            let cleanup = rosterSession.disconnect()
+            let clean = cleanup.taskPortReleased && cleanup.generationAdvanced
+            if clean {
+                rosterSession = CoreSetReadSession()
+                rosterSession.diagnosticLabel = "aim-roster-producer"
+            }
+            return clean
+        }
+    }
     private enum ActionSubmitResult { case idle, committed, failed(String) }
     private func submitMergedAction(snapshot: CoreSetPlayerSnapshot, aimStep: CoreSetBasicAimDelta?,
         recoilRequest: CoreSetApplyRequest<CoreSetRecoilSettings>?,
@@ -454,11 +638,23 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     private func tickRecoilOnly(canvas: CGSize, hostGeneration: UInt64, revision: UInt64) {
         guard active == nil, let recoilRequest = activeRecoil else { return }
         guard pendingProbes.isEmpty else { failRecoil(recoilRequest, "旧事务清理待确认，禁止压枪写入"); return }
-        guard isLive(recoilRequest.token, host: hostGeneration),
-              recoilConfiguration(recoilRequest.desired) != nil,
-              let snapshot = capture(canvas, distance: 500), snapshot.battleInputsPresent else {
-            failRecoil(recoilRequest, "压枪战斗采样失效或请求已撤销"); return
+        guard isLive(recoilRequest.token, host: hostGeneration) else { return }
+        guard recoilConfiguration(recoilRequest.desired) != nil else {
+            failRecoil(recoilRequest, "压枪参数在运行中失效"); return
         }
+        let now = CACurrentMediaTime()
+        guard shouldAttemptBattleCapture(now: now) else { return }
+        let capture = captureAction(canvas, distance: 500, includeBones: false,
+            includeBots: false, targetActor: 0, primaryToken: recoilRequest.token,
+            hostGeneration: hostGeneration, revision: revision)
+        guard isLive(recoilRequest.token, host: hostGeneration) else { return }
+        guard let snapshot = capture.snapshot, snapshot.battleInputsPresent else {
+            let failedAt = CACurrentMediaTime()
+            deferBattleCapture(now: failedAt)
+            noteCaptureFailure(capture.failure, lane: "recoil", now: failedAt)
+            return
+        }
+        noteCaptureSuccess(lane: "recoil")
         switch submitMergedAction(snapshot: snapshot, aimStep: nil, recoilRequest: recoilRequest,
             primaryToken: recoilRequest.token,
             hostGeneration: hostGeneration, revision: revision, requireAimTrigger: false) {
@@ -482,13 +678,27 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     }
     private func tick(_ request: CoreSetApplyRequest<State>, canvas: CGSize, hostGeneration: UInt64, revision: UInt64) {
         guard pendingProbes.isEmpty else { fail(request, "旧事务清理待确认，禁止后续写入"); return }
-        guard isLive(request.token, host: hostGeneration),
-              let configuration = configuration(request.desired),
-              let size = request.desired.circleSize.value,
-              let snapshot = capture(canvas, distance: configuration.maximumDistance), snapshot.battleInputsPresent,
-              snapshot.cameraWorldPosition != nil else {
-            fail(request, "战斗采样失效或请求撤销"); return
+        guard isLive(request.token, host: hostGeneration) else { return }
+        guard let configuration = configuration(request.desired),
+              let size = request.desired.circleSize.value else {
+            fail(request, "自瞄参数在运行中失效"); return
         }
+        let now = CACurrentMediaTime()
+        guard shouldAttemptBattleCapture(now: now) else { return }
+        let refreshTarget = request.desired.lockSameTarget == true ? selectedActor : 0
+        let capture = captureAction(canvas, distance: configuration.maximumDistance,
+            includeBones: true, includeBots: request.desired.includeBots == true,
+            targetActor: refreshTarget, primaryToken: request.token,
+            hostGeneration: hostGeneration, revision: revision)
+        guard isLive(request.token, host: hostGeneration) else { return }
+        guard let snapshot = capture.snapshot, snapshot.battleInputsPresent,
+              snapshot.cameraWorldPosition != nil else {
+            let failedAt = CACurrentMediaTime()
+            deferBattleCapture(now: failedAt)
+            noteCaptureFailure(capture.failure, lane: "aim", now: failedAt)
+            return
+        }
+        noteCaptureSuccess(lane: "aim")
         if selectedGeneration != 0 && selectedGeneration != snapshot.sessionGeneration { resetAimRuntime() }
         let recoilRequest = activeRecoil
         let trigger = triggerState.update(mode: request.desired.trigger?.rawValue ?? -1,
@@ -601,6 +811,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         let completion = pendingCompletion; pendingCompletion = nil
         active = nil
         if let recoil = activeRecoil { failRecoil(recoil, reason) }
+        else { _ = drainRosterProducer() }
         let pending = !pendingProbes.isEmpty
         DispatchQueue.main.async { [weak self] in
             if let self {
@@ -622,7 +833,9 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         let callback = pendingRecoilCompletion
         pendingRecoilCompletion = nil
         activeRecoil = nil
-        if active == nil { _ = retireActionWorker(); invalidateHost() }
+        if active == nil {
+            _ = retireActionWorker(); invalidateHost(); _ = drainRosterProducer()
+        }
         DispatchQueue.main.async { [weak self] in
             callback?(request.token, .failed(reason: reason))
             self?.coordinator?.refreshPlayerAvailability()
@@ -653,10 +866,13 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                 return
             }
             self.invalidateHost()
+            let rosterClean = self.drainRosterProducer()
             let readClean = self.session.disconnect()
-            let clean = self.pendingProbes.isEmpty && readClean.taskPortReleased && readClean.generationAdvanced
+            let clean = rosterClean && self.pendingProbes.isEmpty &&
+                readClean.taskPortReleased && readClean.generationAdvanced
             if clean {
-                self.session = CoreSetReadSession(); self.recoilWritesCommitted = false
+                self.session = CoreSetReadSession(); self.session.diagnosticLabel = "aim-action"
+                self.recoilWritesCommitted = false
                 self.unrestoredActionEffects = false
             }
             self.activeHostGeneration = 0; self.activeRevision = 0
@@ -709,10 +925,13 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             }
             self.invalidateHost()
             self.recoilTimer?.cancel(); self.recoilTimer = nil
+            let rosterClean = self.drainRosterProducer()
             let readClean = self.session.disconnect()
-            let clean = self.pendingProbes.isEmpty && readClean.taskPortReleased && readClean.generationAdvanced
+            let clean = rosterClean && self.pendingProbes.isEmpty &&
+                readClean.taskPortReleased && readClean.generationAdvanced
             if clean {
-                self.session = CoreSetReadSession(); self.aimWritesCommitted = false
+                self.session = CoreSetReadSession(); self.session.diagnosticLabel = "aim-action"
+                self.aimWritesCommitted = false
                 self.unrestoredActionEffects = false
             }
             self.activeHostGeneration = 0; self.activeRevision = 0
@@ -739,8 +958,10 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             pendingCompletion = nil; pendingRecoilCompletion = nil
             _ = retireActionWorker()
             drainPendingActionWorkers()
+            let rosterClean = drainRosterProducer()
             let result = session.disconnect()
-            let clean = pendingProbes.isEmpty && result.taskPortReleased && result.generationAdvanced
+            let clean = rosterClean && pendingProbes.isEmpty &&
+                result.taskPortReleased && result.generationAdvanced
             if clean {
                 aimWritesCommitted = false; recoilWritesCommitted = false
                 unrestoredActionEffects = false

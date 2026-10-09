@@ -23,7 +23,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private var presentationInFlight = false
     private var currentRoster: CoreSetPlayerSnapshot?
     private var currentGeometry: CoreSetPlayerSnapshot?
-    private var lastFullCaptureStartedAt: Double = 0
+    private var lastFullCaptureAttemptEndedAt: Double = 0
     private var lastGeometrySubmittedAt: Double?
     private var lastGeometryReceiptAt: Double?
     private var geometryExpired = false
@@ -60,7 +60,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         session.diagnosticLabel = "player"
         geometrySession.diagnosticLabel = "player-geometry"
         presentationSession.diagnosticLabel = "player-presentation"
-        NSLog("Core-SET: player-loop contract=latest-snapshot-v9 interval=0.15 presentationInterval=0.016 presentationClock=dispatch-source rosterRetry=0.15 rosterRefresh=1.0 firstFrame=full-capture geometry=independent-camera-root-reprojection presentation=current-camera-cached-world-reprojection configurationApply=immediate renderEvidence=separate")
+        NSLog("Core-SET: player-loop contract=latest-snapshot-v10 interval=0.15 presentationInterval=0.016 presentationClock=dispatch-source rosterRetry=0.15 rosterRefresh=1.0 firstFrame=current-camera-reprojection geometry=independent-camera-root-reprojection presentation=current-camera-cached-world-reprojection configurationApply=immediate renderEvidence=separate")
         probe = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
@@ -146,6 +146,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         expectedImageBase = nil
         expectedCompletedAt = nil
         expectedReadSemanticDiagnostic = nil
+        lastFullCaptureAttemptEndedAt = 0
         // Core v1.7 stores UI choices directly in its shared configuration and
         // lets the frame loop consume the newest value.  Configuration is not
         // held behind the presence of an on-screen actor or a renderer receipt;
@@ -204,7 +205,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         // the independent geometry lane owns the fast path and enrichment can
         // return to the slower cadence.
         let fullCaptureInterval = currentRoster == nil ? 0.15 : 1.0
-        if !inFlight, CACurrentMediaTime() - lastFullCaptureStartedAt >= fullCaptureInterval { capture() }
+        if !inFlight, CACurrentMediaTime() - lastFullCaptureAttemptEndedAt >= fullCaptureInterval { capture() }
     }
 
     private var activeSessionMatches: Bool {
@@ -412,7 +413,6 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             return
         }
         inFlight = true
-        lastFullCaptureStartedAt = CACurrentMediaTime()
         let expectedRevision = revision
         let playerBones = settings.player.bones == true
         let botBones = settings.bot.bones == true && settings.hideBots != true
@@ -446,6 +446,11 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.inFlight = false
+                // Cadence begins after the expensive attempt finishes. Using
+                // its start time caused a multi-second mapped scan to launch
+                // another full scan immediately on return, keeping the read
+                // transport continuously saturated.
+                self.lastFullCaptureAttemptEndedAt = CACurrentMediaTime()
                 guard !self.stopped, self.activeToken == token,
                       self.revision == expectedRevision,
                       let currentCanvas = self.coordinator?.playerCanvas,
@@ -471,12 +476,14 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.currentRoster = snapshot
                 self.currentGeometry = snapshot
                 self.geometryExpired = false
-                // Publish the complete capture immediately. The renderer must
-                // never depend on a second read session succeeding before the
-                // first valid frame becomes visible. Subsequent ticks replace
-                // this with current camera/root geometry when available.
-                self.submitGeometry(snapshot, token: token, revision: expectedRevision,
-                                    canvas: currentCanvas)
+                // The full collector is a roster producer and may take much
+                // longer than a display frame on mapped reads. Never publish
+                // its producer-time screen points. The presentation lane first
+                // reprojects the retained world geometry with a current camera
+                // sample. This prevents the overlay from rotating as a stale
+                // screen-space layer with the camera; it is a local pipeline
+                // correction, not a claimed Telegram-source implementation.
+                self.refreshPresentation()
             }
         }
     }
@@ -1024,6 +1031,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         awaitingReceiptSince = nil
         activeSessionGeneration = nil; activeProcessID = nil; activeImageBase = nil
         captureFailureStartedAt = nil; captureLaneClearedForFailure = false
+        lastFullCaptureAttemptEndedAt = 0
         expectedReadSemanticDiagnostic = nil
         presentationReceiptWindowStartedAt = nil; presentationReceiptCount = 0
         let motionClean = grenadeMotion.clear()

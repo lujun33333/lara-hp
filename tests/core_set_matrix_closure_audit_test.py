@@ -97,7 +97,7 @@ def require_aim_source(source):
     assert "persistentActionWorker" in source
     submit = body(source, "private func submitMergedAction(")
     assert "let cleanup = probe.stop()" not in submit
-    assert "includeBattleInputs: true" in source
+    assert "includeBattleInputs: false" in source and "refreshAction(for: roster" in source
     assert "result.committed" in source and "cleanup.complete" in source
     assert "cleanup.targetEffectsAbandoned" in source and "unrestoredActionEffects" in source
     assert ".applied(observed: request.desired)" in source
@@ -154,7 +154,7 @@ class MatrixClosureAudit(unittest.TestCase):
         source = read("lara/views/app/CoreSetAimConsumer.swift")
         for altered in (source.replace("CoreSetIsolatedWriteProbe", "RemovedAimProbe"),
                         source.replace(".stoppedWithoutRestoration", ".restored"),
-                        source.replace("includeBattleInputs: true", "includeBattleInputs: false")):
+                        source.replace("refreshAction(for: roster", "removedActionRefresh(for: roster")):
             with self.assertRaises(AssertionError): require_aim_source(altered)
 
     def test_local_models_have_no_receipt_or_effect_ledger_authority(self):
