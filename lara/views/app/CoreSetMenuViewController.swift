@@ -1559,33 +1559,55 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             } else { observedStop() }
         }
         appearanceConsumer = CoreSetMenuConsumer(capability: .localRendering, readiness: readiness, apply: { [weak self] request, complete in
-            guard let self, self.viewIfLoaded?.window != nil else { complete(request.token, .notApplied(reason: "Local menu is not attached")); return }
-            let value = request.desired
-            UserDefaults.standard.set(value.theme == .light ? 1 : 0, forKey: self.themeKey)
-            UserDefaults.standard.set(UInt64(value.accent.referencePackedRGBA), forKey: self.accentKey)
-            // Preserve old-build compatibility only on an explicit user edit.
-            UserDefaults.standard.set(value.theme == .light, forKey: self.legacyThemeKey)
-            UserDefaults.standard.set([value.accent.red, value.accent.green, value.accent.blue, 1], forKey: self.legacyAccentKey)
-            UserDefaults.standard.set(value.floatingPalette.rawValue, forKey: self.floatingThemeKey)
-            self.rebuildMenu()
-            // Observe actual view properties and local preference readback. This
-            // receipt belongs only to localRendering, never to homeSettings.
-            guard let observed = self.observeAppearance(), observed == value else {
-                complete(request.token, .failed(reason: "Local appearance observation did not match")); return
+            // Hosted dispatch owns the old controls until its End callback returns.
+            // Apply and observe together after that ownership has been released.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.viewIfLoaded?.window != nil else { complete(request.token, .notApplied(reason: "Local menu is not attached")); return }
+                guard self.appearanceChannel?.pendingApply?.token == request.token,
+                      self.appearanceChannel?.suspended == false else {
+                    complete(request.token, .notApplied(reason: "Local appearance request is no longer current")); return
+                }
+                guard self.hostedPointerID == nil, self.hostedDispatchControlID == nil,
+                      self.trackingUIKitSlider == nil else {
+                    complete(request.token, .notApplied(reason: "Local menu input is still tracking")); return
+                }
+                let value = request.desired
+                UserDefaults.standard.set(value.theme == .light ? 1 : 0, forKey: self.themeKey)
+                UserDefaults.standard.set(UInt64(value.accent.referencePackedRGBA), forKey: self.accentKey)
+                // Preserve old-build compatibility only on an explicit user edit.
+                UserDefaults.standard.set(value.theme == .light, forKey: self.legacyThemeKey)
+                UserDefaults.standard.set([value.accent.red, value.accent.green, value.accent.blue, 1], forKey: self.legacyAccentKey)
+                UserDefaults.standard.set(value.floatingPalette.rawValue, forKey: self.floatingThemeKey)
+                self.rebuildMenu()
+                // Observe actual view properties and local preference readback. This
+                // receipt belongs only to localRendering, never to homeSettings.
+                guard let observed = self.observeAppearance(), observed == value else {
+                    complete(request.token, .failed(reason: "Local appearance observation did not match")); return
+                }
+                complete(request.token, .applied(observed: observed))
             }
-            complete(request.token, .applied(observed: observed))
         }, stop: stop)
         appearanceChannel = CoreSetFeatureChannel(capability: .localRendering, desired: appearanceDesired())
         if let consumer = appearanceConsumer { _ = appearanceChannel?.bind(consumer) }
         directoryConsumer = CoreSetMenuConsumer(capability: .localRendering, readiness: readiness, apply: { [weak self] request, complete in
-            guard let self, self.selectedPage == 2, self.viewIfLoaded?.window != nil else {
-                complete(request.token, .notApplied(reason: "Directory preview is not visible")); return
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.selectedPage == 2, self.viewIfLoaded?.window != nil else {
+                    complete(request.token, .notApplied(reason: "Directory preview is not visible")); return
+                }
+                guard self.directoryChannel?.pendingApply?.token == request.token,
+                      self.directoryChannel?.suspended == false else {
+                    complete(request.token, .notApplied(reason: "Local directory request is no longer current")); return
+                }
+                guard self.hostedPointerID == nil, self.hostedDispatchControlID == nil,
+                      self.trackingUIKitSlider == nil else {
+                    complete(request.token, .notApplied(reason: "Local menu input is still tracking")); return
+                }
+                self.rebuildCurrentPage()
+                guard let observed = self.observeDirectory(), observed == request.desired else {
+                    complete(request.token, .failed(reason: "Directory view observation did not match")); return
+                }
+                complete(request.token, .applied(observed: observed))
             }
-            self.rebuildCurrentPage()
-            guard let observed = self.observeDirectory(), observed == request.desired else {
-                complete(request.token, .failed(reason: "Directory view observation did not match")); return
-            }
-            complete(request.token, .applied(observed: observed))
         }, stop: stop)
         directoryChannel = CoreSetFeatureChannel(capability: .localRendering, desired: directoryDesired())
         if let consumer = directoryConsumer { _ = directoryChannel?.bind(consumer) }
@@ -1594,10 +1616,15 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private func observeAppearance() -> CoreSetMenuAppearance? {
         guard panel.superview === view,
               let sidebar = panel.subviews.first,
-              let brand = sidebar.subviews.compactMap({ $0 as? UILabel }).first(where: { $0.attributedText?.string == "CORE SET" }),
-              let drawnAccent = brand.attributedText?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
+              let brand = sidebar.subviews.compactMap({ $0 as? UILabel }).first(where: { $0.text == "C" }),
+              let drawnAccent = brand.textColor,
               let color = rgba(drawnAccent),
               let saved = storedPackedAccent(), saved == color.referencePackedRGBA else { return nil }
+        let brandParts = sidebar.subviews.compactMap { $0 as? UILabel }.filter {
+            ["C", "ORE", "SET"].contains($0.text ?? "")
+        }
+        guard brandParts.count == 3,
+              brandParts.allSatisfy({ $0.textColor?.isEqual(drawnAccent) == true }) else { return nil }
         let light = storedTheme() == .light
         let background = UIColor(white: (light ? 250.0 : 26.0) / 255.0, alpha: 1)
         guard panel.backgroundColor?.isEqual(background) == true,
@@ -2390,20 +2417,17 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                     let field: CoreSetField = title == "雷达" ? .radarEnabled : .radarShowDistance
                     let ready = canStage(featureState.radar) &&
                         controlAvailability(field, in: featureState.radar) == .ready
-                    let placement = featureState.radar.desired.placement
-                    let configured = placement.radius != nil && placement.x != nil && placement.y != nil &&
-                        featureState.radar.desired.detectionDistance.value != nil
                     let value = title == "雷达" ? featureState.radar.desired.enabled :
                         featureState.radar.desired.showDistance
                     let button = UIButton(type: .custom)
                     button.frame = row.bounds
                     button.tag = title == "雷达" ? 0 : 1
-                    button.isEnabled = ready && (title != "雷达" || value == true || configured)
+                    button.isEnabled = ready
                     button.isSelected = value == true
                     button.accessibilityLabel = title
                     button.accessibilityValue = value.map { $0 ? "开启" : "关闭" } ?? "未选择"
                     button.accessibilityHint = button.isEnabled ? "请求独立雷达 lane；生效需精确回执" :
-                        "先设置探测距离、半径、X、Y，或目标只读会话未就绪"
+                        "雷达字段配置会话尚未就绪"
                     button.addTarget(self, action: #selector(toggleRadarField(_:)), for: .touchUpInside)
                     registerHosted(button, .radarField, field: field, capability: .radarRendering)
                     box.backgroundColor = button.isSelected ? accent : .clear
@@ -2416,17 +2440,15 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                         controlAvailability(field, in: featureState.radar) == .ready
                     let value = title == "被瞄预警" ? featureState.radar.desired.warningEnabled :
                         featureState.radar.desired.ignoreBots
-                    let configured = featureState.radar.desired.warningRange.value != nil &&
-                        featureState.radar.desired.warningTextSize.value != nil
                     let button = UIButton(type: .custom)
                     button.frame = row.bounds
                     button.tag = title == "被瞄预警" ? 0 : 1
-                    button.isEnabled = ready && (title != "被瞄预警" || value == true || configured)
+                    button.isEnabled = ready
                     button.isSelected = value == true
                     button.accessibilityLabel = title
                     button.accessibilityValue = value.map { $0 ? "开启" : "关闭" } ?? "未选择"
                     button.accessibilityHint = button.isEnabled ? "独立 warning lane；生效须双 lane 精确回执" :
-                        "先设置范围和文字大小，或目标只读会话未就绪"
+                        "预警字段配置会话尚未就绪"
                     button.addTarget(self, action: #selector(toggleWarningField(_:)), for: .touchUpInside)
                     registerHosted(button, .warningField, field: field, capability: .radarRendering)
                     box.backgroundColor = button.isSelected ? accent : .clear
@@ -2756,10 +2778,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         let field: CoreSetField = sender.tag == 0 ? .radarEnabled : .radarShowDistance
         guard controlAvailability(field, in: featureState.radar) == .ready else { return }
         if sender.tag == 0 {
-            let placement = featureState.radar.desired.placement
             let enabling = featureState.radar.desired.enabled != true
-            if enabling && (placement.radius == nil || placement.x == nil || placement.y == nil ||
-                            featureState.radar.desired.detectionDistance.value == nil) { return }
             editGame(\.radar) { $0.enabled = enabling }
         } else {
             editGame(\.radar) { $0.showDistance = !($0.showDistance ?? false) }
@@ -2773,8 +2792,6 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         guard controlAvailability(field, in: featureState.radar) == .ready else { return }
         if sender.tag == 0 {
             let enabling = featureState.radar.desired.warningEnabled != true
-            if enabling && (featureState.radar.desired.warningRange.value == nil ||
-                            featureState.radar.desired.warningTextSize.value == nil) { return }
             editGame(\.radar) { $0.warningEnabled = enabling }
         } else {
             editGame(\.radar) { $0.ignoreBots = !($0.ignoreBots ?? false) }
@@ -3109,7 +3126,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             button.layer.cornerRadius = 14
             button.accessibilityTraits = selected ? [.button, .selected] : .button
             button.accessibilityHint = "v1.7同义本地分类切换；目标物资效果和设备呈现仍未验证"
-            button.isEnabled = localDirectoryReady
+            // Core changes only its local selected-category index here.
+            button.isEnabled = true
             button.addTarget(self, action: #selector(selectMaterialCategory(_:)), for: .touchUpInside)
             registerHosted(button, .materialCategory)
             card.addSubview(button)
@@ -3273,12 +3291,16 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     }
 
     @objc private func selectMaterialCategory(_ sender: UIButton) {
-        refreshBeforeInteraction(sender)
-        guard localDirectoryReady, materialCatalog.indices.contains(sender.tag), sender.tag != previewMaterialCategory else { return }
-        previewMaterialCategory = sender.tag
+        guard materialCatalog.indices.contains(sender.tag), sender.tag != previewMaterialCategory else { return }
+        let category = sender.tag
+        previewMaterialCategory = category
         // Native category switching resets only scrolling, not the selections.
         materialGrid.contentOffset = .zero
-        applyLocalDirectory()
+        NSLog("Core-SET: hosted input stage=desired control=material.category.%ld configured=1 confirmed=0 scope=local-category-index", category)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.selectedPage == 2, self.previewMaterialCategory == category else { return }
+            self.rebuildCurrentPage()
+        }
     }
 
     @objc private func toggleMaterialGroup(_ sender: UIButton) {

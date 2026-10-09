@@ -1,0 +1,33 @@
+{
+  "ipa_sha256": "57412d36a1092931d81a9a820c57eb5c1eb92dcf77076ce865dc95035a3a41cb",
+  "image_sha256": "c842be92434b88b4d535d0d10a30ace068ce6b9a7b9a97ec5a6ca8fd97fa3dd5",
+  "runtime_verified": false,
+  "scope": "Bounded static instructions: inactive setter, direct radar/warning configuration pointers, local category index, local appearance storage. Not whole-program absence or device proof.",
+  "instructions": [
+    ["0x10019590c", "02008052", "mov w2, #0"],
+    ["0x100195910", "2c6c1694", "bl #0x1007309c0"],
+    ["0x100195950", "02008052", "mov w2, #0"],
+    ["0x100195954", "1b6c1694", "bl #0x1007309c0"],
+    ["0x100015b28", "ae6b1c94", "bl #0x1007309e0"],
+    ["0x100015b30", "64f80094", "bl #0x100053cc0"],
+    ["0x100015b34", "54010034", "cbz w20, #0x100015b5c"],
+    ["0x1000ceb98", "41f30391", "add x1, x26, #0xfc"],
+    ["0x1000ceba0", "62e7ff97", "bl #0x1000c8928"],
+    ["0x1000ced88", "41230491", "add x1, x26, #0x108"],
+    ["0x1000ced90", "e6e6ff97", "bl #0x1000c8928"],
+    ["0x1000fa64c", "5fa30094", "bl #0x1001233c8"],
+    ["0x1000fa654", "1b1509b9", "str w27, [x8, #0x914]"],
+    ["0x1000fa660", "28612439", "strb w8, [x9, #0x918]"],
+    ["0x1000cb7fc", "204100fd", "str d0, [x9, #0x80]"],
+    ["0x1000cb800", "218900bd", "str s1, [x9, #0x88]"],
+    ["0x1000cb804", "288d00b9", "str w8, [x9, #0x8c]"],
+    ["0x1000cb844", "ef901994", "bl #0x10072fc00"],
+    ["0x1000c19d4", "ef8f1994", "bl #0x100725990"],
+    ["0x1000c19dc", "d58f1994", "bl #0x100725930"]
+  ],
+  "brand_strings": [
+    ["0x100744550", "C"],
+    ["0x100744552", "ORE"],
+    ["0x100744556", "SET"]
+  ]
+}

@@ -198,12 +198,17 @@ final class CoreSetRuntimeCoordinator {
     private var submittedCanvasSize: CGSize?
     private var aimSuspendedForHost = false
     private var activateAfterAimStop = false
+    private var applicationDeactivated = false
     private var gameLaunchEpoch: UInt64 = 0
     private var gameLaunchPending = false
     private var pendingLaunchCompletion: ((String?) -> Void)?
     private var returnToLocalPending = false
     private var exitHUDRestorationPending = false
     private var remoteCleanupFailed = false
+    private var retainActionsForRemoteInactive: Bool {
+        applicationDeactivated && remoteHostingAdapter != nil &&
+            !returnToLocalPending && !exitHUDRestorationPending && !remoteCleanupFailed
+    }
     private var gameLaunchStatus: String?
     private var kernelOffsetsRunning = false
     private let homeActionProducerEpoch = UUID()
@@ -473,6 +478,7 @@ final class CoreSetRuntimeCoordinator {
 
     func activate() {
         guard !stopping, let scene else { return }
+        applicationDeactivated = false
         if returnToLocalPending { return }
         if aimSuspendedForHost {
             guard menu.resumeActionConsumers() else {
@@ -922,7 +928,20 @@ final class CoreSetRuntimeCoordinator {
     }
 
     func deactivate() {
-        guard !stopping, !aimSuspendedForHost else { return }
+        guard !stopping, !applicationDeactivated else { return }
+        // Resign-active and enter-background describe the same transition.
+        // The first notification refreshes readback for a new host generation.
+        applicationDeactivated = true
+        // The source app resigns active when the game opens. Valid remote
+        // windows still own the menu; this is not a hosting teardown.
+        if remoteHostingAdapter != nil, !returnToLocalPending,
+           !exitHUDRestorationPending, !remoteCleanupFailed {
+            host.setApplicationActive(false)
+            recordHostingDiagnostic("deactivate-remote-retained", epoch: gameLaunchEpoch)
+            hostChanged()
+            return
+        }
+        guard !aimSuspendedForHost else { return }
         aimSuspendedForHost = true
         menu.suspendActionConsumers { [weak self] confirmed in
             guard let self, !self.stopping else { return }
@@ -954,7 +973,9 @@ final class CoreSetRuntimeCoordinator {
         let canvasSize = host.logicalCanvasSize
         if !stopping, host.localSurfacesReady,
            submittedGeneration != host.renderGeneration {
-            if submittedGeneration != nil, !aimSuspendedForHost {
+            // Core's remote inactive callbacks do not stop its action timer.
+            // Other host/context changes retain the existing stop/rebuild path.
+            if submittedGeneration != nil, !aimSuspendedForHost, !retainActionsForRemoteInactive {
                 aimSuspendedForHost = true
                 menu.suspendActionConsumers { [weak self] confirmed in
                     guard let self, !self.stopping, confirmed else { return }

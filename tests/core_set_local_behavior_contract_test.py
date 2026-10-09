@@ -57,7 +57,9 @@ class LocalBehaviorContract(unittest.TestCase):
         self.assertIn("materialCatalog[category.rawValue]", observe)
         self.assertIn("selectedTab.accessibilityTraits.contains(.selected)", observe)
         select = body(self.menu, "func selectMaterialCategory(")
-        self.assertLess(select.index("materialGrid.contentOffset = .zero"), select.index("applyLocalDirectory()"))
+        self.assertLess(select.index("materialGrid.contentOffset = .zero"), select.index("DispatchQueue.main.async"))
+        self.assertNotIn("applyLocalDirectory()", select)
+        self.assertNotIn("localDirectoryReady", select)
         self.assertNotIn("editMaterials", select)
 
     def test_local_stop_matched_and_preferences_retained(self):
