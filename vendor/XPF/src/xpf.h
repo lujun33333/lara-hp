@@ -53,6 +53,19 @@ static inline int xpf_start_with_kernel_path_cleanup_on_failure(
     return result;
 }
 
+static inline uint64_t xpf_gett1szboot(void)
+{
+    uint64_t resolved = xpf_item_resolve("kernelConstant.T1SZ_BOOT");
+    if (resolved != 0) return resolved;
+
+    uint64_t pointerMask = xpf_item_resolve("kernelConstant.pointer_mask");
+    uint64_t t1szBoot = 0;
+    for (uint64_t bit = 64; bit > 0; bit--) {
+        if (pointerMask & (1ULL << (bit - 1))) t1szBoot++;
+    }
+    return t1szBoot;
+}
+
 typedef struct s_XPF {
 	int kernelFd;
 	void *mappedKernel;
