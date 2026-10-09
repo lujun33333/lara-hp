@@ -104,9 +104,9 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         cancellation.lock(); defer { cancellation.unlock() }
         return liveToken != nil && liveToken != token
     }
-    private func actionWorkerLive(_ requestToken: NSUUID, host: UInt64, revision: UInt64) -> Bool {
+    private func actionWorkerLive(_ requestToken: UUID, host: UInt64, revision: UInt64) -> Bool {
         cancellation.lock(); defer { cancellation.unlock() }
-        return liveToken?.requestID == (requestToken as UUID) &&
+        return liveToken?.requestID == requestToken &&
             liveHostGeneration == host && liveRevision == revision
     }
     @discardableResult
