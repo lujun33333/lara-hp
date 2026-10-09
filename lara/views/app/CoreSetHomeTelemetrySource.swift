@@ -97,7 +97,7 @@ enum CoreSetHomeProbePoint: Int, CaseIterable, Hashable {
     var requiredEvidence: String {
         switch self {
         case .runMode: return "C+12c int32 0/1; non-menu consumer; request/generation; switch and restore result"
-        case .coverMode: return "C+2f bool,C+130 int32; global/in-game/off; prior mode preserved on off; occlusion reset/stop result"
+        case .coverMode: return "C+2f bool,C+130 int32; read lease+generation; A/B 64d04 pointer/table reads; complete 0xa0 output layout/immediate provenance; callback owner/payload ABI; Embree builders; runtime row identity continuity and device stop/display receipt"
         case .kernelAction: return "4f00 gates; submitted task versus completed result; task generation; error/cancel/cleanup result"
         case .informationAction: return "538c host gate; info status 1/2/3; target identity; completed/failed result and cleanup"
         case .pageProgress: return "2fd1c acquire snapshot; executing/cancel/phase; UInt64 completed/total pages; request/generation/sequence"

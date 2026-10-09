@@ -7,6 +7,26 @@
 #include <cmath>
 #include <initializer_list>
 
+static NSString *const CSBodyFontName = @"OPPOSans-H";
+static NSString *const CSIconFontName = @"icomoon";
+
+static BOOL CSIconGlyphAllowed(NSString *text) {
+    if (text.length != 1) return NO;
+    static NSCharacterSet *glyphs;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        // Exact non-empty cmap entries in Core's embedded 2,600-byte IcoMoon.
+        glyphs = [NSCharacterSet characterSetWithCharactersInString:@"acersvwxz"];
+    });
+    return [glyphs characterIsMember:[text characterAtIndex:0]];
+}
+
+static UIFont *CSFont(CoreSetRenderFontRole role, CGFloat size) {
+    if (!std::isfinite(size) || size <= 0) return nil;
+    return [UIFont fontWithName:role == CoreSetRenderFontRoleIcon
+        ? CSIconFontName : CSBodyFontName size:size];
+}
+
 static CGPoint CSGlyphPoint(CGSize size, CGFloat x, CGFloat y) {
     return CGPointMake(x * size.width, size.height * (0.5 + y));
 }
@@ -129,35 +149,86 @@ static CALayer *CSBackGlyphLayer(CoreSetRenderCommand *command) {
     if ((self = [super init])) {
         _kind = kind; _rect = rect; _endpoint = endpoint; _color = color;
         _lineWidth = lineWidth; _filled = filled; _text = [text copy]; _fontSize = fontSize;
+        _cornerRadius = 0;
         _glyphStyle = -1;
         _styleRole = CoreSetRenderStyleRoleNone;
+        _fontRole = CoreSetRenderFontRoleBody;
         _horizontallyCenteredText = NO;
     }
     return self;
 }
-- (instancetype)styledWithRole:(CoreSetRenderStyleRole)role {
-    if ((_kind != CoreSetRenderKindLine && _kind != CoreSetRenderKindText) ||
-        role < CoreSetRenderStyleRoleNone || role > CoreSetRenderStyleRoleBotTeam) return self;
+- (CoreSetRenderCommand *)copyForRenderMutation {
     CoreSetRenderCommand *copy = [[CoreSetRenderCommand alloc]
         initWithKind:self.kind rect:self.rect endpoint:self.endpoint color:self.color
         lineWidth:self.lineWidth filled:self.isFilled text:self.text fontSize:self.fontSize];
-    copy->_styleRole = role;
+    copy->_localImageName = [_localImageName copy];
+    copy->_weaponID = _weaponID;
+    copy->_glyphStyle = _glyphStyle;
+    copy->_glyphAngle = _glyphAngle;
+    copy->_styleRole = _styleRole;
+    copy->_cornerRadius = _cornerRadius;
+    copy->_fontRole = _fontRole;
     copy->_horizontallyCenteredText = _horizontallyCenteredText;
+    copy->_textBackgroundColor = _textBackgroundColor;
+    copy->_gradientLeftColor = _gradientLeftColor;
+    copy->_gradientRightColor = _gradientRightColor;
+    copy->_textBackgroundHorizontalPadding = _textBackgroundHorizontalPadding;
+    copy->_textBackgroundVerticalPadding = _textBackgroundVerticalPadding;
+    return copy;
+}
+- (instancetype)styledWithRole:(CoreSetRenderStyleRole)role {
+    if ((_kind != CoreSetRenderKindLine && _kind != CoreSetRenderKindText) ||
+        role < CoreSetRenderStyleRoleNone || role > CoreSetRenderStyleRoleBotTeam) return self;
+    CoreSetRenderCommand *copy = [self copyForRenderMutation];
+    copy->_styleRole = role;
     return copy;
 }
 - (instancetype)centeredText {
     if (_kind != CoreSetRenderKindText || _horizontallyCenteredText) return self;
-    CoreSetRenderCommand *copy = [[CoreSetRenderCommand alloc]
-        initWithKind:self.kind rect:self.rect endpoint:self.endpoint color:self.color
-        lineWidth:self.lineWidth filled:self.isFilled text:self.text fontSize:self.fontSize];
-    copy->_styleRole = _styleRole;
+    CoreSetRenderCommand *copy = [self copyForRenderMutation];
     copy->_horizontallyCenteredText = YES;
+    return copy;
+}
+- (instancetype)roundedWithRadius:(CGFloat)radius {
+    if (_kind != CoreSetRenderKindRectangle || !std::isfinite(radius) ||
+        radius < 0 || radius > 256 || radius == _cornerRadius) return self;
+    CoreSetRenderCommand *copy = [self copyForRenderMutation];
+    copy->_cornerRadius = radius;
+    return copy;
+}
+- (instancetype)horizontalGradientFromColor:(UIColor *)leftColor
+                                     toColor:(UIColor *)rightColor {
+    if (_kind != CoreSetRenderKindRectangle || !_filled || _cornerRadius != 0 ||
+        !leftColor || !rightColor) return self;
+    CoreSetRenderCommand *copy = [self copyForRenderMutation];
+    copy->_gradientLeftColor = leftColor;
+    copy->_gradientRightColor = rightColor;
+    return copy;
+}
+- (instancetype)usingFontRole:(CoreSetRenderFontRole)role {
+    if (_kind != CoreSetRenderKindText || role < CoreSetRenderFontRoleBody ||
+        role > CoreSetRenderFontRoleIcon) return self;
+    CoreSetRenderCommand *copy = [self copyForRenderMutation];
+    copy->_fontRole = role;
+    return copy;
+}
+- (instancetype)backedTextWithColor:(UIColor *)color
+                  horizontalPadding:(CGFloat)horizontalPadding
+                    verticalPadding:(CGFloat)verticalPadding {
+    if (_kind != CoreSetRenderKindText || !color || !std::isfinite(horizontalPadding) ||
+        !std::isfinite(verticalPadding) || horizontalPadding < 0 || verticalPadding < 0 ||
+        horizontalPadding > 64 || verticalPadding > 64) return self;
+    CoreSetRenderCommand *copy = [self copyForRenderMutation];
+    copy->_textBackgroundColor = color;
+    copy->_textBackgroundHorizontalPadding = horizontalPadding;
+    copy->_textBackgroundVerticalPadding = verticalPadding;
     return copy;
 }
 @end
 
 static CGRect CSCenteredTextRect(CoreSetRenderCommand *command) {
-    UIFont *font = [UIFont systemFontOfSize:command.fontSize];
+    UIFont *font = CSFont(command.fontRole, command.fontSize);
+    if (!font) return CGRectNull;
     CGFloat measured = [(command.text ?: @"") sizeWithAttributes:@{NSFontAttributeName: font}].width;
     CoreSet::CenteredTextSpan span = {};
     if (!CoreSet::centeredTextSpan(CGRectGetMidX(command.rect), measured, &span)) return CGRectNull;
@@ -307,12 +378,29 @@ static uint64_t CSWeaponEpoch;
             std::isfinite(r.size.width) && std::isfinite(r.size.height) && r.size.width >= 0 && r.size.height >= 0 &&
             std::isfinite(command.endpoint.x) && std::isfinite(command.endpoint.y) &&
             std::isfinite(command.lineWidth) && command.lineWidth >= 0 && command.lineWidth <= 1024 &&
+            std::isfinite(command.cornerRadius) && command.cornerRadius >= 0 && command.cornerRadius <= 256 &&
             std::isfinite(command.fontSize) && command.fontSize > 0 && command.fontSize <= 512 && command.color != nil;
+        if (command.kind != CoreSetRenderKindRectangle && command.cornerRadius != 0) valid = NO;
+        const BOOL hasGradient = command.gradientLeftColor || command.gradientRightColor;
+        if (hasGradient)
+            valid = valid && command.kind == CoreSetRenderKindRectangle && command.isFilled &&
+                command.cornerRadius == 0 && command.gradientLeftColor && command.gradientRightColor;
         if (command.kind == CoreSetRenderKindText) {
-            valid = valid && command.text.length <= 4096;
+            valid = valid && command.text.length <= 4096 &&
+                command.fontRole >= CoreSetRenderFontRoleBody &&
+                command.fontRole <= CoreSetRenderFontRoleIcon &&
+                CSFont(command.fontRole, command.fontSize) != nil &&
+                (command.fontRole != CoreSetRenderFontRoleIcon || CSIconGlyphAllowed(command.text));
             if (valid && command.horizontallyCenteredText)
                 valid = !CGRectIsNull(CSCenteredTextRect(command));
-        } else if (command.horizontallyCenteredText) valid = NO;
+            valid = valid && std::isfinite(command.textBackgroundHorizontalPadding) &&
+                std::isfinite(command.textBackgroundVerticalPadding) &&
+                command.textBackgroundHorizontalPadding >= 0 &&
+                command.textBackgroundHorizontalPadding <= 64 &&
+                command.textBackgroundVerticalPadding >= 0 &&
+                command.textBackgroundVerticalPadding <= 64;
+        } else if (command.horizontallyCenteredText || command.textBackgroundColor != nil ||
+                   command.fontRole != CoreSetRenderFontRoleBody) valid = NO;
         if (command.kind == CoreSetRenderKindImage)
             valid = valid && (command.weaponID != 0
                 ? [CoreSetWeaponImageCatalog imageForWeaponID:command.weaponID] != nil
@@ -349,16 +437,33 @@ static uint64_t CSWeaponEpoch;
             [layers addObject:layer];
             continue;
         }
+        if (command.kind == CoreSetRenderKindRectangle && command.gradientLeftColor) {
+            CAGradientLayer *gradient = [CAGradientLayer layer];
+            gradient.frame = command.rect;
+            gradient.colors = @[(id)command.gradientLeftColor.CGColor,
+                                (id)command.gradientRightColor.CGColor];
+            gradient.startPoint = CGPointMake(0, 0.5);
+            gradient.endPoint = CGPointMake(1, 0.5);
+            [layers addObject:gradient];
+            continue;
+        }
         if (command.kind == CoreSetRenderKindText) {
-            CATextLayer *text = [CATextLayer layer];
-            text.frame = command.horizontallyCenteredText
+            UIFont *font = CSFont(command.fontRole, command.fontSize);
+            CGRect textRect = command.horizontallyCenteredText
                 ? CSCenteredTextRect(command) : command.rect;
+            if (command.textBackgroundColor) {
+                CALayer *background = [CALayer layer];
+                background.frame = CGRectInset(textRect,
+                    -command.textBackgroundHorizontalPadding,
+                    -command.textBackgroundVerticalPadding);
+                background.backgroundColor = command.textBackgroundColor.CGColor;
+                [layers addObject:background];
+            }
+            CATextLayer *text = [CATextLayer layer];
+            text.frame = textRect;
             text.string = command.text ?: @"";
             text.fontSize = command.fontSize;
-            if (command.horizontallyCenteredText) {
-                UIFont *font = [UIFont systemFontOfSize:command.fontSize];
-                text.font = (__bridge CFTypeRef)font.fontName;
-            }
+            text.font = (__bridge CFTypeRef)font.fontName;
             text.foregroundColor = command.color.CGColor;
             text.contentsScale = scale;
             text.truncationMode = kCATruncationEnd;
@@ -372,6 +477,9 @@ static uint64_t CSWeaponEpoch;
             [path addLineToPoint:command.endpoint];
         } else if (command.kind == CoreSetRenderKindEllipse) {
             path = [UIBezierPath bezierPathWithOvalInRect:command.rect];
+        } else if (command.cornerRadius > 0) {
+            path = [UIBezierPath bezierPathWithRoundedRect:command.rect
+                                             cornerRadius:command.cornerRadius];
         } else { path = [UIBezierPath bezierPathWithRect:command.rect]; }
         CAShapeLayer *shape = [CAShapeLayer layer];
         shape.path = path.CGPath;

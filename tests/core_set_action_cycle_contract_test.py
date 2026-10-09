@@ -117,7 +117,7 @@ class ActionCycleContractTests(unittest.TestCase):
             self.assertFalse(point["one_to_one_complete"])
             self.assertFalse(point["original_runtime_receipt_verified"])
             self.assertEqual(point["evidence_key"], "action-cycle/" + point["id"])
-            self.assertGreaterEqual(len(point["next_exact_edges"]), 3)
+            self.assertGreaterEqual(len(point["next_exact_edges"]), 2)
             self.assertIn("merge_slot", point["closed_reference_edges"])
             for storage in point["core_self_storage"]:
                 self.assertEqual(storage["owner"], "Core-self-configuration")

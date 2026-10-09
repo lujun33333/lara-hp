@@ -15,6 +15,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     private let routeDynamics = CoreSetV17ActionRouteDynamics()
     private var selectedActor: UInt64 = 0
     private var selectedGeneration: UInt64 = 0
+    private var selectedStartedAt: Double = 0
     private var timer: DispatchSourceTimer?
     private var recoilTimer: DispatchSourceTimer?
     private var readinessTimer: Timer?
@@ -326,8 +327,76 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             includeCounts: false, playerInformation: false, botInformation: false,
             includeWarningYaw: false, maximumDrawDistance: Double(distance))
     }
+    private func displayPoint(target: CoreSetWorldPoint,
+                              snapshot: CoreSetPlayerSnapshot) -> CGPoint? {
+        guard let camera = snapshot.cameraWorldPosition else { return nil }
+        let width = Double(snapshot.canvasSize.width), height = Double(snapshot.canvasSize.height)
+        let fov = Double(snapshot.cameraFieldOfViewDegrees)
+        guard width.isFinite, height.isFinite, width > 0, height > 0,
+              fov.isFinite, fov > 1, fov < 170 else { return nil }
+        let degrees = Double.pi / 180
+        let pitch = Double(snapshot.cameraPitchDegrees) * degrees
+        let yaw = Double(snapshot.cameraYawDegrees) * degrees
+        let roll = Double(snapshot.cameraRollDegrees) * degrees
+        let sp = sin(pitch), cp = cos(pitch)
+        let sy = sin(yaw), cy = cos(yaw)
+        let sr = sin(roll), cr = cos(roll)
+        let dx = Double(target.x - camera.x)
+        let dy = Double(target.y - camera.y)
+        let dz = Double(target.z - camera.z)
+        let depth = dx * cp * cy + dy * cp * sy + dz * sp
+        guard depth.isFinite, depth > 1 else { return nil }
+        let right = dx * (sr * sp * cy - cr * sy) +
+            dy * (sr * sp * sy + cr * cy) - dz * sr * cp
+        let up = dx * (sr * sy - cr * sp * cy) +
+            dy * (sr * cy - cr * sp * sy) + dz * cr * cp
+        let focal = (width / 2) / tan(fov * degrees / 2)
+        let x = width / 2 + focal * right / depth
+        let y = height / 2 - focal * up / depth
+        guard x.isFinite, y.isFinite else { return nil }
+        return CGPoint(x: CGFloat(x), y: CGFloat(y))
+    }
+    private func publishDisplayTarget(mark: CoreSetPlayerMark, target: CoreSetWorldPoint,
+                                      step: CoreSetBasicAimDelta,
+                                      snapshot: CoreSetPlayerSnapshot,
+                                      request: CoreSetApplyRequest<State>,
+                                      hostGeneration: UInt64, revision: UInt64) {
+        guard selectedActor != 0, selectedStartedAt.isFinite, selectedStartedAt >= 0,
+              let point = displayPoint(target: target, snapshot: snapshot) else {
+            CoreSetAimDisplayRecordStore.shared.clear()
+            return
+        }
+        let identity = CoreSetAimDisplaySourceIdentity(snapshotID: snapshot.snapshotID,
+            sessionGeneration: snapshot.sessionGeneration, processID: snapshot.processID,
+            imageBase: snapshot.imageBase, hostGeneration: hostGeneration,
+            actionRevision: revision, actionRequestID: request.token.requestID)
+        let predictedWorldPoint: CoreSetAimDisplayWorldPoint?
+        let predictedScreenPoint: CGPoint?
+        if let predicted = step.predictedWorldPoint,
+           let projected = displayPoint(target: predicted, snapshot: snapshot),
+           projected.x > 0, projected.y > 0,
+           projected.x < snapshot.canvasSize.width,
+           projected.y < snapshot.canvasSize.height {
+            predictedWorldPoint = CoreSetAimDisplayWorldPoint(
+                x: predicted.x, y: predicted.y, z: predicted.z)
+            predictedScreenPoint = projected
+        } else {
+            predictedWorldPoint = nil; predictedScreenPoint = nil
+        }
+        let record = CoreSetAimDisplayRecord(identity: identity,
+            actorAddress: selectedActor, candidateKey: selectedActor,
+            candidateStartedMonotonicSeconds: selectedStartedAt,
+            worldPoint: CoreSetAimDisplayWorldPoint(x: target.x, y: target.y, z: target.z),
+            screenPoint: point, predictedWorldPoint: predictedWorldPoint,
+            predictedScreenPoint: predictedScreenPoint, bot: mark.bot,
+            distanceMeters: mark.distanceUnitsDividedBy100,
+            captureStartedMonotonicSeconds: snapshot.captureStartedMonotonicSeconds,
+            captureCompletedMonotonicSeconds: snapshot.captureCompletedMonotonicSeconds)
+        CoreSetAimDisplayRecordStore.shared.publish(record)
+    }
     private func resetAimRuntime() {
-        dynamics.reset(); selectedActor = 0; selectedGeneration = 0
+        dynamics.reset(); selectedActor = 0; selectedGeneration = 0; selectedStartedAt = 0
+        CoreSetAimDisplayRecordStore.shared.clear()
     }
     private enum ActionSubmitResult { case idle, committed, failed(String) }
     private func submitMergedAction(snapshot: CoreSetPlayerSnapshot, aimStep: CoreSetBasicAimDelta?,
@@ -465,6 +534,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             actor = selected.actorAddress; target = fallback
             if selectedActor != actor || selectedGeneration != snapshot.sessionGeneration {
                 dynamics.reset(); selectedActor = actor; selectedGeneration = snapshot.sessionGeneration
+                selectedStartedAt = snapshot.captureCompletedMonotonicSeconds
             }
             guard dynamics.rememberTarget(fallback, actor: actor,
                 generation: snapshot.sessionGeneration, now: snapshot.captureCompletedMonotonicSeconds) else {
@@ -483,23 +553,30 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                 hostGeneration: hostGeneration, revision: revision, idleStatus: "范围内无目标，缓存已失效")
             return
         }
-        guard snapshot.marks.contains(where: { $0.actorAddress == actor && $0.actorWorldPosition != nil }) else {
+        guard let freshMark = snapshot.marks.first(where: {
+            $0.actorAddress == actor && $0.actorWorldPosition != nil
+        }) else {
+            CoreSetAimDisplayRecordStore.shared.clear()
             runRecoilFallback(snapshot: snapshot, aimRequest: request, recoilRequest: recoilRequest,
                 hostGeneration: hostGeneration, revision: revision,
                 idleStatus: "75ms目标缓存保持；fresh actor拒绝自瞄")
             return
         }
+        if selectedStartedAt == 0 { selectedStartedAt = snapshot.captureCompletedMonotonicSeconds }
         guard let camera = snapshot.cameraWorldPosition,
               let step = dynamics.plan(camera: camera, target: target,
                 actor: actor, publicationID: snapshot.snapshotID,
                 now: snapshot.captureCompletedMonotonicSeconds,
                 currentPitch: snapshot.controlPitchDegrees, currentYaw: snapshot.controlYawDegrees,
                 configuration: configuration) else {
+            CoreSetAimDisplayRecordStore.shared.clear()
             runRecoilFallback(snapshot: snapshot, aimRequest: request, recoilRequest: recoilRequest,
                 hostGeneration: hostGeneration, revision: revision,
                 idleStatus: "目标状态预热或采样间隔超限")
             return
         }
+        publishDisplayTarget(mark: freshMark, target: target, step: step, snapshot: snapshot,
+            request: request, hostGeneration: hostGeneration, revision: revision)
         switch submitMergedAction(snapshot: snapshot, aimStep: step, recoilRequest: recoilRequest,
             primaryToken: request.token, hostGeneration: hostGeneration,
             revision: revision, requireAimTrigger: true) {

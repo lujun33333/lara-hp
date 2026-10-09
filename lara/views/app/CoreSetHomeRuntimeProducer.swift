@@ -1,6 +1,46 @@
 import Darwin
 import Foundation
 
+// Shared identity for one local action and its field observations. Never a
+// receipt from the original Core runtime.
+final class CoreSetLocalHomeAction {
+    private static let generationLock = NSLock()
+    private static var lastGeneration: UInt64 = 0
+    let requestID = UUID()
+    let generation: UInt64
+    private let lock = NSLock()
+    private var lastSequence: UInt64 = 0
+    private var cancellationRequested = false
+
+    init() {
+        Self.generationLock.lock()
+        Self.lastGeneration = Self.lastGeneration == UInt64.max ? 1 : Self.lastGeneration + 1
+        generation = Self.lastGeneration
+        Self.generationLock.unlock()
+    }
+
+    func nextSequence() -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        lastSequence = lastSequence == UInt64.max ? 1 : lastSequence + 1
+        return lastSequence
+    }
+
+    func nextStamp() -> (sequence: UInt64, cancelled: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        lastSequence = lastSequence == UInt64.max ? 1 : lastSequence + 1
+        return (lastSequence, cancellationRequested)
+    }
+
+    func requestCancellation() {
+        lock.lock(); cancellationRequested = true; lock.unlock()
+    }
+
+    var isCancellationRequested: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancellationRequested
+    }
+}
+
 // Local, live owners for the work the current host actually performs.  These
 // deliberately never claim a Core v1.7 runtime receipt.
 struct CoreSetLocalFirmwareObservation {
@@ -32,34 +72,61 @@ final class CoreSetKernelCacheTransferOwner {
     private var downloadedBytes: UInt64 = 0
     private var totalBytes: UInt64 = 0
 
-    private func bump(_ value: inout UInt64) { value = value == UInt64.max ? 1 : value + 1 }
-
-    func begin(totalBytes: UInt64) {
+    func begin(totalBytes: UInt64, action: CoreSetLocalHomeAction) {
+        let stamp = action.nextStamp()
         lock.lock(); defer { lock.unlock() }
-        bump(&generation); requestID = UUID(); sequence = 1
+        generation = action.generation; requestID = action.requestID
+        sequence = stamp.sequence
         phase = 1; inFlight = true; ready = false; errorCode = 0
         stage = "local-kernelcache-copy"; message = nil
         downloadedBytes = 0; self.totalBytes = totalBytes
     }
 
-    func advance(downloadedBytes: UInt64, totalBytes: UInt64) {
+    func advance(downloadedBytes: UInt64, totalBytes: UInt64, action: CoreSetLocalHomeAction) {
+        let stamp = action.nextStamp()
         lock.lock(); defer { lock.unlock() }
-        guard inFlight, totalBytes == self.totalBytes,
+        guard inFlight, requestID == action.requestID, generation == action.generation,
+              !stamp.cancelled, stamp.sequence > sequence, totalBytes == self.totalBytes,
               downloadedBytes >= self.downloadedBytes, downloadedBytes <= totalBytes else { return }
-        self.downloadedBytes = downloadedBytes; bump(&sequence)
+        self.downloadedBytes = downloadedBytes; sequence = stamp.sequence
     }
 
-    func complete() {
+    @discardableResult
+    func complete(action: CoreSetLocalHomeAction) -> Bool {
+        let stamp = action.nextStamp()
         lock.lock(); defer { lock.unlock() }
-        guard inFlight, totalBytes > 0, downloadedBytes == totalBytes else { return }
-        phase = 5; inFlight = false; ready = true; errorCode = 0; bump(&sequence)
+        guard inFlight, requestID == action.requestID, generation == action.generation,
+              !stamp.cancelled, stamp.sequence > sequence,
+              totalBytes > 0, downloadedBytes == totalBytes else { return false }
+        phase = 5; inFlight = false; ready = true; errorCode = 0; sequence = stamp.sequence
+        return true
     }
 
-    func fail(code: Int32, message: String) {
+    func fail(code: Int32, message: String, action: CoreSetLocalHomeAction) {
+        let stamp = action.nextStamp()
         lock.lock(); defer { lock.unlock() }
-        guard inFlight else { return }
+        guard inFlight, requestID == action.requestID, generation == action.generation,
+              !stamp.cancelled, stamp.sequence > sequence else { return }
         phase = 6; inFlight = false; ready = false; errorCode = code
-        self.message = message; bump(&sequence)
+        self.message = message; sequence = stamp.sequence
+    }
+
+    func cancelRequested(action: CoreSetLocalHomeAction) {
+        let stamp = action.nextStamp()
+        lock.lock(); defer { lock.unlock() }
+        guard inFlight, requestID == action.requestID, generation == action.generation,
+              stamp.cancelled, stamp.sequence > sequence else { return }
+        phase = 7; ready = false; message = "本机复制取消已请求"
+        sequence = stamp.sequence
+    }
+
+    func stoppedAfterCancellation(action: CoreSetLocalHomeAction) {
+        let stamp = action.nextStamp()
+        lock.lock(); defer { lock.unlock() }
+        guard inFlight, requestID == action.requestID, generation == action.generation,
+              stamp.cancelled, stamp.sequence > sequence else { return }
+        phase = 8; inFlight = false; ready = false
+        message = "本机复制已停止"; sequence = stamp.sequence
     }
 
     func snapshot() -> CoreSetLocalFirmwareObservation {
@@ -88,37 +155,68 @@ final class CoreSetKernelInformationOwner {
     private var status: Int32 = 0
     private var message: String?
 
-    private func bump(_ value: inout UInt64) { value = value == UInt64.max ? 1 : value + 1 }
-
-    func beginResolve() {
+    @discardableResult
+    func beginResolve(action: CoreSetLocalHomeAction) -> Bool {
+        let stamp = action.nextStamp()
         lock.lock(); defer { lock.unlock() }
-        bump(&generation); requestID = UUID(); sequence = 1
+        guard status != 1, !stamp.cancelled else { return false }
+        generation = action.generation; requestID = action.requestID
+        sequence = stamp.sequence
         status = 1; message = "正在解析本机 kernelcache"
+        return true
     }
 
-    func didResolveArtifact() {
+    func didResolveArtifact(action: CoreSetLocalHomeAction) {
+        let stamp = action.nextStamp()
         lock.lock(); defer { lock.unlock() }
-        guard status == 1 else { return }
-        message = "kernelcache 已读取，正在验证偏移"; bump(&sequence)
+        guard status == 1, requestID == action.requestID, generation == action.generation,
+              !stamp.cancelled, stamp.sequence > sequence else { return }
+        message = "kernelcache 已读取，正在验证偏移"; sequence = stamp.sequence
     }
 
-    func completeValidation() {
+    @discardableResult
+    func completeValidation(action: CoreSetLocalHomeAction) -> Bool {
+        let stamp = action.nextStamp()
         lock.lock(); defer { lock.unlock() }
-        guard status == 1 else { return }
-        status = 2; message = "本机内核偏移已验证"; bump(&sequence)
+        guard status == 1, requestID == action.requestID, generation == action.generation,
+              !stamp.cancelled, stamp.sequence > sequence else { return false }
+        status = 2; message = "本机内核偏移已验证"; sequence = stamp.sequence
+        return true
     }
 
-    func failValidation(_ reason: String) {
+    func failValidation(_ reason: String, action: CoreSetLocalHomeAction) {
+        let stamp = action.nextStamp()
         lock.lock(); defer { lock.unlock() }
-        guard status == 1 else { return }
-        status = 3; message = reason; bump(&sequence)
+        guard status == 1, requestID == action.requestID, generation == action.generation,
+              !stamp.cancelled, stamp.sequence > sequence else { return }
+        status = 3; message = reason; sequence = stamp.sequence
     }
 
-    func publishCachedValidation() {
+    @discardableResult
+    func publishCachedValidation(action: CoreSetLocalHomeAction) -> Bool {
+        let stamp = action.nextStamp()
         lock.lock(); defer { lock.unlock() }
-        guard status != 1 else { return }
-        bump(&generation); requestID = UUID(); sequence = 1
+        guard status != 1, !stamp.cancelled else { return false }
+        generation = action.generation; requestID = action.requestID
+        sequence = stamp.sequence
         status = 2; message = "使用已验证的本机内核偏移"
+        return true
+    }
+
+    func cancelRequested(action: CoreSetLocalHomeAction) {
+        let stamp = action.nextStamp()
+        lock.lock(); defer { lock.unlock() }
+        guard status == 1, requestID == action.requestID, generation == action.generation,
+              stamp.cancelled, stamp.sequence > sequence else { return }
+        status = 4; message = "获取信息取消已请求"; sequence = stamp.sequence
+    }
+
+    func stoppedAfterCancellation(action: CoreSetLocalHomeAction) {
+        let stamp = action.nextStamp()
+        lock.lock(); defer { lock.unlock() }
+        guard status == 4, requestID == action.requestID, generation == action.generation,
+              stamp.cancelled, stamp.sequence > sequence else { return }
+        message = "获取信息已停止"; sequence = stamp.sequence
     }
 
     func snapshot() -> CoreSetLocalInformationObservation {
@@ -170,7 +268,6 @@ final class CoreSetHomeRuntimeProducer: CoreSetHomeReferenceObservationProvider 
     private let supportClass: CoreSetV17SupportClass
     private var stopped = false
     private var observationSequences: [CoreSetHomeObservationField: UInt64] = [:]
-    private var darkSwordRequests: [CoreSetHomeObservationField: (key: String, id: UUID)] = [:]
 
     init(manager: laramgr = .shared) {
         self.manager = manager
@@ -182,12 +279,6 @@ final class CoreSetHomeRuntimeProducer: CoreSetHomeReferenceObservationProvider 
         let next = old == UInt64.max ? 1 : old + 1
         observationSequences[field] = next
         return next
-    }
-
-    private func requestID(_ field: CoreSetHomeObservationField, request: UInt64, generation: UInt64) -> UUID {
-        let key = "\(request)/\(generation)"
-        if let current = darkSwordRequests[field], current.key == key { return current.id }
-        let id = UUID(); darkSwordRequests[field] = (key, id); return id
     }
 
     private func identity(_ field: CoreSetHomeObservationField, hostGeneration: UInt64) -> CoreSetHomeObservationIdentity {
@@ -220,12 +311,19 @@ final class CoreSetHomeRuntimeProducer: CoreSetHomeReferenceObservationProvider 
             environmentSnapshot.environment = "环境已就绪"
         } else if firmware.phase == 6 || information.status == 3 {
             environmentSnapshot.environment = "环境适配失败"
+        } else if firmware.phase == 7 || firmware.phase == 8 || information.status == 4 {
+            environmentSnapshot.environment = "环境适配已停止"
         } else {
             environmentSnapshot.environment = "等待授权后适配"
         }
+        let environmentUsesInformation = information.status != 0 &&
+            (information.generation > firmware.generation ||
+             (information.generation == firmware.generation && information.sequence >= firmware.sequence))
         fields[.environment] = field(.environment, hostGeneration: hostGeneration,
-            requestID: firmware.requestID, generation: firmware.generation,
-            nativeSequence: firmware.sequence, snapshot: environmentSnapshot)
+            requestID: environmentUsesInformation ? information.requestID : firmware.requestID,
+            generation: environmentUsesInformation ? information.generation : firmware.generation,
+            nativeSequence: environmentUsesInformation ? information.sequence : firmware.sequence,
+            snapshot: environmentSnapshot)
 
         var informationSnapshot = CoreSetHomeSnapshot()
         let base: String
@@ -233,7 +331,7 @@ final class CoreSetHomeRuntimeProducer: CoreSetHomeReferenceObservationProvider 
         case 1: base = "正在获取..."
         case 2: base = "获取成功"
         case 3: base = "获取失败"
-        case 4: base = "信息已失效"
+        case 4: base = "获取已取消"
         default: base = "等待获取"
         }
         informationSnapshot.information = information.message.map { "\(base)（\($0)）" } ?? base
@@ -247,23 +345,23 @@ final class CoreSetHomeRuntimeProducer: CoreSetHomeReferenceObservationProvider 
             var stageSnapshot = CoreSetHomeSnapshot()
             stageSnapshot.stage = stage.text
             stageSnapshot.stageState = CoreSetHomeStageState(text: stage.text, phase: stage.phase,
-                nativeSequence: stage.sequence, localEquivalent: true)
+                nativeSequence: stage.actionSequence, localEquivalent: true)
             fields[.stage] = field(.stage, hostGeneration: hostGeneration,
-                requestID: requestID(.stage, request: stage.requestID, generation: stage.generation),
-                generation: stage.generation, nativeSequence: stage.sequence, snapshot: stageSnapshot)
+                requestID: stage.actionRequestID,
+                generation: stage.actionGeneration, nativeSequence: stage.actionSequence, snapshot: stageSnapshot)
         }
 
         if let page = manager.dsPageObservation, page.totalPages > 0, page.completedPages <= page.totalPages {
             var pageSnapshot = CoreSetHomeSnapshot()
             let state = CoreSetHomePageProgressState(executing: page.executing, cancelled: page.cancelled,
                 phase: page.phase, completedPages: page.completedPages, totalPages: page.totalPages,
-                resultCode: page.resultCode, nativeSequence: page.sequence, localEquivalent: true)
+                resultCode: page.resultCode, nativeSequence: page.actionSequence, localEquivalent: true)
             pageSnapshot.executing = page.executing; pageSnapshot.status = Int(page.phase)
             pageSnapshot.completedPages = page.completedPages; pageSnapshot.totalPages = page.totalPages
             pageSnapshot.pageProgressState = state
             fields[.pageProgress] = field(.pageProgress, hostGeneration: hostGeneration,
-                requestID: requestID(.pageProgress, request: page.requestID, generation: page.generation),
-                generation: page.generation, nativeSequence: page.sequence, snapshot: pageSnapshot)
+                requestID: page.actionRequestID,
+                generation: page.actionGeneration, nativeSequence: page.actionSequence, snapshot: pageSnapshot)
         }
 
         if firmware.totalBytes > 0, firmware.downloadedBytes <= firmware.totalBytes {
@@ -285,7 +383,7 @@ final class CoreSetHomeRuntimeProducer: CoreSetHomeReferenceObservationProvider 
 
     func stopObservation() -> Bool {
         precondition(Thread.isMainThread)
-        stopped = true; observationSequences.removeAll(); darkSwordRequests.removeAll()
+        stopped = true; observationSequences.removeAll()
         return stopped
     }
 }

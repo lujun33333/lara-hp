@@ -161,11 +161,15 @@ class KernelMappedReadTransportContract(unittest.TestCase):
             ("lara/views/app/CoreSetPlayerConsumer.swift", "func shutdownReadSession()"),
             ("lara/views/app/CoreSetMaterialConsumer.swift", "func shutdownReadSession()"),
             ("lara/views/app/CoreSetRadarConsumer.swift", "func shutdownReadSession()"),
-            ("lara/views/app/CoreSetAimPreviewConsumer.swift", "func shutdown()"),
         ):
             shutdown = body(read(relative), signature)
             self.assertIn("cleanup.complete", shutdown, relative)
             self.assertNotIn("cleanup.taskPortReleased && cleanup.generationAdvanced", shutdown)
+        preview = read("lara/views/app/CoreSetAimPreviewConsumer.swift")
+        preview_shutdown = body(preview, "func shutdown()")
+        self.assertNotIn("CoreSetReadSession", preview)
+        self.assertIn("store.clear()", preview_shutdown)
+        self.assertIn("return true", preview_shutdown)
         probe = read("lara/views/app/CoreSetActionReadOnlyProbe.swift")
         self.assertEqual(probe.count("cleanup.complete"), 2)
         self.assertNotIn("cleanup.taskPortReleased && cleanup.generationAdvanced", probe)

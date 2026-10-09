@@ -105,7 +105,7 @@ class SelectionContracts(unittest.TestCase):
     def test_fixture_has_closed_reference_edges_and_fewer_unresolved_edges(self):
         evidence = json.loads((ROOT / "tests/fixtures/core_set_v17_action_cycle_evidence.json").read_text(encoding="utf-8"))
         self.assertEqual(evidence["schema_version"], 3)
-        self.assertEqual(sum(len(point["next_exact_edges"]) for point in evidence["points"]), 113)
+        self.assertEqual(sum(len(point["next_exact_edges"]) for point in evidence["points"]), 82)
         edges = evidence["selection_route_history_evidence"]
         self.assertEqual(len(edges["closed_edges"]), 10)
         self.assertFalse(edges["write_ready"])
@@ -134,4 +134,4 @@ if __name__ == "__main__":
     ARGS = parser.parse_args()
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(SelectionContracts))
     if not result.wasSuccessful(): raise SystemExit(1)
-    print("LIMIT: offline exact-edge parity only; no current game candidate/stop restoration receipt")
+    print("LIMIT: offline exact-edge parity only; no current-game candidate authority or concurrent effect receipt")

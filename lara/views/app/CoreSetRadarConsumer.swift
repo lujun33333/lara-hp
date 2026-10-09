@@ -164,7 +164,7 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
                 }
                 let id = UUID(uuidString: snapshot.snapshotID.uuidString) ?? UUID()
                 self.expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
-                    " radarCommands=\(commands.count) warningCommands=\(warning.count) warningText=name-weapon-rounded-m warningLayout=local-subset yawFreshness=capture-stable-only"
+                    " radarCommands=\(commands.count) warningCommands=\(warning.count) warningText=name-weapon-rounded-m warningLayout=core17-centered-top14-row152-rounded-background-border-accent yawFreshness=capture-stable-only"
                 self.submit(commands, warning: warning, token: token,
                     revision: expectedRevision, canvas: canvas,
                     snapshotID: id, sessionGeneration: snapshot.sessionGeneration,
@@ -277,7 +277,26 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
     private func renderWarning(_ snapshot: CoreSetPlayerSnapshot, on size: CGSize) -> [CoreSetRenderCommand]? {
         guard settings.warningEnabled == true else { return [] }
         guard let range = settings.warningRange.value,
-              let textSize = settings.warningTextSize.value else { return nil }
+              let configuredTextSize = settings.warningTextSize.value else { return nil }
+        // Core v1.7 clamps +0x10c to 10...200, starts the warning stack at
+        // max(canvasHeight * .14, fontSize), advances by 1.52 * fontSize,
+        // measures the complete row and centers it horizontally.
+        let textSize = min(200, max(10, configuredTextSize))
+        let fontSize = CGFloat(textSize)
+        let topAnchor = max(size.height * 0.14, fontSize)
+        let rowStep = fontSize * 1.52
+        let horizontalPadding = min(CGFloat(18), max(CGFloat(5), fontSize * 0.24))
+        let verticalPadding = fontSize * 0.16
+        let cornerRadius = min(CGFloat(16), max(CGFloat(4), fontSize * 0.22))
+        let borderWidth = max(CGFloat(1), fontSize * 0.025)
+        let accentWidth = max(CGFloat(3), fontSize * 0.055)
+        let nativeBackground = UIColor(red: 12 / 255, green: 16 / 255,
+                                       blue: 24 / 255, alpha: 150 / 255)
+        let nativeBorder = UIColor(red: 255 / 255, green: 120 / 255,
+                                   blue: 132 / 255, alpha: 105 / 255)
+        let nativeAccent = UIColor(red: 255 / 255, green: 92 / 255,
+                                   blue: 108 / 255, alpha: 235 / 255)
+        guard let bodyFont = UIFont(name: "OPPOSans-H", size: fontSize) else { return nil }
         let hits = snapshot.marks.filter { mark in
             guard !(settings.ignoreBots == true && mark.bot),
                   let yaw = mark.warningYawDegrees?.doubleValue,
@@ -287,17 +306,37 @@ final class CoreSetRadarConsumer: CoreSetFeatureConsumer {
             return CoreSetWarningAngleMatches(mark.radarCameraDelta, yaw)
         } // Core's warning vector preserves actor traversal order, not nearest-first order.
         var result: [CoreSetRenderCommand] = []
-        for mark in hits.prefix(32) {
-            let y = CGFloat(12 + result.count * (textSize + 4))
-            let height = CGFloat(textSize + 4)
-            if y + height > size.height { break }
+        for (index, mark) in hits.prefix(32).enumerated() {
+            let y = topAnchor + CGFloat(index) * rowStep
+            if y + fontSize > size.height { break }
             guard let text = CoreSetReferenceWarningText(mark.playerName, mark.bot, mark.weaponName,
                                                         mark.weaponID, mark.distanceUnitsDividedBy100) else { return nil }
+            let measured = (text as NSString).size(withAttributes: [.font: bodyFont])
+            guard measured.width.isFinite, measured.height.isFinite,
+                  measured.width >= 0, measured.height > 0 else { return nil }
+            let textHeight = max(fontSize, measured.height)
+            let outerRect = CGRect(x: size.width / 2 - measured.width / 2 - horizontalPadding,
+                                   y: y - verticalPadding,
+                                   width: measured.width + horizontalPadding * 2,
+                                   height: textHeight + verticalPadding * 2)
+            result.append(CoreSetRenderCommand(kind: .rectangle, rect: outerRect,
+                endpoint: .zero, color: nativeBackground, lineWidth: 0, filled: true,
+                text: nil, fontSize: fontSize).rounded(radius: cornerRadius))
+            result.append(CoreSetRenderCommand(kind: .rectangle, rect: outerRect,
+                endpoint: .zero, color: nativeBorder, lineWidth: borderWidth, filled: false,
+                text: nil, fontSize: fontSize).rounded(radius: cornerRadius))
+            let accentRect = CGRect(x: outerRect.minX, y: outerRect.minY,
+                                    width: accentWidth, height: outerRect.height)
+            result.append(CoreSetRenderCommand(kind: .rectangle, rect: accentRect,
+                endpoint: .zero, color: nativeAccent, lineWidth: 0, filled: true,
+                text: nil, fontSize: fontSize).rounded(radius: min(cornerRadius, accentWidth / 2)))
             result.append(CoreSetRenderCommand(kind: .text,
-                rect: CGRect(x: 12, y: y, width: max(0, size.width - 24), height: height),
+                rect: CGRect(x: 4, y: y, width: max(0, size.width - 8), height: fontSize),
                 endpoint: .zero, color: .systemRed, lineWidth: 0, filled: false,
                 text: text,
-                fontSize: CGFloat(textSize)))
+                fontSize: CGFloat(textSize))
+                .usingFont(.body)
+                .centeredText())
         }
         return result
     }

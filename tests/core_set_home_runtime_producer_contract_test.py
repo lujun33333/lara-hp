@@ -1,5 +1,6 @@
 """Source contracts for the live local home producers; no device/network execution."""
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,22 @@ def require_owner_contract(telemetry, producer):
         "func stopObservation() -> Bool",
     ):
         assert marker in producer
+
+
+def owner_methods(source):
+    for match in re.finditer(r"\bfunc (\w+)\([^\n]*", source):
+        opening = source.find("{", match.start())
+        if opening < 0:
+            continue
+        depth = 0
+        for position in range(opening, len(source)):
+            if source[position] == "{":
+                depth += 1
+            elif source[position] == "}":
+                depth -= 1
+                if depth == 0:
+                    yield match.group(1), source[opening:position + 1]
+                    break
 
 
 class HomeRuntimeProducerContract(unittest.TestCase):
@@ -80,17 +97,17 @@ class HomeRuntimeProducerContract(unittest.TestCase):
 
     def test_kernelcache_progress_uses_fstat_and_actual_written_bytes(self):
         for marker in ("fstat(src, &sourceStat)", "expectedBytes = UInt64(sourceStat.st_size)",
-                       "transferOwner.begin(totalBytes: expectedBytes)",
+                       "transferOwner.begin(totalBytes: expectedBytes, action: action)",
                        "UInt64(totalBytes + written)", "UInt64(totalBytes) != expectedBytes",
-                       "transferOwner.complete()"):
+                       "transferOwner.complete(action: action)"):
             self.assertIn(marker, self.fetch)
         self.assertNotIn('stage = "ota-download"', self.fetch)
         self.assertIn("本机 kernelcache 复制进度（Core 同位本地等价）", self.menu)
 
     def test_information_is_actual_offset_lifecycle_but_not_original_receipt(self):
-        for marker in ("CoreSetKernelInformationOwner.shared.beginResolve()",
-                       "CoreSetKernelInformationOwner.shared.didResolveArtifact()",
-                       "CoreSetKernelInformationOwner.shared.completeValidation()",
+        for marker in ("CoreSetKernelInformationOwner.shared.beginResolve(action: action)",
+                       "CoreSetKernelInformationOwner.shared.didResolveArtifact(action: action)",
+                       "CoreSetKernelInformationOwner.shared.completeValidation(action: action)",
                        "CoreSetKernelInformationOwner.shared.failValidation"):
             self.assertIn(marker, self.coordinator)
         for marker in ("kernelcache 已读取，正在验证偏移", "本机内核偏移已验证",
@@ -114,6 +131,59 @@ class HomeRuntimeProducerContract(unittest.TestCase):
         for marker in ("startHomeKernelAction", "startHomeInformationAction",
                        ".homeKernelAction", ".homeInformationAction"):
             self.assertIn(marker, self.menu)
+
+    def test_one_local_action_identity_flows_to_its_fields_and_receipts(self):
+        for marker in ("final class CoreSetLocalHomeAction", "let requestID = UUID()",
+                       "let generation: UInt64", "func nextSequence() -> UInt64",
+                       "action.nextStamp()", "originalRuntimeReceipt: false"):
+            self.assertIn(marker, self.producer)
+        for marker in ("requestID: action.requestID", "nativeGeneration: action.generation",
+                       "manager.run(action: action)", "fetchkcache(action: action)",
+                       "CoreSetKernelInformationOwner.shared.beginResolve(action: action)",
+                       "CoreSetKernelInformationOwner.shared.completeValidation(action: action)"):
+            self.assertIn(marker, self.coordinator)
+        for marker in ("actionRequestID: action.requestID",
+                       "actionGeneration: action.generation",
+                       "actionSequence: action.nextSequence()"):
+            self.assertIn(marker, self.manager)
+        for marker in ("requestID: stage.actionRequestID", "generation: stage.actionGeneration",
+                       "nativeSequence: stage.actionSequence", "requestID: page.actionRequestID",
+                       "generation: page.actionGeneration", "nativeSequence: page.actionSequence"):
+            self.assertIn(marker, self.producer)
+        self.assertNotIn("darkSwordRequests", self.producer)
+
+    def test_stop_and_cancellation_are_fail_closed(self):
+        for marker in ("action.requestCancellation()", "phase: .stopping",
+                       "phase: .stopFailed", "errorCode: -2"):
+            self.assertIn(marker, self.coordinator)
+        for marker in ("CoreSetKernelInformationOwner.shared.cancelRequested(action: action)",
+                       "CoreSetKernelCacheTransferOwner.shared.cancelRequested(action: action)",
+                       "CoreSetKernelInformationOwner.shared.stoppedAfterCancellation(action: action)"):
+            self.assertIn(marker, self.coordinator)
+        for marker in ("if action.isCancellationRequested { return false }",
+                       "transferOwner.stoppedAfterCancellation(action: action)",
+                       "unlink(outpath)"):
+            self.assertIn(marker, self.fetch)
+        self.assertIn("本机 kernelcache 复制进度（Core 同位本地等价）", self.menu)
+        self.assertNotIn('stage = "ota-download"', self.producer)
+        self.assertIn("[.completed, .failed, .stopped, .stopFailed].contains(phase)",
+                      self.coordinator)
+
+    def test_owner_lock_never_nests_action_lock(self):
+        checked = 0
+        for name, body in owner_methods(self.producer):
+            if name not in {"begin", "advance", "complete", "fail", "cancelRequested",
+                            "stoppedAfterCancellation", "beginResolve", "didResolveArtifact",
+                            "completeValidation", "failValidation", "publishCachedValidation"}:
+                continue
+            self.assertIn("let stamp = action.nextStamp()", body, name)
+            self.assertLess(body.index("let stamp = action.nextStamp()"),
+                            body.index("lock.lock()"), name)
+            locked = body[body.index("lock.lock()"):]
+            self.assertNotIn("action.nextSequence()", locked, name)
+            self.assertNotIn("action.isCancellationRequested", locked, name)
+            checked += 1
+        self.assertEqual(checked, 13)
 
 
 if __name__ == "__main__":

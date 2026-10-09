@@ -17,6 +17,10 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
 // Low eight bytes of c4af8 result+0x8, staged by c3318 as c571c's next
 // sample key. This is a float bit-pattern key, not an actor address.
 @property(nonatomic, readonly) uint64_t geometrySampleKey;
+// Core c4af8 result+0x38/+0x3c/+0x40.  Present only when the selected
+// scene's C+0x17c prediction interval is positive; this remains a local
+// calculated world point and grants no target-write authority.
+@property(nonatomic, strong, readonly, nullable) CoreSetWorldPoint *predictedWorldPoint;
 + (double)circleRadiusForCanvasWidth:(double)width height:(double)height size:(NSInteger)size
     NS_SWIFT_NAME(circleRadius(canvasWidth:height:size:));
 + (nullable CoreSetPlayerMark *)selectFromSnapshot:(CoreSetPlayerSnapshot *)snapshot

@@ -40,15 +40,21 @@ def test_kernel_and_information_actions_publish_typed_lifecycle_results():
                   "ready ? .completed : .failed"):
         assert token in kernel, token
     information = body(COORDINATOR, "private func performHomeInformationAction(")
-    for token in ("beginResolve()", "fetchkcache()", "fetched && dlkcache()",
-                  "completeValidation()", "failValidation",
+    for token in ("beginResolve(action: action)", "fetchkcache(action: action)",
+                  "fetched && !action.isCancellationRequested && dlkcache()",
+                  "completeValidation(action: action)", "failValidation",
+                  "self.kernelOffsetsRunning = false",
                   ".informationAction, phase: .requested",
                   ".informationAction, phase: .running",
-                  "loaded ? .completed : .failed"):
+                  "validated ? .completed : .failed"):
         assert token in information, token
+    assert information.index("self.kernelOffsetsRunning = false") < information.index(
+        "if action.isCancellationRequested")
+    assert information.index("self.kernelOffsetsRunning = false") < information.index(
+        "guard !self.stopping")
     receipt = body(COORDINATOR, "private func recordHomeAction(")
-    for token in ("producerEpoch: homeActionProducerEpoch", "requestID: request",
-                  "sequence: sequence", "observedStatus: status", "errorCode: errorCode"):
+    for token in ("producerEpoch: homeActionProducerEpoch", "requestID: action.requestID",
+                  "sequence: action.nextSequence()", "observedStatus: status", "errorCode: errorCode"):
         assert token in receipt, token
 
 
@@ -58,4 +64,3 @@ def test_home_status_uses_action_owner_state_and_hosted_metal_stays_live():
     assert "manager.hasOffsets && information.status == 2" in observation
     assert "firmware.phase == 6 || information.status == 3" in observation
     assert "return foreground && metalAvailable && !crossApplicationHosted" in LIFECYCLE
-

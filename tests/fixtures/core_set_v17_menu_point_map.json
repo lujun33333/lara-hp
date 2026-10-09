@@ -24,7 +24,15 @@
     "home_producer_probe": {
       "tool": "tools/core_set_v17_home_producer_probe.py",
       "source_contract": "tests/core_set_home_scheduler_contract_test.py",
-      "points": ["v17-000", "v17-001", "v17-002", "v17-003", "v17-009", "v17-010", "v17-029"],
+      "points": [
+        "v17-000",
+        "v17-001",
+        "v17-002",
+        "v17-003",
+        "v17-009",
+        "v17-010",
+        "v17-029"
+      ],
       "runtime_insertion": "CoreSetRuntimeCoordinator.recordHomeProducerProbeEvent",
       "scope": "diagnostic-only; no action consumer or progress provider attached",
       "original_runtime_receipt_verified": false
@@ -33,7 +41,17 @@
       "tool": "tools/core_set_v17_home_producer_probe.py",
       "entry": "--current-sources; probe_current_repository/current_source_evidence",
       "source_contract": "tests/core_set_home_scheduler_contract_test.py",
-      "points": ["v17-000", "v17-001", "v17-002", "v17-003", "v17-005", "v17-006", "v17-008", "v17-009", "v17-010"],
+      "points": [
+        "v17-000",
+        "v17-001",
+        "v17-002",
+        "v17-003",
+        "v17-005",
+        "v17-006",
+        "v17-008",
+        "v17-009",
+        "v17-010"
+      ],
       "evidence": "current UTF8 source hashes + exact caller line/anchor + all lara Swift provider binding candidates; reference30 roots/244 words replay separately",
       "scope": "current source callers plus default-bound local-equivalent producers for v17-005/006/008/009/010; no claim that these are Core QXA107/native runtime receipts or opaque external Partial archive internals",
       "original_runtime_receipt_verified": false,
@@ -42,8 +60,25 @@
     "local_observation_receipts": {
       "source_contract": "tests/core_set_local_observation_receipt_contract_test.py",
       "cadence_math_contract": "tests/core_set_presentation_cadence_test.cpp",
-      "host_palette_points": ["v17-014", "v17-022", "v17-023", "v17-024", "v17-025", "v17-026", "v17-027", "v17-028"],
-      "current_live_home_points": ["v17-004", "v17-005", "v17-006", "v17-007", "v17-008", "v17-009", "v17-010"],
+      "host_palette_points": [
+        "v17-014",
+        "v17-022",
+        "v17-023",
+        "v17-024",
+        "v17-025",
+        "v17-026",
+        "v17-027",
+        "v17-028"
+      ],
+      "current_live_home_points": [
+        "v17-004",
+        "v17-005",
+        "v17-006",
+        "v17-007",
+        "v17-008",
+        "v17-009",
+        "v17-010"
+      ],
       "unbound_reference_status_points": [],
       "reference_provider_protocol": "CoreSetHomeReferenceObservationProvider.readObservation(hostGeneration:)",
       "reference_provider_binding": "CoreSetRuntimeCoordinator defaults to CoreSetHomeRuntimeProducer and binds it through CoreSetHomeTelemetrySource; local-equivalent only",
@@ -55,8 +90,49 @@
       "tool": "tools/core_set_v17_local_behavior_probe.py",
       "source_contract": "tests/core_set_local_behavior_contract_test.py",
       "math_contract": "tests/core_set_performance_metrics_test.cpp",
-      "source_same_meaning_local_contract_points": ["v17-011", "v17-012", "v17-013", "v17-015", "v17-016", "v17-017", "v17-018", "v17-019", "v17-020", "v17-021", "v17-030", "v17-031", "v17-032", "v17-070", "v17-071", "v17-072", "v17-073", "v17-074", "v17-075", "v17-076", "v17-077", "v17-078", "v17-079", "v17-080", "v17-081", "v17-082"],
-      "remaining_local_or_observation_points": ["v17-004", "v17-005", "v17-006", "v17-007", "v17-008", "v17-014", "v17-022", "v17-023", "v17-024", "v17-025", "v17-026", "v17-027", "v17-028"],
+      "source_same_meaning_local_contract_points": [
+        "v17-011",
+        "v17-012",
+        "v17-013",
+        "v17-015",
+        "v17-016",
+        "v17-017",
+        "v17-018",
+        "v17-019",
+        "v17-020",
+        "v17-021",
+        "v17-030",
+        "v17-031",
+        "v17-032",
+        "v17-070",
+        "v17-071",
+        "v17-072",
+        "v17-073",
+        "v17-074",
+        "v17-075",
+        "v17-076",
+        "v17-077",
+        "v17-078",
+        "v17-079",
+        "v17-080",
+        "v17-081",
+        "v17-082"
+      ],
+      "remaining_local_or_observation_points": [
+        "v17-004",
+        "v17-005",
+        "v17-006",
+        "v17-007",
+        "v17-008",
+        "v17-014",
+        "v17-022",
+        "v17-023",
+        "v17-024",
+        "v17-025",
+        "v17-026",
+        "v17-027",
+        "v17-028"
+      ],
       "scope": "same-meaning local source contracts for theme/category-navigation/own-process metric quantity; floating menu component and home status are NOT full original producers",
       "original_runtime_receipt_verified": false,
       "device_effect_verified": false
@@ -228,18 +304,18 @@
         "stop": "terminal action receipt clears local request; original cancellation/rollback parity remains unresolved"
       }
     },
-    "missing_aim": {
+    "aim": {
       "source": "lara/views/app/CoreSetAimConsumer.swift",
-      "producer": "apply",
-      "receipt": "typed configurableFields retained; supportedFields empty; apply returns notApplied; no audited action consumer",
-      "scope": "fail-closed original aim; local configuration/preview is not original effect",
+      "producer": "apply -> persistent serial action worker -> final read snapshot -> Core v1.7 selector/geometry/prediction/route/recoil merge -> checked write",
+      "receipt": "matching request/host/revision/snapshot identity; committed checked write plus immediate independent readback",
+      "scope": "Core v1.7 source-equivalent aim action; device effect remains unverified",
       "runtime_device_verified": false,
       "lifecycle": {
-        "start": "NOT PROVIDED; CoreSetAimConsumer returns notApplied",
-        "update": "NOT PROVIDED; configuration and alternative preview are separate",
-        "stop": "NOT PROVIDED; no original action execution/restore receipt"
+        "start": "typed apply -> one persistent serial action timer and checked target session",
+        "update": "same final snapshot selects candidate/bone/route, merges Aim/Recoil and writes +0x620/+0x828 with readback",
+        "stop": "revoke lane, drain probes and abandon the current continuous-view value without stale old-view restoration"
       },
-      "reference_evidence": "sol-e20-recoil-state-table-evidence.md; native function slices action_worker/aim_geometry/derive_scene; static only"
+      "reference_evidence": "core_set_v17_action_cycle_evidence.json; native producer/selector/geometry/route/merge slices; static/source closure only"
     },
     "recoil": {
       "source": "lara/views/app/CoreSetRecoilConsumer.swift",
@@ -2868,7 +2944,7 @@
       "startBasicAim",
       "aimStart",
       "aim.desired.enabled",
-      "missing_aim",
+      "aim",
       "",
       "",
       null,
@@ -2877,10 +2953,10 @@
       false,
       "native-v17/v17-106",
       "0x1000cf008",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x168 bool/1bytes value",
       "explicit local boolean request; nil not a reference default; original inversion/owner must be separately proved",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -2892,7 +2968,7 @@
       "configureBasicAimPoint",
       "aimPoint",
       "aim.desired.point",
-      "missing_aim",
+      "aim",
       "",
       "",
       null,
@@ -2901,10 +2977,10 @@
       false,
       "native-v17/v17-107",
       "0x1000cf144",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x150 int32/4bytes value",
       "head0/chest1/hips2 typed configuration retained; target point owner/action consumer still unverified",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -2916,7 +2992,7 @@
       "toggleLocalAimPreviewField",
       "localAimPreviewField",
       "aim.desired.preaimCircle",
-      "missing_aim",
+      "aim_display_alternative",
       "",
       "",
       null,
@@ -2940,7 +3016,7 @@
       "configureBasicAimTrigger",
       "aimTrigger",
       "aim.desired.trigger",
-      "missing_aim",
+      "aim",
       "",
       "",
       null,
@@ -2949,10 +3025,10 @@
       false,
       "native-v17/v17-109",
       "0x1000cf1c8",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x14c int32/4bytes value",
       "explicit local enum/option mapping; disable preserves mode where applicable; original consumer semantics are separate",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -2964,7 +3040,7 @@
       "toggleLocalAimPreviewField",
       "localAimPreviewField",
       "aim.desired.dynamicCircle.enabled",
-      "missing_aim",
+      "aim_display_alternative",
       "",
       "",
       null,
@@ -2988,7 +3064,7 @@
       "toggleLocalAimCircle",
       "localAimCircle",
       "aim.desired.showCircle",
-      "missing_aim",
+      "aim_display_alternative",
       "",
       "",
       null,
@@ -3012,7 +3088,7 @@
       "toggleLocalAimPreviewField",
       "localAimPreviewField",
       "aim.desired.connectionLine",
-      "missing_aim",
+      "aim_display_alternative",
       "",
       "",
       null,
@@ -3036,7 +3112,7 @@
       "configureBasicAimRange",
       "aimRange",
       "aim.desired.circleSize",
-      "missing_aim",
+      "aim",
       "",
       "",
       [
@@ -3048,10 +3124,10 @@
       false,
       "native-v17/v17-113",
       "0x1000cf268",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x154 int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / alternative-preview-only",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3063,7 +3139,7 @@
       "toggleAimConfigurationField",
       "aimConfigurationField",
       "aim.desired.excludeKnocked",
-      "missing_aim",
+      "aim",
       "",
       "",
       null,
@@ -3072,10 +3148,10 @@
       false,
       "native-v17/v17-114",
       "0x1000cf2f4",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x169 bool/1bytes value",
       "local optional desired state; unselected stays nil; native conversion must not be inferred",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3087,7 +3163,7 @@
       "configureBasicAimBots",
       "aimBots",
       "aim.desired.includeBots",
-      "missing_aim",
+      "aim",
       "",
       "",
       null,
@@ -3096,10 +3172,10 @@
       false,
       "native-v17/v17-115",
       "0x1000cf30c",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x16a bool/1bytes value",
       "explicit local boolean request; nil not a reference default; original inversion/owner must be separately proved",
-      "original-consumer-missing / alternative-preview-only",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3111,7 +3187,7 @@
       "configureBasicAimLock",
       "aimLock",
       "aim.desired.lockSameTarget",
-      "missing_aim",
+      "aim",
       "",
       "",
       null,
@@ -3120,10 +3196,10 @@
       false,
       "native-v17/v17-116",
       "0x1000cf328",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x18e bool/1bytes value",
       "explicit local boolean request; nil not a reference default; original inversion/owner must be separately proved",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3135,7 +3211,7 @@
       "configureBasicAimRange",
       "aimRange",
       "aim.desired.custom.maximumDistance",
-      "missing_aim",
+      "aim",
       "",
       "scene == 3",
       [
@@ -3147,10 +3223,10 @@
       false,
       "native-v17/v17-117",
       "0x1000cf3b0",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x198 int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / alternative-preview-only",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3162,7 +3238,7 @@
       "configureBasicAimRange",
       "aimRange",
       "aim.desired.custom.strength",
-      "missing_aim",
+      "aim",
       "",
       "scene == 3",
       [
@@ -3174,10 +3250,10 @@
       false,
       "native-v17/v17-118",
       "0x1000cf40c",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x190 int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3189,7 +3265,7 @@
       "configureBasicAimRange",
       "aimRange",
       "aim.desired.custom.smoothing",
-      "missing_aim",
+      "aim",
       "",
       "scene == 3",
       [
@@ -3201,10 +3277,10 @@
       false,
       "native-v17/v17-119",
       "0x1000cf464",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x194 int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3216,7 +3292,7 @@
       "configureBasicAimRange",
       "aimRange",
       "aim.desired.custom.confirmationFrames",
-      "missing_aim",
+      "aim",
       "",
       "scene == 3",
       [
@@ -3228,10 +3304,10 @@
       false,
       "native-v17/v17-120",
       "0x1000cf4bc",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x1b4 int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3243,7 +3319,7 @@
       "selectPreviewScene",
       "previewScene",
       "aim.desired.scene=far(0)",
-      "missing_aim",
+      "aim",
       "",
       "",
       null,
@@ -3252,10 +3328,10 @@
       false,
       "native-v17/v17-121",
       "0x1000cf5b8 / 0x1000cf5c8 / 0x1000cf5cc",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x180 int32/4bytes value",
       "explicit local enum/option mapping; disable preserves mode where applicable; original consumer semantics are separate",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3267,7 +3343,7 @@
       "selectPreviewScene",
       "previewScene",
       "aim.desired.scene=close(2)",
-      "missing_aim",
+      "aim",
       "",
       "",
       null,
@@ -3276,10 +3352,10 @@
       false,
       "native-v17/v17-122",
       "0x1000cf5b8 / 0x1000cf5c8 / 0x1000cf5cc",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x180 int32/4bytes value",
       "explicit local enum/option mapping; disable preserves mode where applicable; original consumer semantics are separate",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3291,7 +3367,7 @@
       "selectPreviewScene",
       "previewScene",
       "aim.desired.scene=general(1)",
-      "missing_aim",
+      "aim",
       "",
       "",
       null,
@@ -3300,10 +3376,10 @@
       false,
       "native-v17/v17-123",
       "0x1000cf5b8 / 0x1000cf5c8 / 0x1000cf5cc",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x180 int32/4bytes value",
       "explicit local enum/option mapping; disable preserves mode where applicable; original consumer semantics are separate",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3315,7 +3391,7 @@
       "selectPreviewScene",
       "previewScene",
       "aim.desired.scene=custom(3)",
-      "missing_aim",
+      "aim",
       "",
       "",
       null,
@@ -3324,10 +3400,10 @@
       false,
       "native-v17/v17-124",
       "0x1000cf5b8 / 0x1000cf5c8 / 0x1000cf5cc",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x180 int32/4bytes value",
       "explicit local enum/option mapping; disable preserves mode where applicable; original consumer semantics are separate",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3339,7 +3415,7 @@
       "configureBasicAimLockStrength",
       "aimLockStrength",
       "aim.desired.lockStrength",
-      "missing_aim",
+      "aim",
       "",
       "local scene != nil and != 3",
       null,
@@ -3348,10 +3424,10 @@
       false,
       "native-v17/v17-125",
       "0x1000cf85c",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x184 int32/4bytes value",
       "explicit local enum/option mapping; disable preserves mode where applicable; original consumer semantics are separate",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "core_set_v17_native_function_slices.json#/functions/aim_ui"
     ],
@@ -3363,7 +3439,7 @@
       "configureBasicAimRange",
       "aimRange",
       "aim.desired.custom.horizontalSpeed",
-      "missing_aim",
+      "aim",
       "",
       "local scene == 3",
       [
@@ -3375,10 +3451,10 @@
       false,
       "native-v17/v17-126",
       "0x1000cf658",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x19c int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#conditional-scene-sliders"
     ],
@@ -3390,7 +3466,7 @@
       "configureBasicAimRange",
       "aimRange",
       "aim.desired.custom.verticalSpeed",
-      "missing_aim",
+      "aim",
       "",
       "local scene == 3",
       [
@@ -3402,10 +3478,10 @@
       false,
       "native-v17/v17-127",
       "0x1000cf6a8",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x1a0 int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#conditional-scene-sliders"
     ],
@@ -3417,7 +3493,7 @@
       "configureBasicAimRange",
       "aimRange",
       "aim.desired.custom.predictionMilliseconds",
-      "missing_aim",
+      "aim",
       "",
       "local scene == 3",
       [
@@ -3429,10 +3505,10 @@
       false,
       "native-v17/v17-128",
       "0x1000cf700",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x1a8 int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#conditional-scene-sliders"
     ],
@@ -3444,7 +3520,7 @@
       "configureBasicAimRange",
       "aimRange",
       "aim.desired.custom.lockThreshold",
-      "missing_aim",
+      "aim",
       "",
       "local scene == 3",
       [
@@ -3456,10 +3532,10 @@
       false,
       "native-v17/v17-129",
       "0x1000cf75c",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x1a4 int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#conditional-scene-sliders"
     ],
@@ -3471,7 +3547,7 @@
       "configureBasicAimRange",
       "aimRange",
       "aim.desired.custom.takeoverPauseMilliseconds",
-      "missing_aim",
+      "aim",
       "",
       "local scene == 3",
       [
@@ -3483,10 +3559,10 @@
       false,
       "native-v17/v17-130",
       "0x1000cf7b8",
-      "byte-bound control/state callsites from native point chain; consumer/lifecycle completion and runtime receipt NOT proved",
+      "byte-bound control/state callsites plus shared source consumer/lifecycle; runtime device receipt NOT proved",
       "Core-self-configuration: 0x100c58270+0x1b8 int32/4bytes value",
       "UISlider Float -> rounded Int -> bounded local setting; native type/units only where reference evidence proves them",
-      "original-consumer-missing / fail-closed-local-configuration-or-explanation",
+      "shared-action-consumer / source-closed / device-unverified",
       "carrier-only; NOT feature algorithm/source",
       "ui-point-evidence.md#conditional-scene-sliders"
     ],
@@ -3653,7 +3729,7 @@
       "interface": "CoreSetFeatureConsumer<State=CoreSetHomeSettings, capability=homeSettings>",
       "state_field": "home.desired.coverMode",
       "current_caller_evidence": "configureHomeCoverMode/homeCoverMode typed configuration plus explicit effect refusal; no current home action consumer binding",
-      "evidence_required": "取证C+2f bool/C+130 int32的全局/局内/关闭对应遮挡读取、过滤顺序、作用域和关闭清理；typed配置已保留off前mode，仍需homeSettings同义coverMode动作消费者。",
+      "evidence_required": "已闭合C+2f bool/C+130 int32到d3eac/d36a8/d7734的全局/局内/关闭策略、64c7c只读lease→0x100c58778与变化代次→0x100c58780输入owner、A/B三段64d04指针链与0x2490表读取、0xa0输出记录全字节布局及直接builder来源、d3914三owner发布与A/C 16字节/B 8字节callback payload ABI、三条Embree构建器，以及d33f4尾跳d3424→dccac当前actor骨骼世界点→dccc0/dcd34/dcd50按boneIndex发布和颜色消费链；停止会join三worker并释放三槽。64d04特定row到builder x21+1d4/+50/+60/+a0的连续身份、样本未携带的业务字段名及真机停止/显示回执仍未证明，不能用本地LOS布尔代替。",
       "receipt_required": "真实观察结果必须匹配本次请求身份；有副作用的切换与停止须独立恢复回执。"
     },
     "v17-002": {
@@ -3673,152 +3749,177 @@
     "v17-106": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.enabled",
-      "evidence_required": "核实总开关的原包门禁、目标动作生命周期与退出清理；提供动作执行及停止回执。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-107": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.point",
-      "evidence_required": "核实头部/胸部/屁股枚举到已证目标落点的owner、类型、单位和分支；胸部当前明确拒绝，不用fallback宣称同义。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-108": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.preaimCircle",
-      "evidence_required": "取证原包预瞄标记的目标生产者、动作门禁、绘制时序和样式；替代本地标记不作为原效果回执。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "已闭合C+0x16b首个选中点分支、24段r7/线宽1.8外圈、r2.5实心点、RGBA及AimConsumer共享目标身份；第二投影已由c4af8预测XYZ/numerical[11...13]同actor/session/action身份发布并复现主点到预测点线及16段r5圈。仍需真机像素/生命周期回执。",
+      "receipt_required": "真机需验证同一画布代次、目标帧与渲染回执；本地HUD成功不自动等于原版生产者。",
+      "current_caller_evidence": "CoreSetAimDisplayConsumer consumes AimConsumer's exact selected-candidate and predicted-world record, reproducing both Core marker branches; device pixels remain unverified"
     },
     "v17-109": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.trigger",
-      "evidence_required": "核实开镜/开火/任一/同时的状态owner、枚举和时序组合；提供筛选后动作回执。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-110": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.dynamicCircle.enabled",
-      "evidence_required": "核实原包取反标志、动态半径生产者、动作门禁和生命周期；替代动态圈不作为原效果回执。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "已闭合0x1000de810..0x1000debe4动态四弧、衰减/振荡、径向点线及方向弧常量，并使用AimConsumer候选起始时间；仍需真机像素/节奏和生命周期回执。",
+      "receipt_required": "真机需验证同一画布代次、目标帧与渲染回执；本地HUD成功不自动等于原版生产者。",
+      "current_caller_evidence": "CoreSetAimDisplayConsumer uses the shared selected-candidate identity and sample-bound dynamic geometry; CA/Metal pixels and device cadence remain unverified"
     },
     "v17-111": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.showCircle",
-      "evidence_required": "核实原包显示圈与自瞄总门禁、半径生产者和停止清理；独立本地圈不作为原效果回执。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "已闭合0x1000de734..0x1000de780静态显示圈的64段、RGBA(120,210,255,160)与线宽1.5；仍需真机像素/生命周期回执。",
+      "receipt_required": "真机需验证同一画布代次、目标帧与渲染回执；本地HUD成功不自动等于原版生产者。",
+      "current_caller_evidence": "CoreSetAimDisplayConsumer reproduces the sample-bound static circle through immutable render commands; device pixels remain unverified"
     },
     "v17-112": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.connectionLine",
-      "evidence_required": "核实原包目标选择、连接线端点、动作门禁和样式；替代本地连线不作为原效果回执。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "已闭合C+0x1c4和0x1000debe8..0x1000dec2c中心到选中点连接线、RGBA(255,80,80,130)及线宽1；仍需真机像素/生命周期回执。",
+      "receipt_required": "真机需验证同一画布代次、目标帧与渲染回执；本地HUD成功不自动等于原版生产者。",
+      "current_caller_evidence": "CoreSetAimDisplayConsumer consumes the same selected-candidate record as AimConsumer and reproduces the sample-bound connection line; device pixels remain unverified"
     },
     "v17-113": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.circleSize",
-      "evidence_required": "核实原包圈大小原值、屏幕换算及对实际筛选/动作的影响；本地半径换算不证明原控制效果。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-114": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.excludeKnocked",
-      "evidence_required": "核实倒地与死亡的独立目标字段、筛选顺序及状态更新；提供排除后的动作结果回执。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-115": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.includeBots",
-      "evidence_required": "核实原包人机分类与候选分流；本地预览的人机过滤不证明原动作包含/排除。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-116": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.lockSameTarget",
-      "evidence_required": "核实跨帧同目标身份、切换条件、失效和释放；提供锁定/切换/停止的真实状态回执。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-117": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.maximumDistance",
-      "evidence_required": "核实自定义最大距离的单位、测距owner及筛选位置；替代预览距离过滤不证明原动作。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-118": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.strength",
-      "evidence_required": "核实自瞄强度5..100到动作增量的真实公式和单位；禁止按UI数值直接推导gain。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-119": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.smoothing",
-      "evidence_required": "核实转动平滑1..10的时间基准、公式和状态恢复；禁止把局部UI值当已执行平滑。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-120": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.confirmationFrames",
-      "evidence_required": "核实接管确认帧数1..6的帧定义、累积/重置条件和动作时序。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-121": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.scene=far(0)",
-      "evidence_required": "取证远距预设的真实参数来源、枚举0的组合策略和切换恢复；不能发明预设值。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-122": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.scene=close(2)",
-      "evidence_required": "取证近战预设的真实参数来源、枚举2的组合策略和切换恢复；不能发明预设值。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-123": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.scene=general(1)",
-      "evidence_required": "取证通用预设的真实参数来源、枚举1的组合策略和切换恢复；不能发明预设值。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-124": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.scene=custom(3)",
-      "evidence_required": "取证自定义枚举3与九项参数的真实消费位置和切换恢复；仅显示自定义控件不算执行。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-125": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.lockStrength",
-      "evidence_required": "核实强/中/轻的原包枚举4/3/0、预设派生策略和实际接管效果。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-126": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.horizontalSpeed",
-      "evidence_required": "核实水平速度30..720度/秒的轴owner、时间基准、限幅与停止；不从UI滑条直接推目标写。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-127": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.verticalSpeed",
-      "evidence_required": "核实垂直速度30..720度/秒的轴owner、时间基准、限幅与停止；不从UI滑条直接推目标写。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-128": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.predictionMilliseconds",
-      "evidence_required": "核实预判提前0..300毫秒的目标速度/时间戳生产者及原公式；当前只记录本地参数。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-129": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.lockThreshold",
-      "evidence_required": "核实锁定门槛5..500的真实单位、比较owner、迟滞与重置；单位未证不猜像素/角度。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-130": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetAimSettings, capability=aimControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
       "state_field": "aim.desired.custom.takeoverPauseMilliseconds",
-      "evidence_required": "核实接管暂停50..1000毫秒的触发/恢复和输入生命周期；提供暂停/恢复/停止回执。",
-      "receipt_required": "已核实目标身份和动作结果；匹配请求generation/consumer/request身份；停止/失效须可观察恢复回执。"
+      "evidence_required": "原版数值组件、目标骨骼/倒地生产者与当前持续动作消费者已闭合；离线无剩余实现项，仍需真机同一请求/快照/控制器代次下的写入、独立回读和可见视角结果。",
+      "receipt_required": "真机回执必须匹配本次请求、host/revision、最终快照与控制器，并证明与游戏线程并发后的实际视角结果。",
+      "current_caller_evidence": "CoreSetAimConsumer supportedFields + persistentActionWorker/tick/submitMergedAction; shared checked writer is source-closed and device receipt remains unverified"
     },
     "v17-131": {
       "interface": "CoreSetFeatureConsumer<State=CoreSetRecoilSettings, capability=recoilControl>；逐字段CoreSetField配置合同已定义；仍缺live owner/consumer/receipt",
@@ -3911,12 +4012,13 @@
     "local_presentation_points": 31,
     "conditional_readonly_consumer_points": 61,
     "observation_points": 10,
-    "original_action_consumer_missing_points": 29,
+    "original_action_consumer_missing_points": 6,
     "alternative_aim_preview_points": 7,
     "missing_original_observation_producers": 5,
     "source_same_meaning_local_contract_points": 26,
     "remaining_local_or_observation_points": 13,
-    "device_effect_verified_points": 0
+    "device_effect_verified_points": 0,
+    "source_closed_action_points": 27
   },
   "current_ui_extensions": [
     {

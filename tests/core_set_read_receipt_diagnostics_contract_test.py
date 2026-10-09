@@ -116,8 +116,11 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
                     self.assertNotIn("captureStartedMonotonicSeconds", capture)
         preview = read("lara/views/app/CoreSetAimPreviewConsumer.swift")
         preview_capture = body(preview, "func capture(")
-        self.assertIn("self.session.readFailureSequence != failureSequence", preview_capture)
-        self.assertIn("CoreSetPlayerCollector.lastCaptureDiagnostic()", preview_capture)
+        self.assertNotIn("CoreSetPlayerCollector.capture", preview_capture)
+        self.assertNotIn("CoreSetReadSession", preview)
+        self.assertIn("store.latest()", preview_capture)
+        self.assertIn("captureCompletedMonotonicSeconds", preview)
+        self.assertIn("maximumRecordAge", preview)
         material = body(self.consumers["Material"], "private func capture()")
         self.assertLess(material.index("CoreSetMaterialCollector.capture("),
                         material.index("let capturedAt = snapshot?.captureCompletedMonotonicSeconds"))

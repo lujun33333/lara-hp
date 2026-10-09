@@ -67,11 +67,11 @@ class CompensationContracts(unittest.TestCase):
             altered = deepcopy(model); mutation(altered)
             with self.assertRaises(AssertionError): probe.differential(core, altered)
 
-    def test_fixture_keeps_target_authority_receipt_and_restore_open(self):
+    def test_fixture_keeps_target_authority_and_concurrent_receipt_open(self):
         evidence = json.loads((ROOT / "tests/fixtures/core_set_v17_action_cycle_evidence.json").read_text(encoding="utf-8"))
         self.assertEqual(evidence["schema_version"], 3)
         self.assertEqual(len(evidence["points"]), 31)
-        self.assertEqual(sum(len(p["next_exact_edges"]) for p in evidence["points"]), 113)
+        self.assertEqual(sum(len(p["next_exact_edges"]) for p in evidence["points"]), 82)
         self.assertEqual(evidence["one_to_one_complete_count"], 0)
         components = evidence["compensation_evidence"]
         self.assertEqual(components["case_counts"], COUNTS)
@@ -82,7 +82,7 @@ class CompensationContracts(unittest.TestCase):
             self.assertFalse(point["one_to_one_complete"])
             self.assertFalse(point["original_runtime_receipt_verified"])
             self.assertTrue(any("game-thread concurrency" in edge for edge in point["next_exact_edges"]))
-            self.assertTrue(any("effects restored" in edge for edge in point["next_exact_edges"]))
+            self.assertFalse(any("effects restored" in edge for edge in point["next_exact_edges"]))
 
     def test_aim_and_recoil_share_reference_geometry_state_and_writer(self):
         aim = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
@@ -141,4 +141,4 @@ if __name__ == "__main__":
     ARGS = parser.parse_args()
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(CompensationContracts))
     if not result.wasSuccessful(): raise SystemExit(1)
-    print("LIMIT: exact Core-self components only; no live target owner authority or restore receipt")
+    print("LIMIT: exact Core-self components only; no live target-owner authority or concurrent game-thread receipt")

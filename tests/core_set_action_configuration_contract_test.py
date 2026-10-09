@@ -131,6 +131,12 @@ class ActionConfigurationContract(unittest.TestCase):
         serialized = json.dumps(fixture, ensure_ascii=False)
         self.assertNotIn("还需定义逐字段CoreSetField合同", serialized)
         self.assertIn("network freshness unproven", fixture["contracts"]["radar"]["scope"])
+        preview_only = {"v17-108", "v17-110", "v17-111", "v17-112"}
+        action_points = {f"v17-{index:03d}" for index in range(106, 131)} - preview_only
+        self.assertTrue(all(rows[point]["consumer_contract"] == "aim" for point in action_points))
+        self.assertTrue(all(rows[point]["consumer_contract"] == "aim_display_alternative"
+                            for point in preview_only))
+        self.assertEqual(fixture["statistics"]["source_closed_action_points"], 27)
 
 
 if __name__ == "__main__":

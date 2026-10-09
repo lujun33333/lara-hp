@@ -49,6 +49,7 @@ private:
 @property(nonatomic) float recoilPitch;
 @property(nonatomic) float recoilYaw;
 @property(nonatomic) uint64_t geometrySampleKey;
+@property(nonatomic, strong, nullable) CoreSetWorldPoint *predictedWorldPoint;
 @end
 @implementation CoreSetBasicAimTriggerState
 - (void)reset { _latch.reset(); _last = {}; }
@@ -265,6 +266,18 @@ private:
     CoreSetBasicAimDelta *result = [CoreSetBasicAimDelta new];
     result.pitch = observed.numerical[5]; result.yaw = observed.numerical[4];
     result.geometrySampleKey = sampleKey;
+    if (configuration.predictionMilliseconds >= 1.0 &&
+        std::isfinite(observed.numerical[11]) &&
+        std::isfinite(observed.numerical[12]) &&
+        std::isfinite(observed.numerical[13])) {
+        // Native c4af8 publishes its compensated point from result
+        // +0x38/+0x3c/+0x40; ActionGeometryObservation preserves those exact
+        // slots as numerical[11...13].
+        result.predictedWorldPoint = [CoreSetWorldPoint
+            pointWithX:observed.numerical[11]
+            y:observed.numerical[12]
+            z:observed.numerical[13]];
+    }
     return result;
 }
 @end

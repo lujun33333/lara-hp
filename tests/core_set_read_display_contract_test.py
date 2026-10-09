@@ -125,7 +125,8 @@ class ReadDisplayContracts(unittest.TestCase):
     def test_unproven_fields_stay_diagnostic_not_read_offsets(self) -> None:
         capture = self.collector[self.collector.index('CSLastCaptureDiagnostic = "request-validation"'):]
         for status in ("grenadeTimer=target-server-clock-clamped", "grenadeRadius=unproven", "grenadeAnimation=local-prediction-partial",
-                       "warningFallbackOwner=actor-replicated-movement-rotation-yaw", "informationLayout=local-subset",
+                       "warningFallbackOwner=actor-replicated-movement-rotation-yaw", "informationRecord=core17-first-projection",
+                       "scaleProducer=core17-frame-literal-1", "botOrdinal=frame-local",
                        "countScope=positive-health-or-last-breath-enemy-draw-range", "countParity=partial"):
             self.assertIn(status, self.collector)
         for guessed in ("actor + 0x258", "actor.address + 0x258", "ExplosionTime - Children"):
@@ -146,6 +147,12 @@ class ReadDisplayContracts(unittest.TestCase):
                                         self.collector.index('CSLastCaptureDiagnostic = "stability-actor-membership"')]
         self.assertIn("collectGrenades = false", optional_roots)
         self.assertNotIn("return nil", optional_roots)
+        render = body(self.player, "private func render(")
+        self.assertNotIn("return nil", render)
+        for local_skip in ("else { continue }", "if CoreSetReferencePlayerRay",
+                           "if let text = CoreSetReferencePlayerDistanceText",
+                           "if result.count > 8000 { break"):
+            self.assertIn(local_skip, render)
 
     def test_actor_array_matches_core17_data_count_and_level_fallback(self) -> None:
         helper = body(self.collector, "static CSActorArraySource CSReadCoreActorArray(")
@@ -325,7 +332,8 @@ class ReadDisplayContracts(unittest.TestCase):
         render = body(self.material, "private func render(")
         self.assertIn("mark.escapeBoxChildrenCount?.intValue == 1", render)
         self.assertNotIn("interactiveTreasureBoxSyncOpened", render)
-        for uncertain in ("networkFreshness=unproven", "informationGap=native-font-icons-and-anchors",
+        for uncertain in ("networkFreshness=unproven", "informationRecord=core17-first-projection",
+                          "scaleProducer=core17-frame-literal-1", "botOrdinal=frame-local",
                           "grenadeRadiusGap=no-verified-elite-blast-field"):
             self.assertIn(uncertain, self.collector)
 

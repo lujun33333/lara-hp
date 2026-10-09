@@ -27,6 +27,9 @@ static ImU32 CSImColor(UIColor *color) {
 static ImVec2 CSPoint(CGPoint point) { return ImVec2((float)point.x, (float)point.y); }
 static ImVec2 CSRectMin(CGRect rect) { return ImVec2((float)CGRectGetMinX(rect), (float)CGRectGetMinY(rect)); }
 static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect), (float)CGRectGetMaxY(rect)); }
+static BOOL CSMetalIconGlyphAllowed(NSString *text) {
+    return text.length == 1 && [@"acersvwxz" containsString:text];
+}
 
 @interface CoreSetMetalRenderAdapter () <MTKViewDelegate>
 @end
@@ -39,6 +42,7 @@ static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect),
     CoreSetRenderFrame *_frame;
     ImGuiContext *_imgui;
     ImFont *_font;
+    ImFont *_iconFont;
     BOOL _visible;
     BOOL _hasVisibleCommands;
     BOOL _lastDrawSucceeded;
@@ -69,11 +73,16 @@ static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect),
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
     NSString *fontPath = [NSBundle.mainBundle pathForResource:@"OPPOSans-H" ofType:@"ttf"];
+    NSString *iconPath = [NSBundle.mainBundle pathForResource:@"IcoMoon" ofType:@"ttf"];
     if (fontPath.length)
-        _font = io.Fonts->AddFontFromFileTTF(fontPath.UTF8String, 20.0f, nullptr,
+        // Core v1.7 creates its HUD body face from this exact embedded font at
+        // 25 points. AddText still applies each command's requested size.
+        _font = io.Fonts->AddFontFromFileTTF(fontPath.UTF8String, 25.0f, nullptr,
                                              io.Fonts->GetGlyphRangesChineseFull());
-    if (!_font) _font = io.Fonts->AddFontDefault();
-    if (!_font || !ImGui_ImplMetal_Init(device)) { [self detach]; return; }
+    if (iconPath.length)
+        _iconFont = io.Fonts->AddFontFromFileTTF(iconPath.UTF8String, 25.0f, nullptr,
+                                                 io.Fonts->GetGlyphRangesDefault());
+    if (!_font || !_iconFont || !ImGui_ImplMetal_Init(device)) { [self detach]; return; }
 
     _metalView = [[MTKView alloc] initWithFrame:view.bounds device:device];
     _metalView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -105,9 +114,30 @@ static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect),
             r.size.width < 0 || r.size.height < 0 ||
             !std::isfinite(command.endpoint.x) || !std::isfinite(command.endpoint.y) ||
             !std::isfinite(command.lineWidth) || command.lineWidth < 0 || command.lineWidth > 1024 ||
+            !std::isfinite(command.cornerRadius) || command.cornerRadius < 0 ||
+            command.cornerRadius > 256 ||
             !std::isfinite(command.fontSize) || command.fontSize <= 0 || command.fontSize > 512 ||
             !command.color) return NO;
+        if (command.kind != CoreSetRenderKindRectangle && command.cornerRadius != 0) return NO;
+        const BOOL hasGradient = command.gradientLeftColor || command.gradientRightColor;
+        if (hasGradient && (command.kind != CoreSetRenderKindRectangle || !command.isFilled ||
+            command.cornerRadius != 0 || !command.gradientLeftColor ||
+            !command.gradientRightColor)) return NO;
         if (command.kind == CoreSetRenderKindText && command.text.length > 4096) return NO;
+        if (command.kind == CoreSetRenderKindText &&
+            (command.fontRole < CoreSetRenderFontRoleBody ||
+             command.fontRole > CoreSetRenderFontRoleIcon ||
+             !std::isfinite(command.textBackgroundHorizontalPadding) ||
+             !std::isfinite(command.textBackgroundVerticalPadding) ||
+             command.textBackgroundHorizontalPadding < 0 ||
+             command.textBackgroundHorizontalPadding > 64 ||
+             command.textBackgroundVerticalPadding < 0 ||
+             command.textBackgroundVerticalPadding > 64)) return NO;
+        if (command.kind == CoreSetRenderKindText &&
+            command.fontRole == CoreSetRenderFontRoleIcon &&
+            !CSMetalIconGlyphAllowed(command.text)) return NO;
+        if (command.kind != CoreSetRenderKindText &&
+            (command.fontRole != CoreSetRenderFontRoleBody || command.textBackgroundColor)) return NO;
         if (command.kind == CoreSetRenderKindImage && command.weaponID == 0 &&
             ![command.localImageName isEqualToString:@"CoreSetLoading.png"]) return NO;
         if (command.kind == CoreSetRenderKindBackGlyph &&
@@ -149,8 +179,32 @@ static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect),
     auto polygon = [&](std::initializer_list<ImVec2> source, ImU32 fill, bool border) {
         ImVector<ImVec2> points;
         for (const ImVec2 &p : source) points.push_back(transform(p.x, p.y));
-        if (border) draw->AddPolyline(points.Data, points.Size, black, ImDrawFlags_Closed, outline * 2.0f);
         if (fill) draw->AddConvexPolyFilled(points.Data, points.Size, fill);
+        if (border) draw->AddPolyline(points.Data, points.Size, black, ImDrawFlags_Closed, outline);
+    };
+    auto arc = [&](float centerX, float radiusFactor, float from, float to, int points) {
+        ImVector<ImVec2> vertices;
+        const float radius = std::max(0.0f, radiusFactor * (float)rect.size.height);
+        for (int index = 0; index < points; ++index) {
+            const float fraction = points > 1 ? (float)index / (float)(points - 1) : 0;
+            const float angle = from + (to - from) * fraction;
+            const float x = centerX + std::cos(angle) * radius / (float)rect.size.width;
+            const float y = std::sin(angle) * radius / (float)rect.size.height;
+            vertices.push_back(transform(x, y));
+        }
+        draw->AddPolyline(vertices.Data, vertices.Size, black, 0,
+                          std::max(.18f * (float)rect.size.height, 2.4f));
+        draw->AddPolyline(vertices.Data, vertices.Size, color, 0,
+                          std::max(.095f * (float)rect.size.height, 1.3f));
+    };
+    auto dot = [&](float centerX, float radiusFactor, float minimumRadius,
+                   float alpha, float borderFactor) {
+        const float radius = std::max(radiusFactor * (float)rect.size.height, minimumRadius);
+        const float outer = radius + outline * borderFactor;
+        const ImU32 foreground = (color & 0x00FFFFFFu) |
+            ((ImU32)std::lround(std::clamp(alpha, 0.0f, 1.0f) * 255.0f) << 24);
+        draw->AddCircleFilled(transform(centerX, 0), outer, black, 12);
+        draw->AddCircleFilled(transform(centerX, 0), radius, foreground, 12);
     };
     switch (command.glyphStyle) {
         case 0: polygon({{0,0},{.42f,-.5f},{.42f,-.19f},{1,-.19f},{1,.19f},{.42f,.19f},{.42f,.5f}}, color, true); break;
@@ -160,9 +214,21 @@ static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect),
             polygon({{.48f,-.5f},{1,0},{.48f,.5f}}, color & 0x75FFFFFFu, false);
             polygon({{0,0},{.48f,-.5f},{1,0},{.48f,.5f}}, 0, true);
             break;
-        default:
-            polygon({{0,0},{.53f,-.22f},{.53f,.22f}}, color, true);
-            draw->AddCircle(transform(.68f, 0), std::max(1.0f, (float)rect.size.height * .14f), color, 18, outline);
+        case 3:
+            arc(.67f, .43f, -2.5215926f, 2.5215926f, 21);
+            polygon({{0,0},{.52f,-.26f},{.52f,.26f}}, color, true);
+            break;
+        case 4:
+            dot(.48f, .15f, 1.1f, .90f, .72f);
+            dot(.67f, .11f, 1.1f, .65f, .72f);
+            dot(.83f, .075f, 1.1f, .40f, .72f);
+            polygon({{0,0},{.30f,-.46f},{.30f,.46f}}, color, true);
+            break;
+        case 5:
+            arc(.65f, .46f, -2.4215927f, -.18f, 13);
+            arc(.65f, .46f, .18f, 2.4215927f, 13);
+            dot(.65f, .075f, 1.0f, 1.0f, .65f);
+            polygon({{0,0},{.53f,-.18f},{.53f,.18f}}, color, true);
             break;
     }
 }
@@ -177,8 +243,15 @@ static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect),
                               std::max(1.0f, (float)command.lineWidth));
                 break;
             case CoreSetRenderKindRectangle:
-                if (command.filled) draw->AddRectFilled(CSRectMin(command.rect), CSRectMax(command.rect), color);
-                else draw->AddRect(CSRectMin(command.rect), CSRectMax(command.rect), color, 0, 0,
+                if (command.gradientLeftColor && command.gradientRightColor) {
+                    const ImU32 left = CSImColor(command.gradientLeftColor);
+                    const ImU32 right = CSImColor(command.gradientRightColor);
+                    draw->AddRectFilledMultiColor(CSRectMin(command.rect), CSRectMax(command.rect),
+                                                  left, right, right, left);
+                } else if (command.filled) draw->AddRectFilled(CSRectMin(command.rect), CSRectMax(command.rect), color,
+                                                              (float)command.cornerRadius);
+                else draw->AddRect(CSRectMin(command.rect), CSRectMax(command.rect), color,
+                                   (float)command.cornerRadius, 0,
                                    std::max(1.0f, (float)command.lineWidth));
                 break;
             case CoreSetRenderKindEllipse: {
@@ -191,12 +264,21 @@ static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect),
             }
             case CoreSetRenderKindText: {
                 const char *utf8 = command.text.UTF8String ?: "";
+                ImFont *font = command.fontRole == CoreSetRenderFontRoleIcon ? _iconFont : _font;
+                if (!font) break;
                 ImVec2 pos = CSRectMin(command.rect);
+                ImVec2 measured = font->CalcTextSizeA((float)command.fontSize, FLT_MAX, 0, utf8);
                 if (command.horizontallyCenteredText) {
-                    ImVec2 measured = _font->CalcTextSizeA((float)command.fontSize, FLT_MAX, 0, utf8);
                     pos.x = (float)CGRectGetMidX(command.rect) - measured.x * .5f;
                 }
-                draw->AddText(_font, (float)command.fontSize, pos, color, utf8);
+                if (command.textBackgroundColor) {
+                    const float horizontal = (float)command.textBackgroundHorizontalPadding;
+                    const float vertical = (float)command.textBackgroundVerticalPadding;
+                    draw->AddRectFilled(ImVec2(pos.x - horizontal, pos.y - vertical),
+                        ImVec2(pos.x + measured.x + horizontal, pos.y + measured.y + vertical),
+                        CSImColor(command.textBackgroundColor));
+                }
+                draw->AddText(font, (float)command.fontSize, pos, color, utf8);
                 break;
             }
             case CoreSetRenderKindImage: {
@@ -321,6 +403,7 @@ static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect),
         _imgui = nullptr;
     }
     _font = nullptr;
+    _iconFont = nullptr;
     [_textures removeAllObjects];
     _textures = nil;
     _textureLoader = nil;

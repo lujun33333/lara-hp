@@ -28,12 +28,21 @@ typedef NS_ENUM(NSInteger, CoreSetRenderStyleRole) {
     CoreSetRenderStyleRoleBotTeam,
 };
 
+// Core v1.7 embeds two independent ImGui fonts. Body text uses OPPOSans-H;
+// the icon face is the 25-point IcoMoon face and is never used as a fallback
+// for ordinary text.
+typedef NS_ENUM(NSInteger, CoreSetRenderFontRole) {
+    CoreSetRenderFontRoleBody,
+    CoreSetRenderFontRoleIcon,
+};
+
 // Immutable, application-neutral drawing input. Coordinates use canvas points.
 @interface CoreSetRenderCommand : NSObject
 @property(nonatomic, readonly) CoreSetRenderKind kind;
 @property(nonatomic, readonly) CGRect rect;
 @property(nonatomic, readonly) CGPoint endpoint;
 @property(nonatomic, readonly) CGFloat lineWidth;
+@property(nonatomic, readonly) CGFloat cornerRadius;
 @property(nonatomic, readonly) CGFloat fontSize;
 @property(nonatomic, readonly, getter=isFilled) BOOL filled;
 @property(nonatomic, strong, readonly) UIColor *color;
@@ -43,7 +52,13 @@ typedef NS_ENUM(NSInteger, CoreSetRenderStyleRole) {
 @property(nonatomic, readonly) NSInteger glyphStyle;
 @property(nonatomic, readonly) CGFloat glyphAngle;
 @property(nonatomic, readonly) CoreSetRenderStyleRole styleRole;
+@property(nonatomic, readonly) CoreSetRenderFontRole fontRole;
 @property(nonatomic, readonly) BOOL horizontallyCenteredText;
+@property(nonatomic, strong, readonly, nullable) UIColor *textBackgroundColor;
+@property(nonatomic, strong, readonly, nullable) UIColor *gradientLeftColor;
+@property(nonatomic, strong, readonly, nullable) UIColor *gradientRightColor;
+@property(nonatomic, readonly) CGFloat textBackgroundHorizontalPadding;
+@property(nonatomic, readonly) CGFloat textBackgroundVerticalPadding;
 - (instancetype)initWithKind:(CoreSetRenderKind)kind rect:(CGRect)rect endpoint:(CGPoint)endpoint
                        color:(UIColor *)color lineWidth:(CGFloat)lineWidth filled:(BOOL)filled
                         text:(nullable NSString *)text fontSize:(CGFloat)fontSize NS_DESIGNATED_INITIALIZER;
@@ -51,6 +66,17 @@ typedef NS_ENUM(NSInteger, CoreSetRenderStyleRole) {
 - (instancetype)styledWithRole:(CoreSetRenderStyleRole)role
     NS_SWIFT_NAME(styled(role:));
 - (instancetype)centeredText NS_SWIFT_NAME(centeredText());
+- (instancetype)roundedWithRadius:(CGFloat)radius
+    NS_SWIFT_NAME(rounded(radius:));
+- (instancetype)horizontalGradientFromColor:(UIColor *)leftColor
+                                     toColor:(UIColor *)rightColor
+    NS_SWIFT_NAME(horizontalGradient(from:to:));
+- (instancetype)usingFontRole:(CoreSetRenderFontRole)role
+    NS_SWIFT_NAME(usingFont(_:));
+- (instancetype)backedTextWithColor:(UIColor *)color
+                  horizontalPadding:(CGFloat)horizontalPadding
+                    verticalPadding:(CGFloat)verticalPadding
+    NS_SWIFT_NAME(backedText(color:horizontalPadding:verticalPadding:));
 // Bundled loading art remains a separate allowlisted resource.
 + (nullable instancetype)localImageNamed:(NSString *)name rect:(CGRect)rect;
 + (nullable instancetype)weaponImageWithID:(uint32_t)weaponID rect:(CGRect)rect

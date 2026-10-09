@@ -69,13 +69,16 @@ labels = {
     "lara/views/app/CoreSetPlayerConsumer.swift": "player",
     "lara/views/app/CoreSetMaterialConsumer.swift": "materials",
     "lara/views/app/CoreSetRadarConsumer.swift": "radar",
-    "lara/views/app/CoreSetAimPreviewConsumer.swift": "aim-preview",
 }
 for relative, label in labels.items():
     source = read(relative)
     assert f'session.diagnosticLabel = "{label}"' in source
     if "var availability:" in source:
         assert "session.lastConnectDiagnostic" in body(source, "var availability:")
+aim_preview = read("lara/views/app/CoreSetAimPreviewConsumer.swift")
+assert "CoreSetReadSession" not in aim_preview
+assert "aim-record-missing-or-stale" in aim_preview
+assert "aim-record-confirmed actor=" in aim_preview
 assert '_readSession.diagnosticLabel = @"target-write"' in read(
     "lara/overlay/CoreSetTargetWriteSession.mm"
 )
@@ -118,12 +121,16 @@ scenes = read("lara/overlay/CoreSetFloatingSceneManager.mm")
 for contract in ("BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation"):
     assert contract in host
 for contract in (
+    "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
+    "unregisterWindowWithContextID:",
+    "kCoreSetCoreDrawLevel = 999998.0", "kCoreSetCoreMenuLevel = 999999.0",
+    "kCoreSetCoreIconLevel = 1000000.0", "registerThreeSurfacesAsync",
     "CALayerHost", "SBMainWorkspace", "mainWindowScene", "setContextId:",
-    "kCoreSetRemoteMenuLevel", "kCoreSetRemoteDrawLevel",
+    "kCoreSetCoreMenuLevel", "kCoreSetCoreDrawLevel",
     "RemoteCall", "remote_getClass", "doRemoteCallCheckedWithTimeout",
 ):
     assert contract in adapter, contract
-assert "SBSAccessibilityWindowHostingController" not in adapter
+assert "initWithCoreHosting" in adapter
 for contract in ("FBSceneManager", "-touchFloating", "-noTouchFloating"):
     assert contract in scenes, contract
 

@@ -398,7 +398,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         expectedProcessID = snapshot.processID; expectedImageBase = snapshot.imageBase
         expectedCompletedAt = snapshot.captureCompletedMonotonicSeconds
         expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
-            " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog rayGeometry=reference-top-native-scale headAnchor=current-bone-world-or-root-plus90"
+            " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog rayGeometry=reference-top-native-scale headAnchor=current-bone-world-or-root-plus90 informationLayout=core17-simple-modern-name-health informationAnchor=core17-record-first-projection informationScale=core17-frame-literal-1 informationBotOrdinal=core17-frame-local-counter gradient=core17-horizontal-four-vertex informationIcoMoon=not-consumed"
         awaitingReceipt = true; awaitingReceiptSince = CACurrentMediaTime()
         lastGeometrySubmittedAt = CACurrentMediaTime()
         geometryExpired = false
@@ -507,14 +507,14 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private func render(_ snapshot: CoreSetPlayerSnapshot, on size: CGSize) -> [CoreSetRenderCommand]? {
         var result: [CoreSetRenderCommand] = []
         if settings.grenadeWarning == true {
-            for mark in snapshot.grenadeMarks {
+            grenadeLoop: for mark in snapshot.grenadeMarks {
                 let point = mark.point, distance = mark.distanceUnitsDividedBy100
                 guard point.x.isFinite, point.y.isFinite, distance.isFinite,
                       distance >= 0, point.x >= 0, point.x <= size.width,
-                      point.y >= 0, point.y <= size.height else { return nil }
+                      point.y >= 0, point.y <= size.height else { continue }
                 let text: String
                 if let timer = mark.countdownSeconds?.doubleValue {
-                    guard timer.isFinite, timer > 0, timer <= 10 else { return nil }
+                    guard timer.isFinite, timer > 0, timer <= 10 else { continue }
                     text = String(format: "手雷 %.1fs %.0fm", timer, distance)
                 } else { text = String(format: "手雷 %.0fm", distance) }
                 result.append(CoreSetRenderCommand(kind: .text,
@@ -525,7 +525,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                     let start = segment.start, end = segment.end
                     guard [start.x, start.y, end.x, end.y].allSatisfy({ $0.isFinite }),
                           segment.lineWidth.isFinite, segment.shadowLineWidth.isFinite,
-                          segment.lineWidth > 0, segment.shadowLineWidth > 0 else { return nil }
+                          segment.lineWidth > 0, segment.shadowLineWidth > 0 else { continue }
                     result.append(CoreSetRenderCommand(kind: .line,
                         rect: CGRect(origin: start, size: .zero), endpoint: end,
                         color: UIColor(red: 12 / 255, green: 12 / 255, blue: 16 / 255, alpha: 135 / 255),
@@ -537,21 +537,22 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 }
                 if mark.predictionEndpointPresent {
                     let end = mark.predictionEndpoint, scale = Double(UIScreen.main.nativeScale)
-                    guard end.x.isFinite, end.y.isFinite, scale.isFinite, scale > 0 else { return nil }
-                    let filledRadius = CGFloat(max(scale * 3.5, 3) / scale)
-                    let ringRadius = CGFloat(max(scale * 6, 5) / scale)
-                    result.append(CoreSetRenderCommand(kind: .ellipse,
-                        rect: CGRect(x: end.x - filledRadius, y: end.y - filledRadius,
-                                     width: filledRadius * 2, height: filledRadius * 2), endpoint: .zero,
-                        color: UIColor(red: 1, green: 205 / 255, blue: 92 / 255, alpha: 230 / 255),
-                        lineWidth: 0, filled: true, text: nil, fontSize: 12))
-                    result.append(CoreSetRenderCommand(kind: .ellipse,
-                        rect: CGRect(x: end.x - ringRadius, y: end.y - ringRadius,
-                                     width: ringRadius * 2, height: ringRadius * 2), endpoint: .zero,
-                        color: UIColor(red: 1, green: 120 / 255, blue: 72 / 255, alpha: 180 / 255),
-                        lineWidth: CGFloat(max(scale * 1.3, 1) / scale), filled: false, text: nil, fontSize: 12))
+                    if end.x.isFinite, end.y.isFinite, scale.isFinite, scale > 0 {
+                        let filledRadius = CGFloat(max(scale * 3.5, 3) / scale)
+                        let ringRadius = CGFloat(max(scale * 6, 5) / scale)
+                        result.append(CoreSetRenderCommand(kind: .ellipse,
+                            rect: CGRect(x: end.x - filledRadius, y: end.y - filledRadius,
+                                         width: filledRadius * 2, height: filledRadius * 2), endpoint: .zero,
+                            color: UIColor(red: 1, green: 205 / 255, blue: 92 / 255, alpha: 230 / 255),
+                            lineWidth: 0, filled: true, text: nil, fontSize: 12))
+                        result.append(CoreSetRenderCommand(kind: .ellipse,
+                            rect: CGRect(x: end.x - ringRadius, y: end.y - ringRadius,
+                                         width: ringRadius * 2, height: ringRadius * 2), endpoint: .zero,
+                            color: UIColor(red: 1, green: 120 / 255, blue: 72 / 255, alpha: 180 / 255),
+                            lineWidth: CGFloat(max(scale * 1.3, 1) / scale), filled: false, text: nil, fontSize: 12))
+                    }
                 }
-                if result.count > 8000 { return nil }
+                if result.count > 8000 { break grenadeLoop }
             }
         }
         if settings.player.count.enabled == true, let mode = settings.player.count.mode {
@@ -569,8 +570,14 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 endpoint: .zero, color: .systemYellow, lineWidth: 0,
                 filled: false, text: mode == .detailed ? "人机 \(count)" : "\(count)", fontSize: 16))
         }
+        // Core resets the accepted player/bot counters at 0x1000db190 and
+        // 0x1000db198 for every draw pass, then increments the matching counter
+        // before consuming the information branch (0x1000dbb54..dbb64).  Keep
+        // the bot ordinal frame-local instead of persisting it in the roster.
+        var botInformationFrameOrdinal = 0
         for mark in snapshot.marks {
             if mark.bot && settings.hideBots == true { continue }
+            if mark.bot { botInformationFrameOrdinal += 1 }
             let display = mark.bot ? settings.bot : settings.player
             let color = mark.bot ? UIColor.systemYellow : UIColor.systemRed
             let distanceRole: CoreSetRenderStyleRole = mark.bot ? .botDistance : .playerDistance
@@ -584,7 +591,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 let rect = CGRect(x: edge.point.x - width / 2, y: edge.point.y - height / 2,
                                   width: width, height: height)
                 guard let glyph = CoreSetRenderCommand.backGlyph(style: style, rect: rect,
-                                                                 angle: edge.angle, color: color) else { return nil }
+                                                                 angle: edge.angle, color: color) else { continue }
                 result.append(glyph)
                 if indicator.showDistance {
                     result.append(CoreSetRenderCommand(kind: .text,
@@ -594,7 +601,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                         text: String(format: "%.0fm", mark.distanceUnitsDividedBy100), fontSize: 12)
                         .styled(role: distanceRole))
                 }
-                if result.count > 8000 { return nil }
+                if result.count > 8000 { break }
                 continue
             }
             let head = mark.head, feet = mark.feet, center = mark.center
@@ -613,21 +620,23 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             }
             if display.ray == true {
                 var origin = CGPoint.zero, endpoint = CGPoint.zero
-                guard CoreSetReferencePlayerRay(size, Double(UIScreen.main.nativeScale), head,
-                                                &origin, &endpoint) else { return nil }
-                result.append(CoreSetRenderCommand(kind: .line,
-                    rect: CGRect(origin: origin, size: .zero),
-                    endpoint: endpoint, color: color, lineWidth: 1, filled: false,
-                    text: nil, fontSize: 12)
-                    .styled(role: mark.bot ? .botRay : .playerRay))
+                if CoreSetReferencePlayerRay(size, Double(UIScreen.main.nativeScale), head,
+                                             &origin, &endpoint) {
+                    result.append(CoreSetRenderCommand(kind: .line,
+                        rect: CGRect(origin: origin, size: .zero),
+                        endpoint: endpoint, color: color, lineWidth: 1, filled: false,
+                        text: nil, fontSize: 12)
+                        .styled(role: mark.bot ? .botRay : .playerRay))
+                }
             }
             if display.distance == true {
-                guard let text = CoreSetReferencePlayerDistanceText(mark.distanceUnitsDividedBy100) else { return nil }
-                result.append(CoreSetRenderCommand(kind: .text,
-                    rect: CGRect(x: feet.x - 40, y: feet.y + 2, width: 80, height: 20),
-                    endpoint: .zero, color: color, lineWidth: 0, filled: false,
-                    text: text, fontSize: 12)
-                    .styled(role: distanceRole))
+                if let text = CoreSetReferencePlayerDistanceText(mark.distanceUnitsDividedBy100) {
+                    result.append(CoreSetRenderCommand(kind: .text,
+                        rect: CGRect(x: feet.x - 40, y: feet.y + 2, width: 80, height: 20),
+                        endpoint: .zero, color: color, lineWidth: 0, filled: false,
+                        text: text, fontSize: 12)
+                        .styled(role: distanceRole))
+                }
             }
             if display.weapon.enabled == true && display.weapon.mode == .text,
                let name = mark.weaponName, !name.isEmpty {
@@ -650,45 +659,11 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 }
             }
             if display.information.enabled == true, let mode = display.information.mode,
-               let name = mark.playerName, !name.isEmpty,
-               mark.distanceUnitsDividedBy100.isFinite {
-                let detail: String
-                if mode == .modern {
-                    let weapon = mark.weaponName.map { " · \($0)" } ?? ""
-                    detail = String(format: " · %.0f/%.0f HP · %.0fm%@",
-                                    Double(mark.health), Double(mark.maximumHealth),
-                                    mark.distanceUnitsDividedBy100, weapon)
-                } else {
-                    detail = String(format: " · %.0fm", mark.distanceUnitsDividedBy100)
-                }
-                // Three text commands preserve independent name/team color roles.
-                // Their local text layout is not claimed as native ImGui parity.
-                let teamText = "[\(mark.teamID)] "
-                let font = UIFont.systemFont(ofSize: 12)
-                let attributes: [NSAttributedString.Key: Any] = [.font: font]
-                let teamWidth = min(CGFloat(45), max(CGFloat(24),
-                    ceil((teamText as NSString).size(withAttributes: attributes).width) + 4))
-                let nameWidth = min(CGFloat(120), max(CGFloat(20),
-                    ceil((name as NSString).size(withAttributes: attributes).width) + 4))
-                let originX = head.x - 130, originY = min(head.y, feet.y) - 43
-                let teamRole: CoreSetRenderStyleRole = mark.bot ? .botTeam : .playerTeam
-                let nameRole: CoreSetRenderStyleRole = mark.bot ? .botName : .playerName
-                result.append(CoreSetRenderCommand(kind: .text,
-                    rect: CGRect(x: originX, y: originY, width: teamWidth, height: 20),
-                    endpoint: .zero, color: color, lineWidth: 0, filled: false,
-                    text: teamText, fontSize: 12).styled(role: teamRole))
-                result.append(CoreSetRenderCommand(kind: .text,
-                    rect: CGRect(x: originX + teamWidth, y: originY, width: nameWidth, height: 20),
-                    endpoint: .zero, color: color, lineWidth: 0, filled: false,
-                    text: name, fontSize: 12).styled(role: nameRole))
-                let detailWidth = CGFloat(260) - teamWidth - nameWidth
-                if detailWidth > 0 {
-                    result.append(CoreSetRenderCommand(kind: .text,
-                        rect: CGRect(x: originX + teamWidth + nameWidth, y: originY,
-                                     width: detailWidth, height: 20), endpoint: .zero,
-                        color: color, lineWidth: 0, filled: false,
-                        text: detail, fontSize: 12))
-                }
+               mark.informationAnchorPresent {
+                _ = appendCoreInformation(for: mark, mode: mode,
+                                          anchor: mark.informationAnchor,
+                                          botFrameOrdinal: botInformationFrameOrdinal,
+                                          commands: &result)
             }
             let withinBoneDistance = settings.boneDistance.value.map {
                 mark.distanceUnitsDividedBy100 <= Double($0)
@@ -696,16 +671,194 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             if display.bones == true && withinBoneDistance {
                 for segment in mark.boneSegments {
                     let start = segment.start, end = segment.end
-                    guard [start.x, start.y, end.x, end.y].allSatisfy({ $0.isFinite }) else { return nil }
+                    guard [start.x, start.y, end.x, end.y].allSatisfy({ $0.isFinite }) else { continue }
                     result.append(CoreSetRenderCommand(kind: .line,
                         rect: CGRect(origin: start, size: .zero), endpoint: end,
                         color: color, lineWidth: 1, filled: false, text: nil, fontSize: 12)
                         .styled(role: mark.bot ? .botBone : .playerBone))
                 }
             }
-            if result.count > 8000 { return nil } // Never submit a partial draw list.
+            if result.count > 8000 { break }
         }
         return result
+    }
+
+    // Core v1.7 0x1000dbca8..0x1000dc750 has two distinct information
+    // layouts.  It does not concatenate HP, distance or weapon into the name
+    // line: both branches render the name and a separate health bar.  The
+    // frame owner stores the exact 0x3f800000 literal into the shared draw
+    // context at 0x100021bb0..0x100021bb8.  The branch reads that producer at
+    // draw-context +0x0, while its anchor is the first projected draw-record
+    // point at record +0x30/+0x34 (0x1000dbca0..0x1000dbca4).  It is not the
+    // midpoint of the first and second projected points.
+    private func appendCoreInformation(for mark: CoreSetPlayerMark,
+                                       mode: CoreSetInformationMode,
+                                       anchor: CGPoint,
+                                       botFrameOrdinal: Int,
+                                       commands: inout [CoreSetRenderCommand]) -> Bool {
+        let scale = coreInformationFrameScale()
+        let anchorX = anchor.x
+        let topY = anchor.y
+        guard anchorX.isFinite, topY.isFinite else { return false }
+
+        let rawName = mark.playerName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let name: String
+        if mode == .minimal {
+            name = rawName.isEmpty ? (mark.bot ? "人机" : "未知玩家") : rawName
+        } else if mark.bot {
+            name = rawName.isEmpty ? "人机\(botFrameOrdinal)【人机】" : "\(rawName)【人机】"
+        } else {
+            name = rawName.isEmpty ? "未知玩家" : rawName
+        }
+        let ratio = min(CGFloat(1), max(CGFloat(0), CGFloat(mark.health) / 100))
+        let palette = coreInformationTeamColor(mark.teamID)
+        let healthColor = coreInformationHealthColor(ratio, modern: mode == .modern)
+        let teamRole: CoreSetRenderStyleRole = mark.bot ? .botTeam : .playerTeam
+        let nameRole: CoreSetRenderStyleRole = mark.bot ? .botName : .playerName
+
+        if mode == .minimal {
+            let fontSize = 11 * scale
+            guard let font = UIFont(name: "OPPOSans-H", size: fontSize) else { return false }
+            let attributes: [NSAttributedString.Key: Any] = [.font: font]
+            let teamText = "\(mark.teamID)"
+            let teamWidth = ceil((teamText as NSString).size(withAttributes: attributes).width)
+            let nameSize = (name as NSString).size(withAttributes: attributes)
+            let nameWidth = ceil(nameSize.width)
+            let textHeight = ceil(max(font.lineHeight, nameSize.height))
+            let totalWidth = teamWidth + 4 * scale + nameWidth
+            let barWidth = max(54 * scale, totalWidth)
+            guard [teamWidth, nameWidth, textHeight, totalWidth, barWidth].allSatisfy({ $0.isFinite }),
+                  totalWidth > 0, barWidth > 0 else { return false }
+            let textX = anchorX - totalWidth / 2
+            let textY = topY - 24 * scale
+            commands.append(CoreSetRenderCommand(kind: .text,
+                rect: CGRect(x: textX, y: textY, width: teamWidth, height: textHeight),
+                endpoint: .zero, color: palette, lineWidth: 0, filled: false,
+                text: teamText, fontSize: fontSize).usingFont(.body))
+            commands.append(CoreSetRenderCommand(kind: .text,
+                rect: CGRect(x: textX + teamWidth + 4 * scale, y: textY,
+                             width: nameWidth, height: textHeight),
+                endpoint: .zero, color: .white, lineWidth: 0, filled: false,
+                text: name, fontSize: fontSize).usingFont(.body).styled(role: nameRole))
+            let barY = textY + textHeight + 2 * scale
+            let barHeight = 2.5 * scale
+            let barX = anchorX - barWidth / 2
+            commands.append(CoreSetRenderCommand(kind: .rectangle,
+                rect: CGRect(x: barX, y: barY, width: barWidth, height: barHeight),
+                endpoint: .zero,
+                color: UIColor(red: 35 / 255, green: 35 / 255, blue: 35 / 255, alpha: 190 / 255),
+                lineWidth: 0, filled: true, text: nil, fontSize: fontSize)
+                .rounded(radius: 1.25 * scale))
+            if ratio > 0 {
+                commands.append(CoreSetRenderCommand(kind: .rectangle,
+                    rect: CGRect(x: barX, y: barY, width: barWidth * ratio, height: barHeight),
+                    endpoint: .zero, color: healthColor, lineWidth: 0, filled: true,
+                    text: nil, fontSize: fontSize).rounded(radius: 1.25 * scale))
+            }
+            return true
+        }
+
+        let fontSize = 12 * scale
+        guard let font = UIFont(name: "OPPOSans-H", size: fontSize) else { return false }
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let teamText = "\(mark.teamID)"
+        let teamSize = (teamText as NSString).size(withAttributes: attributes)
+        let nameSize = (name as NSString).size(withAttributes: attributes)
+        let cardWidth = max(90 * scale, ceil(nameSize.width) + 37 * scale)
+        guard [teamSize.width, teamSize.height, nameSize.width, nameSize.height, cardWidth]
+            .allSatisfy({ $0.isFinite }), cardWidth > 18 * scale else { return false }
+        let cardX = anchorX - cardWidth / 2
+        let cardY = topY - 28 * scale
+        let cardHeight = 18 * scale
+        let badgeWidth = 18 * scale
+        commands.append(CoreSetRenderCommand(kind: .rectangle,
+            rect: CGRect(x: cardX, y: cardY, width: badgeWidth, height: cardHeight),
+            endpoint: .zero, color: palette, lineWidth: 0, filled: true,
+            text: nil, fontSize: fontSize).rounded(radius: 4 * scale))
+
+        // Core 0x1000dc564..0x1000dc5f0 calls AddRectFilledMultiColor over the
+        // 15-point name area. TL/BL use alpha 240; TR/BR use alpha 0. Because
+        // each vertical pair is identical, the exact four-vertex payload is a
+        // horizontal gradient in both local render backends.
+        let gradientX = cardX + badgeWidth
+        let gradientWidth = cardWidth - badgeWidth
+        let gradientRGB = coreInformationGradientRGB(mark.teamID)
+        let gradientLeft = UIColor(red: gradientRGB.0, green: gradientRGB.1,
+                                   blue: gradientRGB.2, alpha: 240 / 255)
+        let gradientRight = UIColor(red: gradientRGB.0, green: gradientRGB.1,
+                                    blue: gradientRGB.2, alpha: 0)
+        commands.append(CoreSetRenderCommand(kind: .rectangle,
+            rect: CGRect(x: gradientX, y: cardY, width: gradientWidth, height: 15 * scale),
+            endpoint: .zero, color: gradientLeft,
+            lineWidth: 0, filled: true, text: nil, fontSize: fontSize)
+            .horizontalGradient(from: gradientLeft, to: gradientRight))
+        commands.append(CoreSetRenderCommand(kind: .text,
+            rect: CGRect(x: cardX + (badgeWidth - teamSize.width) / 2,
+                         y: cardY + (cardHeight - teamSize.height) / 2,
+                         width: teamSize.width, height: max(font.lineHeight, teamSize.height)),
+            endpoint: .zero, color: .white, lineWidth: 0, filled: false,
+            text: teamText, fontSize: fontSize).usingFont(.body).styled(role: teamRole))
+        let nameY = cardY + (15 * scale - nameSize.height) / 2
+        commands.append(CoreSetRenderCommand(kind: .text,
+            rect: CGRect(x: cardX + badgeWidth + 4 * scale, y: nameY,
+                         width: nameSize.width, height: max(font.lineHeight, nameSize.height)),
+            endpoint: .zero, color: .white, lineWidth: 0, filled: false,
+            text: name, fontSize: fontSize).usingFont(.body).styled(role: nameRole))
+        let healthX = gradientX
+        let healthY = topY - 13 * scale
+        let healthWidth = gradientWidth
+        let healthHeight = 3 * scale
+        commands.append(CoreSetRenderCommand(kind: .rectangle,
+            rect: CGRect(x: healthX, y: healthY, width: healthWidth, height: healthHeight),
+            endpoint: .zero,
+            color: UIColor(red: 40 / 255, green: 40 / 255, blue: 40 / 255, alpha: 1),
+            lineWidth: 0, filled: true, text: nil, fontSize: fontSize)
+            .rounded(radius: 4 * scale))
+        if ratio > 0 {
+            commands.append(CoreSetRenderCommand(kind: .rectangle,
+                rect: CGRect(x: healthX, y: healthY, width: healthWidth * ratio,
+                             height: healthHeight), endpoint: .zero,
+                color: healthColor, lineWidth: 0, filled: true,
+                text: nil, fontSize: fontSize).rounded(radius: 4 * scale))
+        }
+        return true
+    }
+
+    private func coreInformationFrameScale() -> CGFloat {
+        // ldr s0, [0x100bd8b20] / str s0, [context] is executed immediately
+        // before frame_draw.  The identity-bound literal is IEEE-754 1.0.
+        CGFloat(Float(bitPattern: 0x3f800000))
+    }
+
+    private func coreInformationTeamColor(_ teamID: UInt32) -> UIColor {
+        // Exact eight-entry ImGui palette at Core image 0x100ac8678.
+        let palette: [(CGFloat, CGFloat, CGFloat)] = [
+            (255, 100, 100), (100, 200, 255), (100, 255, 100), (255, 200, 100),
+            (255, 100, 255), (255, 255, 100), (100, 255, 200), (200, 100, 255),
+        ]
+        let value = palette[Int(teamID & 7)]
+        return UIColor(red: value.0 / 255, green: value.1 / 255,
+                       blue: value.2 / 255, alpha: 1)
+    }
+
+    private func coreInformationGradientRGB(_ teamID: UInt32) -> (CGFloat, CGFloat, CGFloat) {
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        guard coreInformationTeamColor(teamID).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        else { return (0.8, 0.8, 0.8) }
+        return (floor(red * 255 * 0.8) / 255,
+                floor(green * 255 * 0.8) / 255,
+                floor(blue * 255 * 0.8) / 255)
+    }
+
+    private func coreInformationHealthColor(_ ratio: CGFloat, modern: Bool) -> UIColor {
+        if modern {
+            if ratio < 0.3 { return UIColor(red: 1, green: 50 / 255, blue: 1, alpha: 1) }
+            if ratio < 0.7 { return UIColor(red: 1, green: 140 / 255, blue: 0, alpha: 1) }
+            return .white
+        }
+        if ratio < 0.3 { return UIColor(red: 1, green: 58 / 255, blue: 58 / 255, alpha: 245 / 255) }
+        if ratio < 0.7 { return UIColor(red: 1, green: 150 / 255, blue: 30 / 255, alpha: 245 / 255) }
+        return UIColor(white: 245 / 255, alpha: 245 / 255)
     }
 
     private func offscreenEdge(_ projected: CGPoint, in size: CGSize,

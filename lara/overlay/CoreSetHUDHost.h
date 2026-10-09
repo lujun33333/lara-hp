@@ -38,6 +38,14 @@ typedef NS_ENUM(NSInteger, CoreSetHostedPointerPhase) {
 - (void)unregisterBothSurfacesAsync:(UIWindow *)menuWindow drawWindow:(UIWindow *)drawWindow
                          completion:(void (^)(BOOL menuRemoved, BOOL drawRemoved))completion;
 @optional
+- (BOOL)requiresDedicatedIconSurface;
+- (void)registerThreeSurfacesAsync:(UIWindow *)menuWindow iconWindow:(UIWindow *)iconWindow
+                         drawWindow:(UIWindow *)drawWindow
+                         completion:(void (^)(BOOL observed, uint64_t generation))completion;
+- (void)unregisterThreeSurfacesAsync:(UIWindow *)menuWindow iconWindow:(UIWindow *)iconWindow
+                           drawWindow:(UIWindow *)drawWindow
+                           completion:(void (^)(BOOL menuRemoved, BOOL iconRemoved,
+                                                BOOL drawRemoved))completion;
 - (BOOL)usesDirectSourceInteraction;
 - (void)prepareForHostGeneration:(uint64_t)generation;
 - (uint64_t)hostGeneration;
@@ -49,6 +57,8 @@ typedef NS_ENUM(NSInteger, CoreSetHostedPointerPhase) {
 
 typedef struct CoreSetHUDStopResult {
     BOOL localWindowsStopped;
+    // In Core three-surface mode this is true only after menu and icon owners
+    // are both removed; the public result remains source-compatible.
     BOOL menuHostingRemoved;
     BOOL drawHostingRemoved;
     BOOL complete;

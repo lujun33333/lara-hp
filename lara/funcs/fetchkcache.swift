@@ -17,7 +17,8 @@ func larakcpath() -> String? {
     return docs.appendingPathComponent("kernelcache").path
 }
 
-func fetchkcache() -> Bool {
+func fetchkcache(action requestedAction: CoreSetLocalHomeAction? = nil) -> Bool {
+    let action = requestedAction ?? CoreSetLocalHomeAction()
     guard ds_is_ready(),
           ds_get_our_proc() != 0,
           ds_get_our_task() != 0,
@@ -80,12 +81,17 @@ func fetchkcache() -> Bool {
     }
     let expectedBytes = UInt64(sourceStat.st_size)
     let transferOwner = CoreSetKernelCacheTransferOwner.shared
-    transferOwner.begin(totalBytes: expectedBytes)
+    transferOwner.begin(totalBytes: expectedBytes, action: action)
     var transferCompleted = false
 
     defer {
         if !transferCompleted {
-            transferOwner.fail(code: -1, message: "本机 kernelcache 复制未完成")
+            if action.isCancellationRequested {
+                unlink(outpath)
+                transferOwner.stoppedAfterCancellation(action: action)
+            } else {
+                transferOwner.fail(code: -1, message: "本机 kernelcache 复制未完成", action: action)
+            }
         }
         close(src)
         close(dst)
@@ -97,6 +103,7 @@ func fetchkcache() -> Bool {
     var totalBytes = 0
 
     while true {
+        if action.isCancellationRequested { return false }
         let n = buffer.withUnsafeMutableBytes { rawBuffer in
             read(src, rawBuffer.baseAddress!, bufferSize)
         }
@@ -112,6 +119,7 @@ func fetchkcache() -> Bool {
 
         var written = 0
         while written < n {
+            if action.isCancellationRequested { return false }
             let w = buffer.withUnsafeBytes { rawBuffer in
                 write(dst, rawBuffer.baseAddress!.advanced(by: written), n - written)
             }
@@ -122,7 +130,8 @@ func fetchkcache() -> Bool {
             }
 
             written += w
-            transferOwner.advance(downloadedBytes: UInt64(totalBytes + written), totalBytes: expectedBytes)
+            transferOwner.advance(downloadedBytes: UInt64(totalBytes + written),
+                                  totalBytes: expectedBytes, action: action)
         }
 
         totalBytes += n
@@ -147,8 +156,9 @@ func fetchkcache() -> Bool {
         return false
     }
 
-    transferOwner.advance(downloadedBytes: expectedBytes, totalBytes: expectedBytes)
-    transferOwner.complete()
+    if action.isCancellationRequested { return false }
+    transferOwner.advance(downloadedBytes: expectedBytes, totalBytes: expectedBytes, action: action)
+    guard transferOwner.complete(action: action) else { return false }
     transferCompleted = true
     globallogger.log("(fetchkcache) 内核缓存获取成功！")
     return true

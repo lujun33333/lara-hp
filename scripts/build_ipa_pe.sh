@@ -660,7 +660,7 @@ if grep -q 'cmd LC_RPATH' <<<"$NORMALIZED_LOAD_COMMANDS"; then
     die "Swift runtime 规范化后主 Mach-O 仍包含 LC_RPATH"
 fi
 
-say "使用王者 SpringBoard UIWindow/CALayerHost 镜像所需权限对 App bundle 做 ad-hoc codesign..."
+say "使用 Core SBS 托管主路径及王者 SpringBoard UIWindow/CALayerHost 回退链所需权限对 App bundle 做 ad-hoc codesign..."
 # Info.plist 和全部 bundle 资源必须先固定，再由 codesign 同时签主 Mach-O、写入
 # 当前完整 entitlement 集并生成与最终资源匹配的 _CodeSignature/CodeResources。
 codesign --force --sign - --timestamp=none \

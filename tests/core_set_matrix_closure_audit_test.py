@@ -30,7 +30,8 @@ def require_matrix(menu, native, action):
     assert not any(row["device_effect_verified"] for row in rows)
     assert not any(row["one_to_one_complete"] or row["original_runtime_receipt_verified"] for row in native["points"])
     assert menu["statistics"]["device_effect_verified_points"] == 0
-    assert menu["statistics"]["original_action_consumer_missing_points"] == 29
+    assert menu["statistics"]["original_action_consumer_missing_points"] == 6
+    assert menu["statistics"]["source_closed_action_points"] == 27
     assert menu["statistics"]["alternative_aim_preview_points"] == 7
     assert all(not extra["counts_toward_v17_closure"] for extra in menu["current_ui_extensions"])
     assert [point["id"] for point in action["points"]] == [f"v17-{number:03}" for number in range(106, 137)]
@@ -58,17 +59,20 @@ def require_matrix(menu, native, action):
     counts = action["closure_counts"]
     assert counts["mapped_points"] == 31 and counts["original_effect_points"] == 0
     assert counts["shared_reference_component_classes"] == len(component_keys)
-    assert counts["per_point_unresolved_requirement_entries"] == sum(len(p["next_exact_edges"]) for p in action["points"]) == 113
-    assert counts["unique_unresolved_requirements"] == len({e for p in action["points"] for e in p["next_exact_edges"]}) == 6
+    assert counts["per_point_unresolved_requirement_entries"] == sum(len(p["next_exact_edges"]) for p in action["points"]) == 82
+    assert counts["unique_unresolved_requirements"] == len({e for p in action["points"] for e in p["next_exact_edges"]}) == 5
     assert "NOT point-specific" in counts["scope"]
     anchor = action["aim_anchor_producer_evidence"]
     assert "same first-bone world point" in anchor["semantics"]
     assert action_points["v17-107"]["closed_producer_edges"] == ["profile-first-bone-to-candidate-1e0-and-1ec"]
     assert not any("anchor1e0/1ec actual producers" in edge for edge in gaps)
+    assert not any("bone-valid + anchor producers" in edge for edge in gaps)
     knocked = action["knocked_flag_producer_evidence"]
     assert "HasLastBreath status" in knocked["semantics"]
     assert action_points["v17-114"]["closed_producer_edges"] == ["has-last-breath-or-state-bit19-to-candidate-flag14"]
     assert not any("pawn-state bit19 producer" in edge for edge in gaps)
+    assert not any("flag14 owner/knocked semantics" in edge for edge in gaps)
+    assert not any("target effects independently restored" in edge for edge in gaps)
     assert not action["compensation_evidence"]["write_ready"]
     assert not action["compensation_evidence"]["target_effect_restored"]
     assert not action["cleanup_contract"]["production_restoration_verifier_installed"]

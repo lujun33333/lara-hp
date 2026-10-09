@@ -74,8 +74,12 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private var homeActionsInFlight: Set<CoreSetHomeProbePoint> = []
     private var hostedExitAvailable = false
     func setHostedExitAvailable(_ available: Bool) {
+        if hostedExitAvailable != available { panelLayoutViewport = .null }
         hostedExitAvailable = available
-        if isViewLoaded { exitHUDButton.isHidden = !available }
+        if isViewLoaded {
+            exitHUDButton.isHidden = !available
+            view.setNeedsLayout()
+        }
     }
     private(set) var featureState = CoreSetFeatureState()
     private var gameConsumers: [AnyKeyPath: AnyObject] = [:]
@@ -231,6 +235,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private let closeButton = UIButton(type: .system)
     private let exitHUDButton = UIButton(type: .system)
     private var panelPlacementInitialized = false
+    private var panelLayoutViewport = CGRect.null
     private var panelScale: CGFloat = 1
     private enum HostedAction: String {
         case close, exitHUD, page, theme, homeRunMode, homeCoverMode, homeKernelAction, homeInformationAction
@@ -437,23 +442,31 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        let safe = view.bounds.inset(by: view.safeAreaInsets)
-        let scale = min(1, min(max(1, safe.width - 16) / referenceSize.width,
-                               max(1, safe.height - 16) / referenceSize.height))
+        // Core draws the 838x535 reference window from the hosted surface's
+        // display bounds.  A controller first lays out in the launcher's
+        // portrait scene, then receives the game's landscape bounds.  Keeping
+        // that old absolute centre clamps the window against the landscape
+        // left edge.  Re-seed the centre whenever the source viewport changes;
+        // dragging remains stable while the viewport itself is unchanged.
+        let viewport = hostedExitAvailable ? view.bounds : view.bounds.inset(by: view.safeAreaInsets)
+        let scale = min(1, min(max(1, viewport.width - 16) / referenceSize.width,
+                               max(1, viewport.height - 16) / referenceSize.height))
         panelScale = scale
         panel.bounds = CGRect(origin: .zero, size: referenceSize)
         panel.transform = CGAffineTransform(scaleX: scale, y: scale)
-        if !panelPlacementInitialized {
-            panel.center = CGPoint(x: safe.midX, y: safe.midY)
+        let viewportChanged = panelLayoutViewport != viewport
+        if !panelPlacementInitialized || viewportChanged {
+            panel.center = CGPoint(x: viewport.midX, y: viewport.midY)
             panelPlacementInitialized = true
+            panelLayoutViewport = viewport
         }
-        panel.center = clampedPanelCenter(panel.center, in: safe, scale: scale)
+        panel.center = clampedPanelCenter(panel.center, in: viewport, scale: scale)
         // Keep the ordinary modal close target usable when the reference panel scales down.
         closeButton.bounds = CGRect(x: 0, y: 0, width: 44, height: 44)
         let closeCenter = CGPoint(x: panel.center.x + (818 - referenceSize.width / 2) * scale,
                                   y: panel.center.y + (20 - referenceSize.height / 2) * scale)
-        closeButton.center = CGPoint(x: min(safe.maxX - 22, max(safe.minX + 22, closeCenter.x)),
-                                     y: min(safe.maxY - 22, max(safe.minY + 22, closeCenter.y)))
+        closeButton.center = CGPoint(x: min(viewport.maxX - 22, max(viewport.minX + 22, closeCenter.x)),
+                                     y: min(viewport.maxY - 22, max(viewport.minY + 22, closeCenter.y)))
         hostedColorOverlay?.frame = view.bounds
         hostedColorCard?.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
         if selectedPage == 4 { refreshRadarRangeRows() }
@@ -478,10 +491,10 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     @objc private func moveReferencePanel(_ sender: UIPanGestureRecognizer) {
         guard sender.state == .began || sender.state == .changed else { return }
         let translation = sender.translation(in: view)
-        let safe = view.bounds.inset(by: view.safeAreaInsets)
+        let viewport = hostedExitAvailable ? view.bounds : view.bounds.inset(by: view.safeAreaInsets)
         panel.center = clampedPanelCenter(
             CGPoint(x: panel.center.x + translation.x, y: panel.center.y + translation.y),
-            in: safe, scale: panelScale)
+            in: viewport, scale: panelScale)
         sender.setTranslation(.zero, in: view)
         view.setNeedsLayout()
     }
@@ -913,7 +926,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         if selectedPage == 0 {
             switch name {
             case "运行模式": return nil // Core only normalizes/persists C+0x12c; no separate consumer.
-            case "掩体判断": return "home.coverMode：未提供全局/局内/关闭的同义遮挡消费者及关闭恢复回执"
+            case "掩体判断": return "home.coverMode：原版只读 lease、A/B 指针/表读取、0xa0 输出布局、callback owner/payload 与三条空间索引 worker 已静态闭合；64d04 row 到 builder 字段的连续身份及真机回执待验证"
             case "内核利用": return "kernelAction：当前场景动作 owner 未绑定或正在执行"
             case "获取信息": return "informationAction：当前场景动作 owner 未绑定或正在执行"
             default: return nil
@@ -1972,7 +1985,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                         selection.isSelected = selection.isEnabled &&
                             featureState.home.desired.coverMode == values[optionIndex]
                         selection.backgroundColor = selection.isSelected ? accent : gray(41, 230)
-                        selection.accessibilityHint = "仅保存原版0/1/2配置；未绑定遮挡动作消费者"
+                        selection.accessibilityHint = "已闭合原版0/1/2配置与静态输出 ABI；运行时 row 连续身份及真机遮挡消费者待验证"
                         selection.addTarget(self, action: #selector(configureHomeCoverMode(_:)), for: .touchUpInside)
                         registerHosted(selection, .homeCoverMode)
                         row.isUserInteractionEnabled = true

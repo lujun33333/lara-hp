@@ -10,8 +10,8 @@
     "mapped_points": 31,
     "original_effect_points": 0,
     "shared_reference_component_classes": 20,
-    "per_point_unresolved_requirement_entries": 113,
-    "unique_unresolved_requirements": 6,
+    "per_point_unresolved_requirement_entries": 82,
+    "unique_unresolved_requirements": 5,
     "scope": "shared reference component keys, NOT point-specific original effect or runtime receipt closure"
   },
   "reference_windows": [
@@ -11910,8 +11910,8 @@
       "0x1000de730"
     ],
     "closed_edges": {
-      "raw_actor_gate": "dd46c..dd4d8 exact Core-local state/bot/flag/distance predicate; target flag14 owner still unresolved",
-      "world_point": "dd4dc..dd59c exact local anchor interpolation/root fallback; branch reachability/target bone producer still unresolved",
+      "raw_actor_gate": "dd46c..dd4d8 exact Core-local state/bot/flag/distance predicate; build15915 flag14 owner is PawnStateRepSyncData+0x1700 CurrentStatesMask bit19 with HealthStatus+0x3be0 HasLastBreath override",
+      "world_point": "dd4dc..dd59c exact local anchor interpolation/root fallback; d7f04/d7f08 and d8ba8..d94c4 prove profile-first ComponentSpaceTransforms point feeds candidate +0x1e0 and +0x1ec",
       "screen_rank": "dd5b8..dd6c0 screen interior, ordinary <=radius/strict score improvement, independent sticky <=1.15*radius",
       "candidate_publish": "de694..de730 → c182c under mutex; valid publish increments BSS serial generation, null clears record",
       "geometry_clock": "c5014..c50e0 same key/clock monotonic delta; first/change/nonincrease/>50ms resets local residual without target restore",
@@ -11922,12 +11922,10 @@
       "stop_local_only": "c1d14..c1f38 invalid main/scene gates clear Core-local candidate/history/deadline state; no target-memory restoration inferred"
     },
     "remaining_edges": [
-      "actual bone-valid + anchor producers and build15915 flag14 owner/knocked semantics",
       "all upstream route predicates/feedback → trusted live current candidate/controller authority",
       "live numerical-input provenance/unit leases, independent of closed reference geometry/angular-motion components",
       "live binding/lifetime validity and stale-feedback rejection; local component parity alone is insufficient",
-      "Aim/Recoil shared write ranges concurrency and target-game thread ownership",
-      "disable/target-loss/scene-change → target effects independently restored, not merely local state cleared"
+      "Aim/Recoil shared write ranges concurrency and target-game thread ownership"
     ],
     "offline_parity_case_counts": {
       "actor_gate": 64,
@@ -24224,8 +24222,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24270,8 +24267,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24314,8 +24310,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24359,8 +24354,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24403,8 +24397,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24447,8 +24440,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24491,8 +24483,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24535,8 +24526,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24581,8 +24571,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24625,8 +24614,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24670,8 +24658,7 @@
       "next_exact_edges": [
         "sticky rank/publish → source record invalidation, target identity lease and live selector observable",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24716,8 +24703,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24761,8 +24747,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24806,8 +24791,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24852,8 +24836,7 @@
       "next_exact_edges": [
         "same-cycle input lease and independent observation of user-input arbitration",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24899,8 +24882,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24946,8 +24928,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -24993,8 +24974,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25040,8 +25020,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25085,8 +25064,7 @@
       "next_exact_edges": [
         "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25130,8 +25108,7 @@
       ],
       "next_exact_edges": [
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25175,8 +25152,7 @@
       ],
       "next_exact_edges": [
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25220,8 +25196,7 @@
       ],
       "next_exact_edges": [
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25265,8 +25240,7 @@
       ],
       "next_exact_edges": [
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25310,8 +25284,7 @@
       ],
       "next_exact_edges": [
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25352,8 +25325,7 @@
       ],
       "next_exact_edges": [
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25395,8 +25367,7 @@
       ],
       "next_exact_edges": [
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25439,8 +25410,7 @@
       ],
       "next_exact_edges": [
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25481,8 +25451,7 @@
       ],
       "next_exact_edges": [
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25522,8 +25491,7 @@
       ],
       "next_exact_edges": [
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false
@@ -25563,8 +25531,7 @@
       ],
       "next_exact_edges": [
         "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+        "checked-write result → current independent readback under game-thread concurrency"
       ],
       "original_runtime_receipt_verified": false,
       "one_to_one_complete": false

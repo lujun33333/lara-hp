@@ -19,6 +19,9 @@ struct LaraDarkSwordStageObservation: Equatable {
     let generation: UInt64
     let sequence: UInt64
     let resultCode: Int32
+    let actionRequestID: UUID
+    let actionGeneration: UInt64
+    let actionSequence: UInt64
 }
 
 struct LaraDarkSwordPageObservation: Equatable {
@@ -31,6 +34,9 @@ struct LaraDarkSwordPageObservation: Equatable {
     let generation: UInt64
     let sequence: UInt64
     let resultCode: Int32
+    let actionRequestID: UUID
+    let actionGeneration: UInt64
+    let actionSequence: UInt64
 }
 
 private func loadMutablePropertyListDictionary(from url: URL) throws -> NSMutableDictionary {
@@ -81,6 +87,17 @@ final class laramgr: ObservableObject {
     @Published var dsprogress: Double = 0.0
     @Published private(set) var dsStageObservation: LaraDarkSwordStageObservation?
     @Published private(set) var dsPageObservation: LaraDarkSwordPageObservation?
+    private let dsActionLock = NSLock()
+    private var activeDSAction: CoreSetLocalHomeAction?
+
+    private func currentDSAction() -> CoreSetLocalHomeAction? {
+        dsActionLock.lock(); defer { dsActionLock.unlock() }
+        return activeDSAction
+    }
+
+    private func setDSAction(_ action: CoreSetLocalHomeAction?) {
+        dsActionLock.lock(); activeDSAction = action; dsActionLock.unlock()
+    }
     @Published var kernbase: UInt64 = 0
     @Published var kernslide: UInt64 = 0
     
@@ -136,14 +153,21 @@ final class laramgr: ObservableObject {
         let bundleFolder: String
     }
     
-    func run(completion: ((Bool) -> Void)? = nil) {
+    func run(action requestedAction: CoreSetLocalHomeAction? = nil,
+             completion: ((Bool) -> Void)? = nil) {
         guard !dsrunning else { return }
+        let action = requestedAction ?? CoreSetLocalHomeAction()
         if dsready || ds_is_ready() {
             dsready = true
             dsfailed = false
             dsprogress = 1.0
             kernbase = ds_get_kernel_base()
             kernslide = ds_get_kernel_slide()
+            dsPageObservation = nil
+            dsStageObservation = LaraDarkSwordStageObservation(
+                text: "内核读写已就绪（复用）", phase: 2, requestID: 0, generation: 0,
+                sequence: 1, resultCode: 0, actionRequestID: action.requestID,
+                actionGeneration: action.generation, actionSequence: action.nextSequence())
             logmsg("(ds) 内核读写已就绪，跳过重复注入")
             completion?(true)
             return
@@ -153,6 +177,9 @@ final class laramgr: ObservableObject {
         dsfailed = false
         dsattempted = true
         dsprogress = 0.0
+        dsStageObservation = nil
+        dsPageObservation = nil
+        setDSAction(action)
         log = ""
         
         ds_set_log_callback { messageCStr in
@@ -169,8 +196,11 @@ final class laramgr: ObservableObject {
         }
         ds_set_stage_event_callback { stage, phase, requestID, generation, sequence, resultCode in
             guard let stage else { return }
+            guard let action = laramgr.shared.currentDSAction() else { return }
             let value = LaraDarkSwordStageObservation(text: String(cString: stage), phase: phase,
-                requestID: requestID, generation: generation, sequence: sequence, resultCode: resultCode)
+                requestID: requestID, generation: generation, sequence: sequence, resultCode: resultCode,
+                actionRequestID: action.requestID, actionGeneration: action.generation,
+                actionSequence: action.nextSequence())
             DispatchQueue.main.async {
                 let old = laramgr.shared.dsStageObservation
                 guard old?.requestID != requestID || old?.generation != generation || sequence > (old?.sequence ?? 0) else { return }
@@ -179,9 +209,12 @@ final class laramgr: ObservableObject {
         }
         ds_set_page_event_callback { executing, cancelled, phase, completed, total, requestID, generation, sequence, resultCode in
             guard total > 0, completed <= total else { return }
+            guard let action = laramgr.shared.currentDSAction() else { return }
             let value = LaraDarkSwordPageObservation(executing: executing, cancelled: cancelled,
                 phase: phase, completedPages: completed, totalPages: total, requestID: requestID,
-                generation: generation, sequence: sequence, resultCode: resultCode)
+                generation: generation, sequence: sequence, resultCode: resultCode,
+                actionRequestID: action.requestID, actionGeneration: action.generation,
+                actionSequence: action.nextSequence())
             DispatchQueue.main.async {
                 let old = laramgr.shared.dsPageObservation
                 let newOwner = old?.requestID != requestID || old?.generation != generation
@@ -193,6 +226,7 @@ final class laramgr: ObservableObject {
         
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = ds_run()
+            laramgr.shared.setDSAction(nil)
             
             DispatchQueue.main.async {
                 guard let self else { return }

@@ -25,6 +25,7 @@ class CoreSetAimPreviewContractTest(unittest.TestCase):
         cls.display = read("lara/views/app/CoreSetAimDisplayConsumer.swift")
         cls.preview = read("lara/views/app/CoreSetAimPreviewConsumer.swift")
         cls.action = read("lara/views/app/CoreSetAimConsumer.swift")
+        cls.coordinator = read("lara/views/app/CoreSetRuntimeCoordinator.swift")
         cls.menu = read("lara/views/app/CoreSetMenuViewController.swift")
         fixture = json.loads(read("tests/fixtures/core_set_v17_menu_point_map.json"))
         cls.columns = fixture["columns"]
@@ -71,13 +72,41 @@ class CoreSetAimPreviewContractTest(unittest.TestCase):
         self.assertNotRegex(no_target, r"return\s+\[\]")
         self.assertIn("state.circleVisible == true", commands)
 
-    def test_preview_remains_read_only_and_action_consumer_is_separate(self) -> None:
-        self.assertIn("includeBattleInputs: false", self.preview)
-        self.assertIn("preview-snapshot-confirmed target=", self.preview)
+    def test_display_consumes_the_action_selected_candidate_without_rescanning(self) -> None:
+        self.assertIn("struct CoreSetAimDisplayRecord", self.preview)
+        self.assertIn("let worldPoint: CoreSetAimDisplayWorldPoint", self.preview)
+        self.assertIn("let screenPoint: CGPoint", self.preview)
+        self.assertIn("let candidateStartedMonotonicSeconds: Double", self.preview)
+        for field in ("snapshotID", "sessionGeneration", "processID", "imageBase",
+                      "hostGeneration", "actionRevision", "actionRequestID"):
+            self.assertRegex(self.coordinator, rf"let {field}: (UUID|UInt64|Int32)")
+        self.assertNotIn("CoreSetPlayerCollector.capture", self.preview)
+        self.assertNotIn("CoreSetReadSession", self.preview)
+        self.assertIn("CoreSetAimDisplayRecordStore.shared.publish(record)", self.action)
+        self.assertIn("candidateKey: selectedActor", self.action)
+        self.assertIn("preview.capture(canvas:", self.display)
         self.assertNotRegex(self.preview, r"\b(ds_kwrite|vm_write|mach_vm_write|RemoteCall)\b")
         self.assertIn("CoreSetIsolatedWriteProbe", self.action)
         self.assertIn("includeBattleInputs: true", self.action)
         self.assertIn("result.committed", self.action)
+
+    def test_display_link_and_record_expiry_preserve_exact_receipt_gating(self) -> None:
+        match = re.search(r"maximumRecordAge:\s*CFTimeInterval\s*=\s*([0-9.]+)", self.preview)
+        self.assertIsNotNone(match)
+        self.assertGreaterEqual(float(match.group(1)), 0.25)
+        self.assertLessEqual(float(match.group(1)), 0.5)
+        self.assertIn("CADisplayLink(target: self", self.display)
+        self.assertNotIn("Timer.scheduledTimer(withTimeInterval: 0.15", self.display)
+        submit = self.display.split("private func submit(", 1)[1].split(
+            "private func clearStale(", 1)[0]
+        self.assertLess(submit.index("inFlight = true"), submit.index("submitLane(input)"))
+        consumed = self.display.split("func consumed(", 1)[1].split("func stop(", 1)[0]
+        self.assertIn("receipt.snapshotID == expectedSnapshot", consumed)
+        self.assertIn("receipt.hostGeneration == expectedGeneration", consumed)
+        self.assertIn("source.snapshotID == snapshotID", consumed)
+        self.assertIn("source.hostGeneration == generation", consumed)
+        self.assertIn("receipt.aimSourceIdentity == source", consumed)
+        self.assertIn("aimSourceIdentity: frame?.sourceIdentity", self.display)
 
     def test_v17_aim_option_text_is_preserved(self) -> None:
         self.assertIn(

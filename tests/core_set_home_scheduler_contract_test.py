@@ -204,7 +204,8 @@ class HomeSchedulerContract(unittest.TestCase):
         from core_set_v17_home_producer_probe import CURRENT_SOURCES, current_source_evidence
         sources = {owner: (ROOT / path).read_text(encoding="utf-8") for owner, path in CURRENT_SOURCES.items()}
         for owner, old, new in (
-            ("coordinator", "let loaded = fetched && dlkcache()", "let loaded = dlkcache()"),
+            ("coordinator", "let loaded = fetched && !action.isCancellationRequested && dlkcache()",
+             "let loaded = fetched && dlkcache()"),
             ("telemetry", "completedPages: nil, totalPages: nil", "completedPages: UInt64(progress), totalPages: 100"),
             ("telemetry", "downloadedBytes: nil, totalBytes: nil", "downloadedBytes: copiedBytes, totalBytes: copiedTotal"),
             ("partial", "[zip getFileForPath:entry error:&error]", "[zip fakeProgress]"),
@@ -284,6 +285,120 @@ def replay(path):
     assert cover["first_return_site"] == "0x1000d3f24"
     assert [edge["site"] for edge in cover["calls_after_first_return_not_presumed_reachable"]] == [
         "0x1000d3f28", "0x1000d3f2c", "0x1000d3f30"]
+    bootstrap = evidence["cover_bootstrap"]
+    assert bootstrap["configuration"] == {"enabled": "C+0x2f bool", "mode": "C+0x130 int32",
+                                             "initialized": "C+0x1e9 bool"}
+    assert [worker["callback_slot"] for worker in bootstrap["workers"]] == [
+        "0x100c19ec8", "0x100c19ed0", "0x100c19ed8"]
+    assert [worker["adapter"] for worker in bootstrap["workers"]] == [
+        "0x1000e5288", "0x1000ec834", "0x1000e5288"]
+    record = bootstrap["collector_record_abi"]
+    assert record["stride"] == "0xa0"
+    assert [field["range"] for field in record["fields"]] == [
+        "0x00..0x17", "0x18..0x2f", "0x30", "0x31..0x33", "0x34..0x43",
+        "0x44..0x53", "0x54..0x57", "0x58..0x67", "0x68..0x6f",
+        "0x70..0x7f", "0x80..0x83", "0x84..0x93", "0x94..0x9f"]
+    assert sum(field["size"] for field in record["fields"]) == 0xa0
+    assert record["coverage"].startswith("all 0xa0 output-record bytes")
+    assert "does not prove identity continuity" in record["coverage"]
+    assert "record+0x58/+0x60" in record["ac_key"]
+    assert "record+0x68" in record["b_key"]
+    builder = bootstrap["spatial_builder_abi"]
+    assert "0x9003 FLOAT3" in builder["vertex_buffer"]
+    assert "0x5003 UINT3" in builder["index_buffer"]
+    owner = bootstrap["collector_input_owner"]
+    assert "global0x100c58778" in owner["lease"]
+    assert "global0x100c58780" in owner["generation"]
+    assert "A/B form" in owner["collector_base"]
+    assert "no direct 64d04 edge" in owner["collector_base"]
+    assert "e4200/e4288/e42fc" in owner["runtime_reads"]["A"]
+    assert "ec3f0/ec478/ec4ec" in owner["runtime_reads"]["B"]
+    assert "do not continuously carry one identity" in owner["runtime_reads"]["A"]
+    assert "identity continuity into builder x21 is not proved" in owner["runtime_reads"]["B"]
+    read_exact = "0x100064d04"
+    for name in ("cover_collector_a", "cover_collector_b"):
+        assert [edge["callee"] for edge in evidence["functions"][name]["calls"]].count(read_exact) == 3
+    assert read_exact not in [edge["callee"] for edge in evidence["functions"]["cover_collector_c"]["calls"]]
+    assert "d3b08" in owner["stop"]
+    publication = bootstrap["callback_publication_abi"]
+    assert "allocates three 0x100-byte owners" in publication["publisher"]
+    assert "owner+0x10" in publication["owner_callback_slot"]
+    assert "x19+0x40" in publication["owner_callback_slot"]
+    assert "owner+0x50" in publication["owner_callback_slot"]
+    assert "x0,x1" in publication["A"] and "x0" in publication["B"]
+    assert bootstrap["proof_sites"]["stable_count"]["instructions"][0]["instruction"] == "add w9, w8, #1"
+    assert bootstrap["proof_sites"]["worker_a_collect"]["instructions"][0]["instruction"] == "bl #0x1000e40f4"
+    assert bootstrap["proof_sites"]["worker_b_collect"]["instructions"][0]["instruction"] == "bl #0x1000ec2f8"
+    assert bootstrap["proof_sites"]["worker_c_collect"]["instructions"][0]["instruction"] == "bl #0x1000effec"
+    assert bootstrap["proof_sites"]["worker_a_callback_load"]["instructions"][0]["instruction"] == "ldr x0, [x24, #0xec8]"
+    assert bootstrap["proof_sites"]["worker_b_callback_load"]["instructions"][0]["instruction"] == "ldr x0, [x24, #0xed0]"
+    assert bootstrap["proof_sites"]["worker_c_callback_load"]["instructions"][0]["instruction"] == "ldr x0, [x24, #0xed8]"
+    assert bootstrap["proof_sites"]["callback_ac_key"]["instructions"][0]["instruction"] == "ldp x8, x1, [x0, #0x58]"
+    assert bootstrap["proof_sites"]["callback_b_key"]["instructions"][0]["instruction"] == "ldr x0, [x0, #0x68]"
+    assert bootstrap["proof_sites"]["owner_a_constructor"]["instructions"][0]["instruction"] == "bl #0x1000e10c8"
+    assert bootstrap["proof_sites"]["owner_c_constructor"]["instructions"][0]["instruction"] == "bl #0x1000e10c8"
+    assert bootstrap["proof_sites"]["owner_b_constructor"]["instructions"][0]["instruction"] == "bl #0x1000e11b0"
+    assert bootstrap["proof_sites"]["owner_a_publish"]["instructions"][0]["instruction"] == "str x20, [x19, #0xec8]"
+    assert bootstrap["proof_sites"]["owner_c_publish"]["instructions"][0]["instruction"] == "str x20, [x21, #0xed8]"
+    assert bootstrap["proof_sites"]["owner_b_publish"]["instructions"][0]["instruction"] == "str x20, [x22, #0xed0]"
+    assert bootstrap["proof_sites"]["owner_ac_base"]["instructions"][0]["instruction"] == "mov x19, x0"
+    assert bootstrap["proof_sites"]["owner_ac_subobject_rebase"]["instructions"][0]["instruction"] == "stp q0, q0, [x19, #0x10]!"
+    assert bootstrap["proof_sites"]["owner_b_base"]["instructions"][0]["instruction"] == "mov x19, x0"
+    assert bootstrap["proof_sites"]["owner_b_subobject_rebase"]["instructions"][0]["instruction"] == "stp q0, q0, [x19, #0x10]!"
+    assert bootstrap["proof_sites"]["owner_ac_callback_store"]["instructions"][0]["instruction"] == "str x1, [x19, #0x40]"
+    assert bootstrap["proof_sites"]["owner_b_callback_store"]["instructions"][0]["instruction"] == "str x1, [x19, #0x40]"
+    assert bootstrap["proof_sites"]["adapter_ac_callback_load"]["instructions"][0]["instruction"] == "ldr x8, [x19, #0x50]"
+    assert bootstrap["proof_sites"]["adapter_b_callback_load"]["instructions"][0]["instruction"] == "ldr x8, [x19, #0x50]"
+    for label, instruction in {
+        "record_flag_copy": "strb w8, [sp, #0x280]",
+        "record_payload_a_copy": "stur q0, [x28, #0x34]",
+        "record_payload_b_copy": "stur q0, [x28, #0x44]",
+        "record_key16_copy": "stur q0, [x28, #0x58]",
+        "record_key64_copy": "str x8, [x9, #0x68]",
+        "record_kind_copy": "str w8, [sp, #0x2d0]",
+        "record_transform4_copy": "stur q0, [x28, #0x84]",
+        "record_transform3_copy": "stur q0, [x28, #0x90]",
+        "record_move_vectors": "ldr q0, [x1]",
+        "record_copy_tail": "ldp q0, q1, [x1, #0x80]",
+        "record_advance": "add x0, x8, #0xa0",
+        "a_read_1": "bl #0x100064d04", "a_read_2": "bl #0x100064d04",
+        "a_read_3": "bl #0x100064d04", "a_table_copy": "bl #0x1000e5638",
+        "a_row_d0": "bl #0x1000e5638", "a_row_100": "bl #0x1000e5638",
+        "b_read_1": "bl #0x100064d04", "b_read_2": "bl #0x100064d04",
+        "b_read_3": "bl #0x100064d04", "b_table_copy": "bl #0x1000e5638",
+    }.items():
+        assert bootstrap["proof_sites"][label]["instructions"][0]["instruction"] == instruction
+    assert bootstrap["proof_sites"]["adapter_ac_stride"]["instructions"][0]["instruction"] == "add x20, x20, #0xa0"
+    assert bootstrap["proof_sites"]["adapter_b_stride"]["instructions"][0]["instruction"] == "add x20, x20, #0xa0"
+    assert bootstrap["proof_sites"]["adapter_ac_vertex_format"]["instructions"][0]["instruction"] == "mov w3, #0x9003"
+    assert bootstrap["proof_sites"]["adapter_ac_index_format"]["instructions"][0]["instruction"] == "mov w3, #0x5003"
+    assert bootstrap["proof_sites"]["adapter_b_vertex_format"]["instructions"][0]["instruction"] == "mov w3, #0x9003"
+    assert bootstrap["proof_sites"]["adapter_b_index_format"]["instructions"][0]["instruction"] == "mov w3, #0x5003"
+    assert bootstrap["proof_sites"]["input_lease_call"]["instructions"][0]["instruction"] == "bl #0x100064c7c"
+    assert bootstrap["proof_sites"]["input_base_store"]["instructions"][0]["instruction"] == "str x8, [x9, #0x778]"
+    assert bootstrap["proof_sites"]["input_update"]["instructions"][0]["instruction"] == "bl #0x1000d3eac"
+    assert bootstrap["proof_sites"]["input_failure_stop"]["instructions"][0]["instruction"] == "bl #0x1000d3dd0"
+    assert bootstrap["proof_sites"]["generation_xor"]["instructions"][0]["instruction"] == "eor x8, x9, x8"
+    assert bootstrap["proof_sites"]["generation_store"]["instructions"][0]["instruction"] == "str x8, [x19]"
+    assert bootstrap["proof_sites"]["query_wrapper_tail"]["instructions"][0]["instruction"] == "b #0x1000d3424"
+    query = bootstrap["segment_query"]
+    assert query["input"] == "six float32 arguments interpreted as two vec3 endpoints"
+    assert query["result"].startswith("false when a slot is absent")
+    assert "frame_draw bone-segment color selection" in query["owner_limit"]
+    assert bootstrap["proof_sites"]["query_initialized_gate"]["instructions"][0]["instruction"] == "ldrb w8, [x8, #0x1e9]"
+    assert bootstrap["proof_sites"]["query_frame_call"]["instructions"][0]["instruction"] == "bl #0x1000d33f4"
+    assert bootstrap["proof_sites"]["query_store_by_bone"]["instructions"][0]["instruction"] == "strb w0, [x8, x23]"
+    assert bootstrap["proof_sites"]["query_color_first_endpoint"]["instructions"][0]["instruction"] == "ldrb w8, [x8, x23]"
+    assert bootstrap["proof_sites"]["query_color_second_endpoint"]["instructions"][0]["instruction"] == "ldrb w8, [x8, x24]"
+    assert bootstrap["proof_sites"]["query_a"]["instructions"][0]["instruction"] == "bl #0x1000e0be8"
+    assert bootstrap["proof_sites"]["query_b"]["instructions"][0]["instruction"] == "bl #0x1000e0cf0"
+    assert bootstrap["proof_sites"]["query_c"]["instructions"][0]["instruction"] == "bl #0x1000e0be8"
+    assert bootstrap["proof_sites"]["query_distance"]["instructions"][0]["instruction"] == "fsqrt s3, s3"
+    assert bootstrap["proof_sites"]["query_hit_sentinel"]["instructions"][0]["instruction"] == "mov w8, #-1"
+    assert "do not substitute a local LOS boolean" in bootstrap["unresolved"]
+    assert "complete 0xa0 output layout" in bootstrap["unresolved"]
+    assert "continuous identity" in bootstrap["unresolved"]
+    assert "remain unproved" in bootstrap["unresolved"]
     for function in evidence["functions"].values():
         assert not function["truncated"]
     for window in evidence["proof_windows"]:

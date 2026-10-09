@@ -2,6 +2,16 @@ import UIKit
 
 enum CoreSetRenderLane: Int, CaseIterable { case player, materials, radar, warning, appearance, aimDisplay }
 
+struct CoreSetAimDisplaySourceIdentity: Equatable {
+    let snapshotID: UUID
+    let sessionGeneration: UInt64
+    let processID: Int32
+    let imageBase: UInt64
+    let hostGeneration: UInt64
+    let actionRevision: UInt64
+    let actionRequestID: UUID
+}
+
 // A producer must supply an observed snapshot and its exact request identity.
 // This input has no implicit connection to a target game or memory reader.
 struct CoreSetLaneSubmission {
@@ -13,12 +23,15 @@ struct CoreSetLaneSubmission {
     let canvasSize: CGSize
     let commands: [CoreSetRenderCommand]
     let appearance: CoreSetAdjustmentSettings?
+    let aimSourceIdentity: CoreSetAimDisplaySourceIdentity?
     init(lane: CoreSetRenderLane, hostGeneration: UInt64, configRevision: UInt64,
          snapshotID: UUID, requestToken: CoreSetRequestToken, canvasSize: CGSize,
-         commands: [CoreSetRenderCommand], appearance: CoreSetAdjustmentSettings? = nil) {
+         commands: [CoreSetRenderCommand], appearance: CoreSetAdjustmentSettings? = nil,
+         aimSourceIdentity: CoreSetAimDisplaySourceIdentity? = nil) {
         self.lane = lane; self.hostGeneration = hostGeneration; self.configRevision = configRevision
         self.snapshotID = snapshotID; self.requestToken = requestToken
         self.canvasSize = canvasSize; self.commands = commands; self.appearance = appearance
+        self.aimSourceIdentity = aimSourceIdentity
     }
 }
 
@@ -29,6 +42,7 @@ struct CoreSetLocalFrameReceipt {
     let configRevision: UInt64
     let snapshotID: UUID
     let requestToken: CoreSetRequestToken
+    let aimSourceIdentity: CoreSetAimDisplaySourceIdentity?
     let acceptedByLocalRenderer: Bool
 }
 
@@ -155,6 +169,7 @@ private final class CoreSetFrameComposer {
         CoreSetLocalFrameReceipt(lane: item.submission.lane, hostGeneration: item.frame.generation,
             sequence: item.frame.sequence, configRevision: item.frame.configRevision,
             snapshotID: item.submission.snapshotID, requestToken: item.submission.requestToken,
+            aimSourceIdentity: item.submission.aimSourceIdentity,
             acceptedByLocalRenderer: accepted)
     }
 }
@@ -212,8 +227,9 @@ final class CoreSetRuntimeCoordinator {
     private var gameLaunchStatus: String?
     private var kernelOffsetsRunning = false
     private let homeActionProducerEpoch = UUID()
-    private var homeActionRequests: [CoreSetHomeProbePoint: UUID] = [:]
-    private var homeActionSequences: [CoreSetHomeProbePoint: UInt64] = [:]
+    private var homeActionLeases: [CoreSetHomeProbePoint: CoreSetLocalHomeAction] = [:]
+    private var gameKernelAction: CoreSetLocalHomeAction?
+    private var gameInformationAction: CoreSetLocalHomeAction?
     private let frameComposer = CoreSetFrameComposer()
     var localFrameDidConsume: ((CoreSetLocalFrameReceipt) -> Void)?
     private(set) var lastStopResult: CoreSetHUDStopResult?
@@ -226,33 +242,34 @@ final class CoreSetRuntimeCoordinator {
     }
     @discardableResult
     private func recordHomeAction(_ point: CoreSetHomeProbePoint, phase: CoreSetHomeProbePhase,
-                                  status: Int?, errorCode: Int? = nil) -> UUID? {
+                                  status: Int?, errorCode: Int? = nil,
+                                  action expectedAction: CoreSetLocalHomeAction? = nil) -> CoreSetLocalHomeAction? {
         precondition(Thread.isMainThread)
-        let request: UUID
-        let sequence: UInt64
+        let action: CoreSetLocalHomeAction
         if phase == .requested {
-            request = UUID(); sequence = 1
-            homeActionRequests[point] = request; homeActionSequences[point] = sequence
+            guard expectedAction == nil else { return nil }
+            action = CoreSetLocalHomeAction()
+            homeActionLeases[point] = action
         } else {
-            guard let active = homeActionRequests[point] else { return nil }
-            request = active
-            let old = homeActionSequences[point] ?? 0
-            sequence = old == UInt64.max ? 1 : old + 1
-            homeActionSequences[point] = sequence
+            guard let active = homeActionLeases[point],
+                  expectedAction == nil || active === expectedAction else { return nil }
+            action = active
         }
         let accepted = homeTelemetry.recordProducerProbeEvent(CoreSetHomeProducerProbeEvent(
-            point: point, producerEpoch: homeActionProducerEpoch, requestID: request,
-            sequence: sequence, observedAt: Date(), phase: phase, requestedOption: nil,
-            observedStatus: status, nativeGeneration: nil,
+            point: point, producerEpoch: homeActionProducerEpoch, requestID: action.requestID,
+            sequence: action.nextSequence(), observedAt: Date(), phase: phase, requestedOption: nil,
+            observedStatus: status, nativeGeneration: action.generation,
             inFlight: phase == .requested || phase == .running,
             ready: phase == .completed, completedCount: nil, totalCount: nil,
             errorCode: errorCode))
-        if !accepted { return nil }
-        if [.completed, .failed, .cancelled, .stopped].contains(phase) {
-            homeActionRequests.removeValue(forKey: point)
-            homeActionSequences.removeValue(forKey: point)
+        if !accepted {
+            if phase == .requested { homeActionLeases.removeValue(forKey: point) }
+            return nil
         }
-        return request
+        if [.completed, .failed, .stopped, .stopFailed].contains(phase) {
+            homeActionLeases.removeValue(forKey: point)
+        }
+        return action
     }
 
     private func performHomeAction(_ point: CoreSetHomeProbePoint,
@@ -269,16 +286,19 @@ final class CoreSetRuntimeCoordinator {
     private func performHomeKernelAction(completion: @escaping (String?) -> Void) {
         let manager = laramgr.shared
         guard !manager.dsrunning else { completion("内核环境正在初始化"); return }
-        guard recordHomeAction(.kernelAction, phase: .requested, status: 0) != nil,
-              recordHomeAction(.kernelAction, phase: .running, status: 1) != nil else {
+        guard let action = recordHomeAction(.kernelAction, phase: .requested, status: 0),
+              recordHomeAction(.kernelAction, phase: .running, status: 1, action: action) != nil else {
             completion("内核利用动作回执初始化失败"); return
         }
         if !manager.dsready && !ds_is_ready() { init_offsets(); offsets_init() }
-        manager.run { [weak self] ready in
-            guard let self, !self.stopping else { completion("HUD 已停止"); return }
+        manager.run(action: action) { [weak self] ready in
+            guard let self, !self.stopping, !action.isCancellationRequested else {
+                completion("HUD 已停止"); return
+            }
             let phase: CoreSetHomeProbePhase = ready ? .completed : .failed
             _ = self.recordHomeAction(.kernelAction, phase: phase,
-                                      status: ready ? 2 : 3, errorCode: ready ? nil : -1)
+                                      status: ready ? 2 : 3, errorCode: ready ? nil : -1,
+                                      action: action)
             self.refreshHomeObservation()
             completion(ready ? nil : "内核环境初始化失败")
         }
@@ -290,34 +310,51 @@ final class CoreSetRuntimeCoordinator {
             completion("请先完成内核利用"); return
         }
         guard !kernelOffsetsRunning else { completion("当前设备信息正在获取"); return }
-        guard recordHomeAction(.informationAction, phase: .requested, status: 0) != nil,
-              recordHomeAction(.informationAction, phase: .running, status: 1) != nil else {
+        guard let action = recordHomeAction(.informationAction, phase: .requested, status: 0),
+              recordHomeAction(.informationAction, phase: .running, status: 1, action: action) != nil else {
             completion("获取信息动作回执初始化失败"); return
         }
         if manager.hasOffsets {
-            CoreSetKernelInformationOwner.shared.publishCachedValidation()
-            _ = recordHomeAction(.informationAction, phase: .completed, status: 2)
+            guard CoreSetKernelInformationOwner.shared.publishCachedValidation(action: action) else {
+                _ = recordHomeAction(.informationAction, phase: .failed, status: 3,
+                                     errorCode: -1, action: action)
+                completion("本机偏移状态正由另一请求更新"); return
+            }
+            _ = recordHomeAction(.informationAction, phase: .completed, status: 2, action: action)
             refreshHomeObservation(); completion(nil); return
         }
+        guard CoreSetKernelInformationOwner.shared.beginResolve(action: action) else {
+            _ = recordHomeAction(.informationAction, phase: .failed, status: 3,
+                                 errorCode: -1, action: action)
+            completion("本机偏移状态正由另一请求更新"); return
+        }
         kernelOffsetsRunning = true
-        CoreSetKernelInformationOwner.shared.beginResolve()
         refreshHomeObservation()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let fetched = fetchkcache()
-            if fetched { CoreSetKernelInformationOwner.shared.didResolveArtifact() }
-            else { CoreSetKernelInformationOwner.shared.failValidation("kernelcache 获取失败") }
-            let loaded = fetched && dlkcache()
+            let fetched = fetchkcache(action: action)
+            if fetched { CoreSetKernelInformationOwner.shared.didResolveArtifact(action: action) }
+            else if !action.isCancellationRequested {
+                CoreSetKernelInformationOwner.shared.failValidation("kernelcache 获取失败", action: action)
+            }
+            let loaded = fetched && !action.isCancellationRequested && dlkcache()
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.stopping else { completion("HUD 已停止"); return }
+                guard let self else { completion("HUD 已停止"); return }
                 self.kernelOffsetsRunning = false
-                manager.hasOffsets = loaded
-                if loaded { CoreSetKernelInformationOwner.shared.completeValidation() }
-                else if fetched { CoreSetKernelInformationOwner.shared.failValidation("本机内核偏移验证失败") }
+                if action.isCancellationRequested {
+                    CoreSetKernelInformationOwner.shared.stoppedAfterCancellation(action: action)
+                    completion("HUD 已停止"); return
+                }
+                guard !self.stopping else { completion("HUD 已停止"); return }
+                let validated = loaded && CoreSetKernelInformationOwner.shared.completeValidation(action: action)
+                manager.hasOffsets = validated
+                if !validated && fetched {
+                    CoreSetKernelInformationOwner.shared.failValidation("本机内核偏移验证失败", action: action)
+                }
                 _ = self.recordHomeAction(.informationAction,
-                    phase: loaded ? .completed : .failed, status: loaded ? 2 : 3,
-                    errorCode: loaded ? nil : -1)
+                    phase: validated ? .completed : .failed, status: validated ? 2 : 3,
+                    errorCode: validated ? nil : -1, action: action)
                 self.refreshHomeObservation()
-                completion(loaded ? nil : (fetched ? "本机内核偏移验证失败" : "kernelcache 获取失败"))
+                completion(validated ? nil : (fetched ? "本机内核偏移验证失败" : "kernelcache 获取失败"))
             }
         }
     }
@@ -512,8 +549,8 @@ final class CoreSetRuntimeCoordinator {
         hostChanged()
     }
 
-    // iOS 26 compatibility path: mirror the existing menu/draw contexts into
-    // SpringBoard with the previously device-proven WZ UIWindow/CALayerHost chain.
+    // Prefer Core 1.7's SBSAccessibilityWindowHostingController path. The
+    // older WZ UIWindow/CALayerHost mirror remains a compatibility fallback.
     func launchGame(completion: @escaping (String?) -> Void) {
         precondition(Thread.isMainThread)
         guard !stopping, let scene, scene.activationState == .foregroundActive else {
@@ -542,6 +579,10 @@ final class CoreSetRuntimeCoordinator {
             showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
             return
         }
+        if CoreSetRemoteHostingAdapter.isCoreHostingAvailable() {
+            prepareCoreHosting(epoch: epoch, completion: completion)
+            return
+        }
         guard !host.cleanupPending else {
             finishGameLaunch(epoch: epoch, error: "上次窗口清理尚未确认，请重新打开应用", completion: completion)
             return
@@ -559,8 +600,11 @@ final class CoreSetRuntimeCoordinator {
             init_offsets()
             offsets_init()
         }
-        manager.run { [weak self] ready in
+        let action = CoreSetLocalHomeAction()
+        gameKernelAction = action
+        manager.run(action: action) { [weak self] ready in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
+            self.gameKernelAction = nil
             guard ready else {
                 self.finishGameLaunch(epoch: epoch, error: "内核环境初始化失败，无法建立跨应用悬浮窗", completion: completion)
                 return
@@ -576,31 +620,51 @@ final class CoreSetRuntimeCoordinator {
             return
         }
         let manager = laramgr.shared
+        let action = CoreSetLocalHomeAction()
+        gameInformationAction = action
         if manager.hasOffsets {
-            CoreSetKernelInformationOwner.shared.publishCachedValidation()
+            guard CoreSetKernelInformationOwner.shared.publishCachedValidation(action: action) else {
+                gameInformationAction = nil
+                finishGameLaunch(epoch: epoch, error: "本机偏移状态正由另一请求更新", completion: completion)
+                return
+            }
+            gameInformationAction = nil
             prepareSpringBoardHosting(epoch: epoch, completion: completion)
             return
         }
+        guard CoreSetKernelInformationOwner.shared.beginResolve(action: action) else {
+            gameInformationAction = nil
+            finishGameLaunch(epoch: epoch, error: "本机偏移状态正由另一请求更新", completion: completion)
+            return
+        }
         kernelOffsetsRunning = true
-        CoreSetKernelInformationOwner.shared.beginResolve()
         gameLaunchStatus = "正在获取并解析当前设备内核偏移"
         NSLog("Core-SET: game launch epoch=%llu stage=kernel-offsets start", epoch)
         publishStatus()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let fetched = fetchkcache()
-            if fetched { CoreSetKernelInformationOwner.shared.didResolveArtifact() }
-            else { CoreSetKernelInformationOwner.shared.failValidation("kernelcache 获取失败") }
-            let loaded = fetched && dlkcache()
+            let fetched = fetchkcache(action: action)
+            if fetched { CoreSetKernelInformationOwner.shared.didResolveArtifact(action: action) }
+            else if !action.isCancellationRequested {
+                CoreSetKernelInformationOwner.shared.failValidation("kernelcache 获取失败", action: action)
+            }
+            let loaded = fetched && !action.isCancellationRequested && dlkcache()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.kernelOffsetsRunning = false
-                manager.hasOffsets = loaded
-                if loaded { CoreSetKernelInformationOwner.shared.completeValidation() }
-                else if fetched { CoreSetKernelInformationOwner.shared.failValidation("本机内核偏移验证失败") }
+                if action.isCancellationRequested {
+                    CoreSetKernelInformationOwner.shared.stoppedAfterCancellation(action: action)
+                    return
+                }
+                self.gameInformationAction = nil
+                let validated = loaded && CoreSetKernelInformationOwner.shared.completeValidation(action: action)
+                manager.hasOffsets = validated
+                if !validated && fetched {
+                    CoreSetKernelInformationOwner.shared.failValidation("本机内核偏移验证失败", action: action)
+                }
                 NSLog("Core-SET: game launch epoch=%llu stage=kernel-offsets fetched=%d resolved=%d",
-                      epoch, fetched ? 1 : 0, loaded ? 1 : 0)
+                      epoch, fetched ? 1 : 0, validated ? 1 : 0)
                 guard self.gameLaunchCurrent(epoch) else { return }
-                guard loaded else {
+                guard validated else {
                     self.finishGameLaunch(epoch: epoch,
                         error: fetched ? "当前设备内核偏移解析失败" : "当前设备 kernelcache 获取失败",
                         completion: completion)
@@ -613,6 +677,44 @@ final class CoreSetRuntimeCoordinator {
             guard let self, self.gameLaunchCurrent(epoch), self.kernelOffsetsRunning else { return }
             self.finishGameLaunch(epoch: epoch,
                 error: "当前设备内核偏移解析超时；后台任务结束前请勿重试", completion: completion)
+        }
+    }
+
+    private func prepareCoreHosting(epoch: UInt64, completion: @escaping (String?) -> Void) {
+        guard gameLaunchCurrent(epoch), let scene, scene.activationState == .foregroundActive else {
+            finishGameLaunch(epoch: epoch, error: "场景已失活，已取消 Core 跨应用托管", completion: completion)
+            return
+        }
+        if !host.localSurfacesReady, !host.startLocal(in: scene, menuController: menu) {
+            finishGameLaunch(epoch: epoch, error: "Core 三窗口源创建失败", completion: completion)
+            return
+        }
+        guard let adapter = CoreSetRemoteHostingAdapter(coreHosting: true) else {
+            finishGameLaunch(epoch: epoch, error: "Core SBS 托管控制器初始化失败", completion: completion)
+            return
+        }
+        aimSuspendedForHost = true
+        menu.suspendActionConsumers { [weak self] confirmed in
+            guard let self, self.gameLaunchCurrent(epoch) else { return }
+            guard confirmed else {
+                self.finishGameLaunch(epoch: epoch, error: "目标动作停止失败", completion: completion)
+                return
+            }
+            self.remoteHostingAdapter = adapter
+            self.remoteCleanupFailed = false
+            self.host.attach(adapter) { [weak self] registered in
+                guard let self, self.gameLaunchCurrent(epoch) else { return }
+                guard registered else {
+                    self.rollbackGameLaunch(epoch: epoch,
+                        error: "Core SBS 三窗口注册失败", completion: completion)
+                    return
+                }
+                self.host.setApplicationActive(true)
+                self.hostChanged()
+                self.menu.setHostedExitAvailable(true)
+                NSLog("Core-SET: hosting mode=core-sbs roles=draw,menu,icon levels=999998,999999,1000000 registered=1")
+                self.verifyHostedWindows(epoch: epoch, completion: completion)
+            }
         }
     }
 
@@ -725,31 +827,32 @@ final class CoreSetRuntimeCoordinator {
                 self.hostChanged()
                 self.menu.setHostedExitAvailable(true)
                 NSLog("Core-SET: hosting mode=wz-springboard-mirror registered=1")
-                self.verifyWZHostedWindows(epoch: epoch, completion: completion)
+                self.verifyHostedWindows(epoch: epoch, completion: completion)
             }
         }
     }
 
-    private func verifyWZHostedWindows(epoch: UInt64,
-                                       completion: @escaping (String?) -> Void) {
-        gameLaunchStatus = "王者双窗口已注册，正在复核"
+    private func verifyHostedWindows(epoch: UInt64,
+                                     completion: @escaping (String?) -> Void) {
+        gameLaunchStatus = "跨应用窗口已注册，正在复核"
         publishStatus()
         host.confirmHostedReadbackAsync { [weak self] firstObserved in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
             guard firstObserved else {
                 self.rollbackGameLaunch(epoch: epoch,
-                    error: "王者双窗口初次读回失败", completion: completion)
+                    error: "跨应用窗口初次读回失败", completion: completion)
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1200)) { [weak self] in
                 guard let self, self.gameLaunchCurrent(epoch) else { return }
                 self.host.confirmHostedReadbackAsync { [weak self] observed in
                     guard let self, self.gameLaunchCurrent(epoch) else { return }
-                    NSLog("Core-SET: game launch epoch=%llu stage=dual-host mode=wz-springboard observed=%d",
-                          epoch, observed ? 1 : 0)
+                    NSLog("Core-SET: game launch epoch=%llu stage=dual-host observed=%d adapter={%@}",
+                          epoch, observed ? 1 : 0,
+                          self.remoteHostingAdapter?.hostingDiagnosticSnapshot() ?? "adapter-missing")
                     guard observed else {
                         self.rollbackGameLaunch(epoch: epoch,
-                            error: "王者双窗口延迟读回失败", completion: completion)
+                        error: "跨应用窗口延迟读回失败", completion: completion)
                         return
                     }
                     self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
@@ -778,7 +881,7 @@ final class CoreSetRuntimeCoordinator {
                             self.finishGameLaunch(epoch: epoch, error: nil, completion: completion)
                         } else {
                             self.rollbackGameLaunch(epoch: epoch,
-                                error: "游戏已打开，但王者双窗口回读失效", completion: completion)
+                                error: "游戏已打开，但跨应用双窗口回读失效", completion: completion)
                         }
                     }
                 case .unavailable:
@@ -1112,6 +1215,23 @@ final class CoreSetRuntimeCoordinator {
         performanceTimer = nil
         observationTimer?.cancel(); observationTimer = nil
         menu.onHomeAction = nil
+        for (point, action) in Array(homeActionLeases) {
+            action.requestCancellation()
+            if point == .informationAction {
+                CoreSetKernelInformationOwner.shared.cancelRequested(action: action)
+                CoreSetKernelCacheTransferOwner.shared.cancelRequested(action: action)
+            }
+            _ = recordHomeAction(point, phase: .stopping, status: nil, action: action)
+            // These native operations have no synchronous confirmed-stop API.
+            _ = recordHomeAction(point, phase: .stopFailed, status: nil,
+                                 errorCode: -2, action: action)
+        }
+        gameKernelAction?.requestCancellation()
+        gameInformationAction?.requestCancellation()
+        if let action = gameInformationAction {
+            CoreSetKernelInformationOwner.shared.cancelRequested(action: action)
+            CoreSetKernelCacheTransferOwner.shared.cancelRequested(action: action)
+        }
         _ = homeTelemetry.stopObservations(); homeReferenceObservationProvider = nil
         menu.updatePresentedFrameObservation(nil)
         stopReceiptsPending = true

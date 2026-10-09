@@ -331,8 +331,7 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
         tables.append({"address": hex(va), "file_offset": hex(core.file_offset(va)),
                        "bytes": raw.hex(), "int32_values": list(struct.unpack(f"<{count}i", raw))})
     common_edges = ["candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-                    "checked-write result → current independent readback under game-thread concurrency",
-                    "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"]
+                    "checked-write result → current independent readback under game-thread concurrency"]
     points = []
     scene_points = set(range(117, 131))
     for point in selected:
@@ -369,8 +368,11 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
                                                  (["has-last-breath-or-state-bit19-to-candidate-flag14"] if number == 114 else [])),
                        "closed_reference_edges": closed,
                        # Former c4af8/c416c numeric-component gap is now exact
-                       # reference parity; the three authority/receipt/restore
-                       # edges still include the unresolved live owner lifetime.
+                       # reference parity; the two authority/receipt edges
+                       # still include the unresolved live owner lifetime.
+                       # Target restoration is intentionally outside this
+                       # continuous-view contract: stop drains and abandons the
+                       # current view value instead of writing a stale old view.
                        "next_exact_edges": ([edge] if number < 126 else []) + common_edges,
                        "original_runtime_receipt_verified": False, "one_to_one_complete": False})
     component_keys = set(selection_edges["closed_edges"]) | set(compensation_edges["closed_edges"])

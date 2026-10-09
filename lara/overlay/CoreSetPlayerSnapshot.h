@@ -48,6 +48,10 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) BOOL bot;
 @property(nonatomic, readonly) CGPoint center;
 @property(nonatomic, readonly) CGPoint head;
+// Exact first projected draw-record point consumed from Core record +0x30/+0x34.
+// It is produced from the same profile row[0] world point as candidate +0x1e0.
+@property(nonatomic, readonly) BOOL informationAnchorPresent;
+@property(nonatomic, readonly) CGPoint informationAnchor;
 // Present only when the already requested bone capture supplies a known
 // reference profile and a projected, end-reread top anchor. Otherwise root+90.
 @property(nonatomic, readonly, nullable) NSNumber *headBoneIndex;

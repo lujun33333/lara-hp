@@ -681,6 +681,8 @@ static NSArray<CoreSetBoneSegment *> *CSProjectBoneWorldSegments(
 @property(nonatomic) BOOL bot;
 @property(nonatomic) CGPoint center;
 @property(nonatomic) CGPoint head;
+@property(nonatomic) BOOL informationAnchorPresent;
+@property(nonatomic) CGPoint informationAnchor;
 @property(nonatomic) NSNumber *headBoneIndex;
 @property(nonatomic) CGPoint feet;
 @property(nonatomic) double distanceUnitsDividedBy100;
@@ -698,15 +700,24 @@ static NSArray<CoreSetBoneSegment *> *CSProjectBoneWorldSegments(
 @end
 @implementation CoreSetPlayerMark @end
 
-static void CSPublishAimAnchors(CoreSetPlayerMark *mark, const CSBoneState &state) {
+static void CSPublishAimAnchors(CoreSetPlayerMark *mark, const CSBoneState &state,
+                                CSCamera camera, CGSize size) {
     if (!state.edges) {
         mark.referenceAnchor1e0WorldPosition = nil;
         mark.referenceAnchor1ecWorldPosition = nil;
+        mark.informationAnchorPresent = NO;
+        mark.informationAnchor = CGPointZero;
         return;
     }
     CoreSetWorldPoint *anchor = CSBoneWorldPoint(state, state.edges[0]);
     mark.referenceAnchor1e0WorldPosition = anchor;
     mark.referenceAnchor1ecWorldPosition = anchor;
+    CGPoint projected = CGPointZero;
+    if (anchor) {
+        const CSVector world = {anchor.x, anchor.y, anchor.z};
+        mark.informationAnchorPresent = CSProject(camera, world, size, &projected);
+    } else mark.informationAnchorPresent = NO;
+    mark.informationAnchor = mark.informationAnchorPresent ? projected : CGPointZero;
 }
 
 @interface CoreSetGrenadeMark ()
@@ -953,6 +964,15 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
         source.referenceAnchor1e0WorldPosition, translateX, translateY, translateZ);
     mark.referenceAnchor1ecWorldPosition = CSTranslatedWorldPoint(
         source.referenceAnchor1ecWorldPosition, translateX, translateY, translateZ);
+    CGPoint informationAnchor = CGPointZero;
+    if (mark.referenceAnchor1e0WorldPosition) {
+        const CSVector informationWorld = {mark.referenceAnchor1e0WorldPosition.x,
+                                           mark.referenceAnchor1e0WorldPosition.y,
+                                           mark.referenceAnchor1e0WorldPosition.z};
+        mark.informationAnchorPresent = CSProject(camera, informationWorld, size,
+                                                  &informationAnchor);
+    }
+    mark.informationAnchor = mark.informationAnchorPresent ? informationAnchor : CGPointZero;
     mark.headWorldPosition = CSTranslatedWorldPoint(
         source.headWorldPosition, translateX, translateY, translateZ);
     if (mark.headWorldPosition) {
@@ -1534,8 +1554,13 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
                 } else ++warningUnavailable;
             }
             mark.boneSegments = @[];
-            if (onScreen && (ai ? botBones : playerBones) &&
-                (boneDistanceLimit == 0 || distance <= boneDistanceLimit) &&
+            const bool wantsVisibleBones = ai ? botBones : playerBones;
+            // Core's information record consumes the profile row[0] point even
+            // when the separate skeleton toggle is off.  Capture that producer
+            // for information without applying the skeleton-distance control.
+            const bool wantsInformationAnchor = wantsInformation;
+            if (onScreen && (wantsVisibleBones || wantsInformationAnchor) &&
+                (wantsInformationAnchor || boneDistanceLimit == 0 || distance <= boneDistanceLimit) &&
                 observedBones.size() < CSMaxBoneActors) {
                 CSBoneState bones;
                 bool present = false;
@@ -1548,8 +1573,8 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
                     if (bones.arrayOffset == 0x848) ++boneArrayFallback; else ++boneArrayPrimary;
                     if (bones.arrayCountFromCapacity) ++boneArrayCapacityRecovered;
                     if (bones.status == 7) ++boneDecoded; else ++bonePlain;
-                    mark.boneSegments = CSProjectBones(bones, camera, size);
-                    CSPublishAimAnchors(mark, bones);
+                    if (wantsVisibleBones) mark.boneSegments = CSProjectBones(bones, camera, size);
+                    CSPublishAimAnchors(mark, bones, camera, size);
                     uint8_t headIndex = 0;
                     if (CoreSet::referenceBoneHeadIndex(bones.array.count, &headIndex)) {
                         ++boneHeadKnownProfile;
@@ -1940,13 +1965,15 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
             mark.headWorldPosition = nil;
             mark.referenceAnchor1e0WorldPosition = nil;
             mark.referenceAnchor1ecWorldPosition = nil;
+            mark.informationAnchorPresent = NO;
+            mark.informationAnchor = CGPointZero;
             continue;
         }
         finalBoneObservations.push_back({bone.actor, bone.markIndex, std::move(after)});
         const CSBoneState &finalBone = finalBoneObservations.back().state;
         mark.boneWorldSegments = CSBoneWorldSegments(finalBone);
         mark.boneSegments = CSProjectBoneWorldSegments(mark.boneWorldSegments, cameraAfter, size);
-        CSPublishAimAnchors(mark, finalBone);
+        CSPublishAimAnchors(mark, finalBone, cameraAfter, size);
         uint8_t headIndex = 0;
         CGPoint top = CGPointZero;
         if (CoreSet::referenceBoneHeadIndex(finalBone.array.count, &headIndex) &&
@@ -2071,7 +2098,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
         CoreSetPlayerMark *mark = marks[bone.markIndex];
         mark.boneWorldSegments = CSBoneWorldSegments(bone.state);
         mark.boneSegments = CSProjectBoneWorldSegments(mark.boneWorldSegments, cameraAfter, size);
-        CSPublishAimAnchors(mark, bone.state);
+        CSPublishAimAnchors(mark, bone.state, cameraAfter, size);
         uint8_t headIndex = 0;
         CGPoint top = CGPointZero;
         if (CoreSet::referenceBoneHeadIndex(bone.state.array.count, &headIndex) &&
@@ -2205,7 +2232,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
          "boneRequested=%lu bonePresent=%lu bonePlain=%lu boneDecoded=%lu boneArrayPrimary=%lu boneArrayFallback=%lu boneArrayCapacityRecovered=%lu boneMissing=%lu boneUnregistered=%lu boneArrayInvalid=%lu boneBounds=%lu boneDecoderUnknown=%lu "
          "boneHeadKnownProfile=%lu boneHeadProjected=%lu boneHeadUnknownProfile=%lu headScope=requested-bones-only headParity=partial "
          "networkFreshness=unproven captureStability=stable-identity-plus-bounded-dynamic-reread grenadeAnimationScope=local-position-history grenadeRadiusGap=no-verified-elite-blast-field "
-         "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationLayout=local-subset informationGap=native-font-icons-and-anchors "
+         "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationRecord=core17-first-projection scaleProducer=core17-frame-literal-1 botOrdinal=frame-local "
          "captureDuration=%.3f finalReprojectionAge=%.3f freshnessBasis=final-reprojected",
         actorArraySource == CSActorArraySource::primary ? "core17-primary" : "core17-level-a0-a8-fallback",
         array.count, (unsigned long)nonzeroActors, (unsigned long)coreAddressValid,

@@ -33,9 +33,10 @@ typedef CFArrayRef (*CoreSetHIDEventGetChildren)(CoreSetIOHIDEventRef);
 - (CGPoint)location;
 @end
 
-// Match the source-window tier used by the working WZ dual-window host and
-// by the SpringBoard mirrors in CoreSetRemoteHostingAdapter.
-static const double kCoreSetHUDWindowLevel = 10000009.0;
+// Exact Core 1.7 source levels: draw=999998, menu=999999, icon=1000000.
+static const double kCoreSetHUDDrawWindowLevel = 999998.0;
+static const double kCoreSetHUDMenuWindowLevel = 999999.0;
+static const double kCoreSetHUDIconWindowLevel = 1000000.0;
 static BOOL CoreSetHostedOrientationValid(UIInterfaceOrientation value) {
     return value == UIInterfaceOrientationPortrait ||
         value == UIInterfaceOrientationPortraitUpsideDown ||
@@ -102,6 +103,27 @@ static BOOL CoreSetAXHasUsableHand(CoreSetAXEvent *representation) {
 - (BOOL)_ignoresHitTest { return YES; }
 - (BOOL)_shouldCreateContextAsSecure { return NO; }
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event { (void)point; (void)event; return nil; }
+@end
+
+@interface CoreSetIconWindow : UIWindow
+@property(nonatomic) BOOL backgroundPassThrough;
+@property(nonatomic, weak) UIView *floatingRegion;
+@end
+@implementation CoreSetIconWindow
++ (BOOL)_isSystemWindow { return YES; }
+- (BOOL)_isSecure { return NO; }
+- (BOOL)_canBecomeKeyWindow { return YES; }
+- (BOOL)_isApplicationKeyWindow { return NO; }
+- (BOOL)_isWindowServerHostingManaged { return NO; }
+- (BOOL)_ignoresHitTest { return self.backgroundPassThrough; }
+- (BOOL)_shouldCreateContextAsSecure { return NO; }
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *region = self.floatingRegion;
+    if (self.backgroundPassThrough || !region || ![region isDescendantOfView:self] ||
+        region.hidden || region.alpha <= 0.01 || !region.userInteractionEnabled) return nil;
+    return [region pointInside:[region convertPoint:point fromView:self] withEvent:event]
+        ? [super hitTest:point withEvent:event] : nil;
+}
 @end
 
 @interface CoreSetMenuWindow : UIWindow
@@ -171,6 +193,15 @@ static BOOL CoreSetAXHasUsableHand(CoreSetAXEvent *representation) {
 - (void)updateHostedInteractionBounds;
 - (BOOL)surfacePointMayHitHostedInteraction:(CGPoint)point;
 - (void)drainHostedReadbackIdleWaiters;
+- (BOOL)adapterRequiresDedicatedIconSurface:(id<CoreSetHUDHostingAdapter>)adapter;
+- (void)placeFloatingForAdapter:(nullable id<CoreSetHUDHostingAdapter>)adapter;
+- (void)registerAdapter:(id<CoreSetHUDHostingAdapter>)adapter
+                    menu:(UIWindow *)menu icon:(UIWindow *)icon draw:(UIWindow *)draw
+              completion:(void (^)(BOOL observed, uint64_t generation))completion;
+- (void)unregisterAdapter:(id<CoreSetHUDHostingAdapter>)adapter
+                      menu:(UIWindow *)menu icon:(UIWindow *)icon draw:(UIWindow *)draw
+                completion:(void (^)(BOOL menuRemoved, BOOL iconRemoved,
+                                     BOOL drawRemoved))completion;
 - (BOOL)startPreparedInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
                        error:(NSError **)error hostedCompletion:(void (^)(BOOL))hostedCompletion;
 @end
@@ -196,6 +227,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     CoreSetCoreAnimationConsumer *_layers;
     CoreSetDrawWindow *_drawWindow;
     CoreSetMenuWindow *_menuWindow;
+    CoreSetIconWindow *_iconWindow;
     UIView *_drawCanvas;
     UIView *_panel;
     UIButton *_floating;
@@ -207,8 +239,10 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     BOOL _panelVisible;
     BOOL _localUIKitPointerActive;
     BOOL _menuRegistered;
+    BOOL _iconRegistered;
     BOOL _drawRegistered;
     BOOL _menuCleanupNeeded;
+    BOOL _iconCleanupNeeded;
     BOOL _drawCleanupNeeded;
     uint64_t _lastSequence;
     uint64_t _lastConsumedSequence;
@@ -302,12 +336,64 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     }
     return self;
 }
+- (BOOL)adapterRequiresDedicatedIconSurface:(id<CoreSetHUDHostingAdapter>)adapter {
+    return adapter && [adapter respondsToSelector:@selector(requiresDedicatedIconSurface)] &&
+        [adapter requiresDedicatedIconSurface];
+}
+- (void)placeFloatingForAdapter:(id<CoreSetHUDHostingAdapter>)adapter {
+    if (!_floating || !_menuWindow || !_iconWindow) return;
+    const BOOL dedicated = [self adapterRequiresDedicatedIconSurface:adapter];
+    UIView *target = dedicated ? _iconWindow.rootViewController.view
+                               : _menuWindow.rootViewController.view;
+    if (!target || _floating.superview == target) return;
+    [_floating removeFromSuperview];
+    [target addSubview:_floating];
+    _menuWindow.floatingRegion = dedicated ? nil : _floating;
+    _iconWindow.floatingRegion = dedicated ? _floating : nil;
+    if (_foreground) {
+        _iconWindow.backgroundPassThrough = !dedicated;
+        _iconWindow.userInteractionEnabled = dedicated;
+    }
+}
+- (void)registerAdapter:(id<CoreSetHUDHostingAdapter>)adapter
+                    menu:(UIWindow *)menu icon:(UIWindow *)icon draw:(UIWindow *)draw
+              completion:(void (^)(BOOL, uint64_t))completion {
+    if ([self adapterRequiresDedicatedIconSurface:adapter]) {
+        if (![adapter respondsToSelector:
+              @selector(registerThreeSurfacesAsync:iconWindow:drawWindow:completion:)]) {
+            completion(NO, self.generation); return;
+        }
+        [adapter registerThreeSurfacesAsync:menu iconWindow:icon drawWindow:draw
+                                  completion:completion];
+        return;
+    }
+    [adapter registerBothSurfacesAsync:menu drawWindow:draw completion:completion];
+}
+- (void)unregisterAdapter:(id<CoreSetHUDHostingAdapter>)adapter
+                      menu:(UIWindow *)menu icon:(UIWindow *)icon draw:(UIWindow *)draw
+                completion:(void (^)(BOOL, BOOL, BOOL))completion {
+    if ([self adapterRequiresDedicatedIconSurface:adapter]) {
+        if (![adapter respondsToSelector:
+              @selector(unregisterThreeSurfacesAsync:iconWindow:drawWindow:completion:)]) {
+            completion(NO, NO, NO); return;
+        }
+        [adapter unregisterThreeSurfacesAsync:menu iconWindow:icon drawWindow:draw
+            completion:^(BOOL menuRemoved, BOOL iconRemoved, BOOL drawRemoved) {
+                completion(menuRemoved, iconRemoved, drawRemoved);
+            }];
+        return;
+    }
+    [adapter unregisterBothSurfacesAsync:menu drawWindow:draw
+        completion:^(BOOL menuRemoved, BOOL drawRemoved) {
+            completion(menuRemoved, YES, drawRemoved);
+        }];
+}
 - (BOOL)localSurfacesReady {
-    return _running && _drawWindow && _menuWindow && _drawCanvas && _panel &&
+    return _running && _drawWindow && _menuWindow && _iconWindow && _drawCanvas && _panel &&
         _menuWindow.windowScene.activationState != UISceneActivationStateUnattached;
 }
 - (BOOL)hasHostedRegistrationReceipt {
-    return self.localSurfacesReady && _menuRegistered && _drawRegistered &&
+    return self.localSurfacesReady && _menuRegistered && _iconRegistered && _drawRegistered &&
         _adapter && [_adapter respondsToSelector:@selector(hostGeneration)] &&
         [_adapter respondsToSelector:@selector(localSurfacesStillPublished)] &&
         [_adapter hostGeneration] == self.generation &&
@@ -325,11 +411,11 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     const uint64_t adapterGeneration = adapterGenerationAvailable ? [_adapter hostGeneration] : 0;
     const CGSize logicalSize = self.logicalCanvasSize;
     NSString *state = [NSString stringWithFormat:
-        @"running=%d foreground=%d sceneState=%ld localReady=%d menuRegistered=%d drawRegistered=%d adapter=%d adapterGenerationAvailable=%d hostGeneration=%llu adapterGeneration=%llu panel=%d menuWindowHidden=%d drawWindowHidden=%d floatingHidden=%d floatingAttached=%d orientation=%ld canvas=%.0fx%.0f inputMonitor=%d",
+        @"running=%d foreground=%d sceneState=%ld localReady=%d menuRegistered=%d iconRegistered=%d drawRegistered=%d adapter=%d adapterGenerationAvailable=%d hostGeneration=%llu adapterGeneration=%llu panel=%d menuWindowHidden=%d iconWindowHidden=%d drawWindowHidden=%d floatingHidden=%d floatingAttached=%d orientation=%ld canvas=%.0fx%.0f inputMonitor=%d",
         _running, _foreground, (long)sceneState, self.localSurfacesReady,
-        _menuRegistered, _drawRegistered, _adapter != nil, adapterGenerationAvailable,
+        _menuRegistered, _iconRegistered, _drawRegistered, _adapter != nil, adapterGenerationAvailable,
         (unsigned long long)self.generation, (unsigned long long)adapterGeneration, _panelVisible,
-        _menuWindow.hidden, _drawWindow.hidden, _floating.hidden,
+        _menuWindow.hidden, _iconWindow.hidden, _drawWindow.hidden, _floating.hidden,
         _floating.superview != nil, (long)_hostedOrientation,
         logicalSize.width, logicalSize.height,
         self.hostedInputMonitorArmed];
@@ -348,17 +434,20 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         (unsigned long long)_inputCounts.callback.load(), (unsigned long long)_inputCounts.callbackHandled.load(),
         (unsigned long long)_inputCounts.readback.load(), (unsigned long long)_inputCounts.readbackDropped.load()];
 }
-- (BOOL)cleanupPending { return !_running && (_menuCleanupNeeded || _drawCleanupNeeded || _schedulerCleanupNeeded); }
+- (BOOL)cleanupPending { return !_running && (_menuCleanupNeeded || _iconCleanupNeeded ||
+                                               _drawCleanupNeeded || _schedulerCleanupNeeded); }
 - (BOOL)hostedCleanupInFlight { return _hostedAsyncStopPending; }
 - (BOOL)panelVisible { return _panelVisible; }
 - (BOOL)floatingControlReady {
     if (!NSThread.isMainThread || !self.localSurfacesReady ||
-        !_floating || !_menuWindow || _menuWindow.hidden ||
+        !_floating || !_menuWindow || !_iconWindow || !_floating.window ||
+        (_floating.window != _menuWindow && _floating.window != _iconWindow) ||
+        _floating.window.hidden ||
         _floating.hidden || _floating.alpha <= 0.01 ||
         !_floating.userInteractionEnabled ||
-        ![_floating isDescendantOfView:_menuWindow]) return NO;
-    const CGRect button = [_floating convertRect:_floating.bounds toView:_menuWindow];
-    return CGRectIntersectsRect(button, _menuWindow.bounds);
+        ![_floating isDescendantOfView:_floating.window]) return NO;
+    const CGRect button = [_floating convertRect:_floating.bounds toView:_floating.window];
+    return CGRectIntersectsRect(button, _floating.window.bounds);
 }
 - (uint64_t)lastConsumedSequence { return _lastConsumedSequence; }
 - (NSArray<UIColor *> *)observedFloatingColors {
@@ -458,30 +547,32 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     if (![self installHostedOrientationObserver]) {
         _adapter = nil; completion(NO); return;
     }
+    [self placeFloatingForAdapter:adapter];
     [self invalidateFrames];
     [self layoutSurfaces];
-    [_drawWindow layoutIfNeeded]; [_menuWindow layoutIfNeeded];
+    [_drawWindow layoutIfNeeded]; [_menuWindow layoutIfNeeded]; [_iconWindow layoutIfNeeded];
     [CATransaction flush];
     _menuCleanupNeeded = YES; _drawCleanupNeeded = YES;
+    _iconCleanupNeeded = [self adapterRequiresDedicatedIconSurface:adapter];
     const uint64_t generation = self.generation;
     CoreSetMenuWindow *menu = _menuWindow;
+    CoreSetIconWindow *icon = _iconWindow;
     CoreSetDrawWindow *draw = _drawWindow;
     __weak CoreSetHUDHost *weakSelf = self;
-    [adapter registerBothSurfacesAsync:menu drawWindow:draw
+    [self registerAdapter:adapter menu:menu icon:icon draw:draw
         completion:^(BOOL observed, uint64_t adapterGeneration) {
             CoreSetHUDHost *host = weakSelf;
             const BOOL ready = host && observed && host->_running &&
                 host.generation == generation && adapterGeneration == generation &&
-                host->_menuWindow == menu && host->_drawWindow == draw &&
+                host->_menuWindow == menu && host->_iconWindow == icon && host->_drawWindow == draw &&
                 [adapter localSurfacesStillPublished];
             if (host) {
-                host->_menuRegistered = ready; host->_drawRegistered = ready;
+                host->_menuRegistered = ready; host->_iconRegistered = ready;
+                host->_drawRegistered = ready;
                 host->_hostedReadbackGeneration = ready ? generation : 0;
                 [host selectBackend];
-                // The SpringBoard mirror publishes pixels only.  Unlike Core's
-                // removed SBS host, it does not deliver UIKit touches back to
-                // the source process, so keep the WZ HID owner armed across
-                // the foreground/background transition.
+                // Hosting publication is not a physical-touch receipt. Keep
+                // the passive HID owner armed across foreground transitions.
                 if (ready) (void)[host armHostedInput];
                 [host publishState];
             }
@@ -495,42 +586,48 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         [_adapter respondsToSelector:@selector(usesDirectSourceInteraction)] &&
         [_adapter usesDirectSourceInteraction];
     if (!NSThread.isMainThread || !local || !adapter || !_running ||
-        !_menuWindow || !_drawWindow || _hostedReadbackInFlight ||
-        ![_adapter respondsToSelector:@selector(unregisterBothSurfacesAsync:drawWindow:completion:)]) {
+        !_menuWindow || !_iconWindow || !_drawWindow || _hostedReadbackInFlight) {
         completion(NO); return;
     }
     [self disarmHostedInput];
     CoreSetMenuWindow *menu = _menuWindow;
+    CoreSetIconWindow *icon = _iconWindow;
     CoreSetDrawWindow *draw = _drawWindow;
     const uint64_t generation = self.generation;
     __weak CoreSetHUDHost *weakSelf = self;
-    [_adapter unregisterBothSurfacesAsync:menu drawWindow:draw
-        completion:^(BOOL menuRemoved, BOOL drawRemoved) {
+    id<CoreSetHUDHostingAdapter> previousAdapter = _adapter;
+    [self unregisterAdapter:previousAdapter menu:menu icon:icon draw:draw
+        completion:^(BOOL menuRemoved, BOOL iconRemoved, BOOL drawRemoved) {
             CoreSetHUDHost *host = weakSelf;
-            if (!host || !menuRemoved || !drawRemoved || !host->_running ||
+            if (!host || !menuRemoved || !iconRemoved || !drawRemoved || !host->_running ||
                 host.generation != generation || host->_menuWindow != menu ||
-                host->_drawWindow != draw) { completion(NO); return; }
-            host->_menuRegistered = NO; host->_drawRegistered = NO;
+                host->_iconWindow != icon || host->_drawWindow != draw) { completion(NO); return; }
+            host->_menuRegistered = NO; host->_iconRegistered = NO; host->_drawRegistered = NO;
             host->_hostedReadbackGeneration = 0;
             // Keep WZ's source/context and its local UIKit hit-test policy;
             // SpringBoard's mirror remains non-interactive.
             [CATransaction flush];
             host->_adapter = adapter;
+            [host placeFloatingForAdapter:adapter];
             [host layoutSurfaces];
             [CATransaction flush];
             [adapter prepareForHostGeneration:generation];
-            [adapter registerBothSurfacesAsync:menu drawWindow:draw
+            [host registerAdapter:adapter menu:menu icon:icon draw:draw
                 completion:^(BOOL observed, uint64_t adapterGeneration) {
                     CoreSetHUDHost *current = weakSelf;
                     const BOOL ready = current && observed && current->_running &&
                         current.generation == generation && adapterGeneration == generation &&
-                        current->_menuWindow == menu && current->_drawWindow == draw &&
+                        current->_menuWindow == menu && current->_iconWindow == icon &&
+                        current->_drawWindow == draw &&
                         [adapter localSurfacesStillPublished];
                     if (current) {
                         current->_menuRegistered = ready;
+                        current->_iconRegistered = ready;
                         current->_drawRegistered = ready;
                         current->_hostedReadbackGeneration = ready ? generation : 0;
                         current->_menuCleanupNeeded = YES;
+                        current->_iconCleanupNeeded =
+                            [current adapterRequiresDedicatedIconSurface:adapter];
                         current->_drawCleanupNeeded = YES;
                         [current selectBackend];
                         if (ready) (void)[current armHostedInput];
@@ -556,7 +653,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         ? (UIInterfaceOrientation)raw : UIInterfaceOrientationUnknown;
 }
 - (void)applyHostedOrientation:(UIInterfaceOrientation)orientation {
-    if (!NSThread.isMainThread || !_adapter || !_menuWindow || !_drawWindow ||
+    if (!NSThread.isMainThread || !_adapter || !_menuWindow || !_iconWindow || !_drawWindow ||
         !CoreSetHostedOrientationValid(orientation) || _hostedOrientation == orientation) return;
     if (!_foreground && UIInterfaceOrientationIsLandscape(_hostedOrientation) &&
         !UIInterfaceOrientationIsLandscape(orientation)) {
@@ -583,7 +680,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         self.renderGeneration = CoreSetHUDNextGeneration(self.renderGeneration);
     }
     [self layoutSurfaces];
-    [_drawWindow layoutIfNeeded]; [_menuWindow layoutIfNeeded];
+    [_drawWindow layoutIfNeeded]; [_menuWindow layoutIfNeeded]; [_iconWindow layoutIfNeeded];
     if (_running) [self publishState];
     NSLog(@"Core-SET: hosted orientation=%ld surface=%.0fx%.0f logical=%.0fx%.0f angle=%.3f",
           (long)orientation, surface.size.width, surface.size.height,
@@ -674,6 +771,14 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
               (long)_hostedOrientation, screen.scale);
     return converted;
 }
+- (CGPoint)floatingLogicalPointFromFixedSurface:(CGPoint)point {
+    UIWindow *window = _floating.window ?: _menuWindow;
+    UIView *root = window.rootViewController.view;
+    if (!window || !root || !window.windowScene.screen) return CGPointMake(NAN, NAN);
+    CGPoint windowPoint = [window convertPoint:point
+        fromCoordinateSpace:window.windowScene.screen.fixedCoordinateSpace];
+    return [root convertPoint:windowPoint fromView:window];
+}
 - (void)updateHostedInteractionBounds {
     if (!NSThread.isMainThread || !_menuWindow || !_panel || !_floating ||
         !_menuWindow.windowScene.screen) return;
@@ -715,7 +820,10 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         if (missReason) *missReason = "outside-fixed-surface";
         return nil;
     }
-    CGPoint floatPoint = [_floating convertPoint:windowPoint fromView:_menuWindow];
+    UIWindow *floatingWindow = _floating.window ?: _menuWindow;
+    CGPoint floatingWindowPoint = [floatingWindow convertPoint:point
+        fromCoordinateSpace:floatingWindow.windowScene.screen.fixedCoordinateSpace];
+    CGPoint floatPoint = [_floating convertPoint:floatingWindowPoint fromView:floatingWindow];
     if (!_floating.hidden && _floating.alpha > 0.01 && _floating.userInteractionEnabled &&
         [_floating pointInside:floatPoint withEvent:nil]) return @"host.floating";
     if (!_panelVisible || _panel.hidden ||
@@ -758,7 +866,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
             return;
         }
         if (_touchPointerID >= 0 || generation != self.generation ||
-            !self.localSurfacesReady || !_menuRegistered || !_drawRegistered ||
+            !self.localSurfacesReady || !_menuRegistered || !_iconRegistered || !_drawRegistered ||
             ![_adapter respondsToSelector:@selector(hostGeneration)] ||
             [_adapter hostGeneration] != self.generation) {
             CoreSetLogInputStage("hit", _touchPointerID >= 0 ? "pointer-busy" : "stale-host-generation",
@@ -779,8 +887,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
             generation, phase, identifier, 1);
         if ([identifier isEqualToString:@"host.floating"]) {
             _touchContinuous = YES;
-            _touchFloatingDownLogical = [_menuWindow.rootViewController.view
-                convertPoint:[self menuWindowPointFromFixedSurface:point] fromView:_menuWindow];
+            _touchFloatingDownLogical = [self floatingLogicalPointFromFixedSurface:point];
             _touchFloatingOrigin = _floatingCenter;
         }
         if (![identifier isEqualToString:@"host.floating"] && consumer) {
@@ -803,7 +910,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     }
     if (phase == CoreSetHostedPointerPhaseMoved) {
         if ([_touchControlID isEqualToString:@"host.floating"]) {
-            CGPoint logical = [_menuWindow.rootViewController.view convertPoint:[self menuWindowPointFromFixedSurface:point] fromView:_menuWindow];
+            CGPoint logical = [self floatingLogicalPointFromFixedSurface:point];
             CGFloat dx = logical.x - _touchFloatingDownLogical.x;
             CGFloat dy = logical.y - _touchFloatingDownLogical.y;
             if (hypot(dx, dy) > 9) _touchFloatingDragged = YES;
@@ -1160,6 +1267,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     [self disarmHostedInput];
     _menuWindow.backgroundPassThrough = YES;
     _menuWindow.userInteractionEnabled = NO;
+    _iconWindow.backgroundPassThrough = YES;
+    _iconWindow.userInteractionEnabled = NO;
     __weak CoreSetHUDHost *weakSelf = self;
     [self whenHostedReadbackIdle:^{
         CoreSetHUDHost *host = weakSelf;
@@ -1304,7 +1413,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         const BOOL current = observed && host->_running &&
             host.generation == generation &&
             adapterGeneration == generation && host.localSurfacesReady &&
-            host->_menuRegistered && host->_drawRegistered;
+            host->_menuRegistered && host->_iconRegistered && host->_drawRegistered;
         host->_hostedReadbackGeneration = current ? generation : 0;
         NSArray *waiters = [host->_hostedReadbackWaiters copy];
         [host->_hostedReadbackWaiters removeAllObjects];
@@ -1412,11 +1521,16 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     _foreground = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
     _drawWindow = [[CoreSetDrawWindow alloc] initWithWindowScene:scene];
     _menuWindow = [[CoreSetMenuWindow alloc] initWithWindowScene:scene];
+    _iconWindow = [[CoreSetIconWindow alloc] initWithWindowScene:scene];
     _menuWindow.backgroundPassThrough = NO;
     _menuWindow.userInteractionEnabled = YES;
-    _drawWindow.windowLevel = kCoreSetHUDWindowLevel;
-    _menuWindow.windowLevel = kCoreSetHUDWindowLevel + 1.0;
-    _drawWindow.backgroundColor = _menuWindow.backgroundColor = UIColor.clearColor;
+    _iconWindow.backgroundPassThrough = YES;
+    _iconWindow.userInteractionEnabled = NO;
+    _drawWindow.windowLevel = kCoreSetHUDDrawWindowLevel;
+    _menuWindow.windowLevel = kCoreSetHUDMenuWindowLevel;
+    _iconWindow.windowLevel = kCoreSetHUDIconWindowLevel;
+    _drawWindow.backgroundColor = _menuWindow.backgroundColor =
+        _iconWindow.backgroundColor = UIColor.clearColor;
     UIViewController *drawRoot = [UIViewController new];
     drawRoot.view.backgroundColor = UIColor.clearColor;
     _drawWindow.rootViewController = drawRoot;
@@ -1425,6 +1539,9 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     CoreSetLayoutController *menuRoot = [CoreSetLayoutController new];
     menuRoot.view.backgroundColor = UIColor.clearColor;
     _menuWindow.rootViewController = menuRoot;
+    CoreSetLayoutController *iconRoot = [CoreSetLayoutController new];
+    iconRoot.view.backgroundColor = UIColor.clearColor;
+    _iconWindow.rootViewController = iconRoot;
     _panel = [UIView new]; _panel.backgroundColor = UIColor.clearColor;
     [menuRoot.view addSubview:_panel];
     _menuController = menuController;
@@ -1458,14 +1575,16 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         };
     }
     menuRoot.layoutCallback = ^{ [weakSelf layoutSurfaces]; };
+    iconRoot.layoutCallback = ^{ [weakSelf layoutSurfaces]; };
     _panelVisible = NO; _panel.hidden = YES;
     if (_adapter && ![self installHostedOrientationObserver]) {
         [self stop];
         return [self fail:10 message:@"Hosted orientation observer unavailable" error:error];
     }
     [self layoutSurfaces];
-    _drawWindow.hidden = NO; _menuWindow.hidden = NO;
-    [_drawWindow layoutIfNeeded]; [_menuWindow layoutIfNeeded];
+    [self placeFloatingForAdapter:_adapter];
+    _drawWindow.hidden = NO; _menuWindow.hidden = NO; _iconWindow.hidden = NO;
+    [_drawWindow layoutIfNeeded]; [_menuWindow layoutIfNeeded]; [_iconWindow layoutIfNeeded];
     [CATransaction flush];
     _running = YES;
     for (NSNotificationName name in @[UIApplicationDidBecomeActiveNotification, UIApplicationDidEnterBackgroundNotification]) {
@@ -1476,20 +1595,24 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     [self selectBackend]; [self publishState];
     if (_adapter) {
         _menuCleanupNeeded = YES; _drawCleanupNeeded = YES;
+        _iconCleanupNeeded = [self adapterRequiresDedicatedIconSurface:_adapter];
         const uint64_t generation = self.generation;
         CoreSetMenuWindow *menuWindow = _menuWindow;
+        CoreSetIconWindow *iconWindow = _iconWindow;
         CoreSetDrawWindow *drawWindow = _drawWindow;
-        [_adapter registerBothSurfacesAsync:menuWindow drawWindow:drawWindow
+        [self registerAdapter:_adapter menu:menuWindow icon:iconWindow draw:drawWindow
             completion:^(BOOL observed, uint64_t adapterGeneration) {
                 CoreSetHUDHost *host = weakSelf;
                 if (!host) return;
                 const BOOL current = observed && host->_running &&
                     host.generation == generation && adapterGeneration == generation &&
-                    host->_menuWindow == menuWindow && host->_drawWindow == drawWindow &&
+                    host->_menuWindow == menuWindow && host->_iconWindow == iconWindow &&
+                    host->_drawWindow == drawWindow &&
                     host.localSurfacesReady &&
                     [host->_adapter respondsToSelector:@selector(hostGeneration)] &&
                     [host->_adapter hostGeneration] == generation;
-                host->_menuRegistered = current; host->_drawRegistered = current;
+                host->_menuRegistered = current; host->_iconRegistered = current;
+                host->_drawRegistered = current;
                 host->_hostedReadbackGeneration = current ? generation : 0;
                 if (!current) [host fail:6 message:@"Asynchronous remote registration/readback failed" error:nil];
                 [host selectBackend]; [host publishState];
@@ -1499,14 +1622,16 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     return YES;
 }
 - (void)layoutSurfaces {
-    if (!_menuWindow || !_drawWindow || _layoutApplying) return;
+    if (!_menuWindow || !_iconWindow || !_drawWindow || _layoutApplying) return;
     _layoutApplying = YES;
     CGRect bounds = _menuWindow.windowScene.screen.fixedCoordinateSpace.bounds;
     bounds = CGRectMake(0, 0, CGRectGetWidth(bounds), CGRectGetHeight(bounds));
     if (!CGRectEqualToRect(_drawWindow.frame, bounds)) _drawWindow.frame = bounds;
+    if (!CGRectEqualToRect(_iconWindow.frame, bounds)) _iconWindow.frame = bounds;
     UIView *root = _menuWindow.rootViewController.view;
+    UIView *iconRoot = _iconWindow.rootViewController.view;
     UIView *drawRoot = _drawWindow.rootViewController.view;
-    if (!root || !drawRoot) { _layoutApplying = NO; return; }
+    if (!root || !iconRoot || !drawRoot) { _layoutApplying = NO; return; }
     const BOOL quarterTurn = _adapter && UIInterfaceOrientationIsLandscape(_hostedOrientation);
     const CGRect logical = quarterTurn
         ? CGRectMake(0, 0, bounds.size.height, bounds.size.width) : bounds;
@@ -1530,7 +1655,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     }
     if (!CGRectEqualToRect(_menuWindow.frame, desired)) _menuWindow.frame = desired;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
-    for (UIView *surface in @[root, drawRoot]) {
+    for (UIView *surface in @[root, iconRoot, drawRoot]) {
         const CGPoint surfaceCenter = surface == root
             ? CGPointMake(center.x - desired.origin.x, center.y - desired.origin.y) : center;
         if (CGRectEqualToRect(surface.bounds, logical) &&
@@ -1542,7 +1667,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         surface.transform = transform;
     }
     [CATransaction commit];
-    CGRect safe = _adapter ? root.bounds
+    CGRect safe = _adapter ? iconRoot.bounds
                            : UIEdgeInsetsInsetRect(root.bounds, root.safeAreaInsets);
     if (self.contentOwnsLayout) {
         _panel.transform = CGAffineTransformIdentity;
@@ -1606,7 +1731,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
               (long)gesture.state);
     if (gesture.state == UIGestureRecognizerStateBegan) _dragOrigin = _floatingCenter;
     if (gesture.state == UIGestureRecognizerStateChanged || gesture.state == UIGestureRecognizerStateEnded) {
-        CGPoint delta = [gesture translationInView:_menuWindow.rootViewController.view];
+        CGPoint delta = [gesture translationInView:_floating.superview];
         _floatingCenter = CGPointMake(_dragOrigin.x + delta.x, _dragOrigin.y + delta.y);
         [self layoutSurfaces];
     }
@@ -1639,6 +1764,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     const BOOL hidOwnsBackground = !active && self.hostedInputMonitorArmed;
     _menuWindow.backgroundPassThrough = hidOwnsBackground;
     _menuWindow.userInteractionEnabled = !hidOwnsBackground;
+    _iconWindow.backgroundPassThrough = hidOwnsBackground;
+    _iconWindow.userInteractionEnabled = !hidOwnsBackground;
     [self invalidateFrames]; [self selectBackend]; [self layoutSurfaces]; [self publishState];
     if (!active && _inputArmed.load()) [self requestHostedReadback];
     NSLog(@"Core-SET: host active-transition active=%d previousGeneration=%llu state={%@}",
@@ -1677,12 +1804,14 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         return rejected;
     }
     if (_hostedAsyncStopPending) {
-        CoreSetHUDStopResult pending = {NO, !_menuCleanupNeeded, !_drawCleanupNeeded, NO};
+        CoreSetHUDStopResult pending = {NO, !_menuCleanupNeeded && !_iconCleanupNeeded,
+                                        !_drawCleanupNeeded, NO};
         return pending;
     }
-    if (_adapter && (_menuCleanupNeeded || _drawCleanupNeeded)) {
+    if (_adapter && (_menuCleanupNeeded || _iconCleanupNeeded || _drawCleanupNeeded)) {
         if (_hostedCleanupFailed) {
-            CoreSetHUDStopResult pending = {YES, !_menuCleanupNeeded, !_drawCleanupNeeded, NO};
+            CoreSetHUDStopResult pending = {YES, !_menuCleanupNeeded && !_iconCleanupNeeded,
+                                            !_drawCleanupNeeded, NO};
             return pending;
         }
         // Termination/disconnect cannot wait for a RemoteCall. Disarm and hide
@@ -1698,29 +1827,33 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     [self invalidateFrames];
     for (id token in _observers) [NSNotificationCenter.defaultCenter removeObserver:token];
     [_observers removeAllObjects];
-    _drawWindow.hidden = YES; _menuWindow.hidden = YES;
+    _drawWindow.hidden = YES; _menuWindow.hidden = YES; _iconWindow.hidden = YES;
     [CATransaction flush];
-    _drawRegistered = NO; _menuRegistered = NO;
+    _drawRegistered = NO; _iconRegistered = NO; _menuRegistered = NO;
     [_layers detach];
     if (!_schedulerCleanupNeeded) [_metal detach];
     [_menuController willMoveToParentViewController:nil];
     [_menuController.view removeFromSuperview]; [_menuController removeFromParentViewController];
     _drawWindow.rootViewController = nil; _menuWindow.rootViewController = nil;
+    _iconWindow.rootViewController = nil;
     _drawCanvas = nil; _menuController = nil; _panel = nil; _floating = nil; _floatingGradient = nil;
     // Retain failed cleanup handles; retry stop before allowing another start.
     if (!_drawCleanupNeeded) _drawWindow = nil;
+    if (!_iconCleanupNeeded) _iconWindow = nil;
     if (!_menuCleanupNeeded) _menuWindow = nil;
     if (self.cleanupPending) [self fail:8 message:@"Hosting cleanup has not been confirmed; retry stop" error:nil];
-    CoreSetHUDStopResult result = {YES, !_menuCleanupNeeded, !_drawCleanupNeeded, !self.cleanupPending};
+    CoreSetHUDStopResult result = {YES, !_menuCleanupNeeded && !_iconCleanupNeeded,
+                                   !_drawCleanupNeeded, !self.cleanupPending};
     [self publishState];
     return result;
 }
 - (void)stopHostedAsync:(void (^)(CoreSetHUDStopResult))completion {
     if (!completion || !NSThread.isMainThread) return;
-    if (!_running && !_menuCleanupNeeded && !_drawCleanupNeeded && !_hostedAsyncStopPending) {
+    if (!_running && !_menuCleanupNeeded && !_iconCleanupNeeded && !_drawCleanupNeeded &&
+        !_hostedAsyncStopPending) {
         completion([self stop]); return;
     }
-    if (!_adapter || ![_adapter respondsToSelector:@selector(unregisterBothSurfacesAsync:drawWindow:completion:)]) {
+    if (!_adapter) {
         completion([self stop]); return;
     }
     if (_hostedAsyncStopPending) {
@@ -1737,21 +1870,25 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     [_layers clear]; [_metal clear];
     _menuWindow.backgroundPassThrough = YES;
     _menuWindow.userInteractionEnabled = NO;
-    _menuWindow.hidden = YES; _drawWindow.hidden = YES;
+    _iconWindow.backgroundPassThrough = YES;
+    _iconWindow.userInteractionEnabled = NO;
+    _menuWindow.hidden = YES; _iconWindow.hidden = YES; _drawWindow.hidden = YES;
     [CATransaction flush];
     __weak CoreSetHUDHost *weakSelf = self;
-    [_adapter unregisterBothSurfacesAsync:_menuWindow drawWindow:_drawWindow
-        completion:^(BOOL menuRemoved, BOOL drawRemoved) {
+    [self unregisterAdapter:_adapter menu:_menuWindow icon:_iconWindow draw:_drawWindow
+        completion:^(BOOL menuRemoved, BOOL iconRemoved, BOOL drawRemoved) {
             CoreSetHUDHost *host = weakSelf;
             if (!host) return;
             host->_menuCleanupNeeded = !menuRemoved;
+            host->_iconCleanupNeeded = !iconRemoved;
             host->_drawCleanupNeeded = !drawRemoved;
-            host->_menuRegistered = NO; host->_drawRegistered = NO;
+            host->_menuRegistered = NO; host->_iconRegistered = NO; host->_drawRegistered = NO;
             host->_hostedAsyncStopPending = NO;
-            if (!menuRemoved || !drawRemoved) {
+            if (!menuRemoved || !iconRemoved || !drawRemoved) {
                 host->_hostedCleanupFailed = YES;
                 [host fail:13 message:@"Asynchronous remote cleanup unconfirmed; handles retained" error:nil];
-                CoreSetHUDStopResult incomplete = {YES, menuRemoved, drawRemoved, NO};
+                CoreSetHUDStopResult incomplete = {YES, menuRemoved && iconRemoved,
+                                                    drawRemoved, NO};
                 [host publishState];
                 NSArray *waiters = [host->_hostedAsyncStopWaiters copy];
                 [host->_hostedAsyncStopWaiters removeAllObjects];

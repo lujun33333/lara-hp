@@ -1,57 +1,100 @@
 import UIKit
 import QuartzCore
 
-// Read-only local preselection for HUD decoration. It never authorizes aim writes.
+struct CoreSetAimDisplayWorldPoint: Equatable {
+    let x: Float
+    let y: Float
+    let z: Float
+}
+
+// Immutable hand-off from the serial Aim worker to the main-thread HUD.
+// It carries the exact selected candidate; it never grants write authority.
+struct CoreSetAimDisplayRecord {
+    let identity: CoreSetAimDisplaySourceIdentity
+    let actorAddress: UInt64
+    let candidateKey: UInt64
+    let candidateStartedMonotonicSeconds: Double
+    let worldPoint: CoreSetAimDisplayWorldPoint
+    let screenPoint: CGPoint
+    let predictedWorldPoint: CoreSetAimDisplayWorldPoint?
+    let predictedScreenPoint: CGPoint?
+    let bot: Bool
+    let distanceMeters: Double
+    let captureStartedMonotonicSeconds: Double
+    let captureCompletedMonotonicSeconds: Double
+}
+
+final class CoreSetAimDisplayRecordStore {
+    static let shared = CoreSetAimDisplayRecordStore()
+    // Local HUD lifecycle bound requested for stage 1; not claimed as a Core constant.
+    static let maximumRecordAge: CFTimeInterval = 0.35
+
+    private let lock = NSLock()
+    private var record: CoreSetAimDisplayRecord?
+
+    private init() {}
+
+    func publish(_ value: CoreSetAimDisplayRecord) {
+        lock.lock(); record = value; lock.unlock()
+    }
+
+    func latest(now: CFTimeInterval = CACurrentMediaTime()) -> CoreSetAimDisplayRecord? {
+        lock.lock(); defer { lock.unlock() }
+        guard let current = record else { return nil }
+        let age = now - current.captureCompletedMonotonicSeconds
+        guard age.isFinite, age >= 0, age <= Self.maximumRecordAge else {
+            record = nil
+            return nil
+        }
+        return current
+    }
+
+    func clear() {
+        lock.lock(); record = nil; lock.unlock()
+    }
+}
+
 struct CoreSetAimPreviewTarget {
     let actorAddress: UInt64
+    let candidateKey: UInt64
+    let candidateStartedMonotonicSeconds: Double
+    let worldPoint: CoreSetAimDisplayWorldPoint
     let point: CGPoint
+    let predictedWorldPoint: CoreSetAimDisplayWorldPoint?
+    let predictedPoint: CGPoint?
     let bot: Bool
     let distanceMeters: Double
 }
 
 struct CoreSetAimPreviewFrame {
-    let snapshotID: UUID
-    let sessionGeneration: UInt64
-    let processID: Int32
-    let imageBase: UInt64
+    let sourceIdentity: CoreSetAimDisplaySourceIdentity
     let captureStartedMonotonicSeconds: Double
     let captureCompletedMonotonicSeconds: Double
     let target: CoreSetAimPreviewTarget?
+
+    var snapshotID: UUID { sourceIdentity.snapshotID }
+    var sessionGeneration: UInt64 { sourceIdentity.sessionGeneration }
+    var processID: Int32 { sourceIdentity.processID }
+    var imageBase: UInt64 { sourceIdentity.imageBase }
+    var hostGeneration: UInt64 { sourceIdentity.hostGeneration }
+    var actionRevision: UInt64 { sourceIdentity.actionRevision }
+    var actionRequestID: UUID { sourceIdentity.actionRequestID }
 }
 
+// Read-only adapter over AimConsumer's selected-candidate publication. It does
+// not open a second target session, rescan actors, or select another candidate.
 final class CoreSetAimPreviewConsumer {
     private weak var coordinator: CoreSetRuntimeCoordinator?
-    private let session = CoreSetReadSession()
-    private let worker = DispatchQueue(label: "coreset.aim.preview.read", qos: .userInitiated)
-    private var probe: Timer?
+    private let store = CoreSetAimDisplayRecordStore.shared
     private var stopped = false
-    private(set) var lastCaptureDiagnostic = "尚未采集只读候选快照"
+    private(set) var lastCaptureDiagnostic = "尚未收到自瞄候选记录"
 
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
-        session.diagnosticLabel = "aim-preview"
-        probe = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.probeTarget() }
-        probeTarget()
     }
 
-    var ready: Bool { !stopped && session.ready && session.capabilities == 1 }
-    var unavailableDiagnostic: String { stopped ? "只读候选会话已停止" : session.lastConnectDiagnostic }
-    func matchesIdentity(_ expected: (generation: UInt64, pid: Int32, base: UInt64)) -> Bool {
-        ready && session.generation == expected.generation &&
-            session.processID == expected.pid && session.imageBase == expected.base
-    }
-
-    private func probeTarget() {
-        guard !stopped, !session.ready else { return }
-        worker.async { [weak self] in
-            guard let self else { return }
-            _ = self.session.connect()
-            DispatchQueue.main.async { [weak self] in
-                guard let self, !self.stopped else { return }
-                self.coordinator?.refreshPlayerAvailability()
-            }
-        }
-    }
+    var ready: Bool { !stopped }
+    var unavailableDiagnostic: String { stopped ? "自瞄候选记录订阅已停止" : lastCaptureDiagnostic }
 
     func capture(canvas: CGSize, radius: CGFloat, includeBots: Bool,
                  maximumDistance: Int,
@@ -61,89 +104,59 @@ final class CoreSetAimPreviewConsumer {
               canvas.width.isFinite, canvas.height.isFinite,
               canvas.width > 0, canvas.height > 0,
               (10...500).contains(maximumDistance) else {
-            lastCaptureDiagnostic = ready ? "preview-canvas-or-filter-invalid" : unavailableDiagnostic
+            lastCaptureDiagnostic = "aim-record-canvas-or-filter-invalid"
             completion(nil); return
         }
-        let generation = session.generation, pid = session.processID, base = session.imageBase
-        worker.async { [weak self] in
-            guard let self else { return }
-            let failureSequence = self.session.readFailureSequence
-            let snapshot = CoreSetPlayerCollector.capture(self.session, canvasSize: canvas,
-                playerBones: true, botBones: true, boneDistanceLimit: Double(maximumDistance),
-                includeOffscreen: false, includeRadar: false, includeBattleInputs: false,
-                playerWeaponText: false, botWeaponText: false,
-                includeGrenadeWarning: false, includeCounts: false,
-                playerInformation: false, botInformation: false,
-                includeWarningYaw: false, maximumDrawDistance: Double(maximumDistance))
-            let captureFailure = self.session.readFailureSequence != failureSequence
-                ? self.session.lastReadDiagnostic
-                : "\(CoreSetPlayerCollector.lastCaptureDiagnostic()) transport-errors=0"
-            var frame: CoreSetAimPreviewFrame?
-            if let snapshot,
-               snapshot.sessionGeneration == generation,
-               snapshot.processID == pid, snapshot.imageBase == base,
-               let id = UUID(uuidString: snapshot.snapshotID.uuidString),
-               CACurrentMediaTime() - snapshot.captureCompletedMonotonicSeconds >= 0,
-               CACurrentMediaTime() - snapshot.captureCompletedMonotonicSeconds <= 0.5 {
-                let center = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
-                var best: (score: CGFloat, target: CoreSetAimPreviewTarget)?
-                for mark in snapshot.marks {
-                    guard mark.onScreen, includeBots || !mark.bot,
-                          mark.distanceUnitsDividedBy100.isFinite,
-                          mark.distanceUnitsDividedBy100 >= 0,
-                          mark.distanceUnitsDividedBy100 <= Double(maximumDistance) else { continue }
-                    let point: CGPoint
-                    if let bone = mark.boneSegments.first?.start,
-                       bone.x.isFinite, bone.y.isFinite { point = bone }
-                    else { point = mark.center }
-                    guard point.x.isFinite, point.y.isFinite,
-                          point.x >= 0, point.y >= 0,
-                          point.x <= canvas.width, point.y <= canvas.height else { continue }
-                    let dx = point.x - center.x, dy = point.y - center.y
-                    let score = dx * dx + dy * dy
-                    guard score.isFinite, score <= radius * radius else { continue }
-                    let target = CoreSetAimPreviewTarget(actorAddress: mark.actorAddress,
-                        point: point, bot: mark.bot,
-                        distanceMeters: mark.distanceUnitsDividedBy100)
-                    if let existing = best {
-                        if score < existing.score ||
-                            (score == existing.score && target.actorAddress < existing.target.actorAddress) {
-                            best = (score, target)
-                        }
-                    } else { best = (score, target) }
-                }
-                frame = CoreSetAimPreviewFrame(snapshotID: id,
-                    sessionGeneration: generation, processID: pid, imageBase: base,
-                    captureStartedMonotonicSeconds: snapshot.captureStartedMonotonicSeconds,
-                    captureCompletedMonotonicSeconds: snapshot.captureCompletedMonotonicSeconds,
-                    target: best?.target)
-            }
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { completion(nil); return }
-                guard !self.stopped,
-                      self.ready, self.session.generation == generation,
-                      self.session.processID == pid, self.session.imageBase == base else {
-                    self.lastCaptureDiagnostic = "preview-identity-changed generation=\(generation)"
-                    completion(nil); return
-                }
-                guard let frame,
-                      CACurrentMediaTime() - frame.captureCompletedMonotonicSeconds >= 0,
-                      CACurrentMediaTime() - frame.captureCompletedMonotonicSeconds <= 0.5 else {
-                    self.lastCaptureDiagnostic = captureFailure
-                    completion(nil); return
-                }
-                self.lastCaptureDiagnostic = "preview-snapshot-confirmed target=\(frame.target == nil ? 0 : 1)"
-                completion(frame)
-            }
+        guard let record = store.latest() else {
+            lastCaptureDiagnostic = "aim-record-missing-or-stale"
+            completion(nil); return
         }
+        guard coordinator?.playerCanvas?.generation == record.identity.hostGeneration else {
+            lastCaptureDiagnostic = "aim-record-host-generation-changed"
+            completion(nil); return
+        }
+        let point = record.screenPoint
+        guard point.x.isFinite, point.y.isFinite,
+              point.x > 0, point.y > 0,
+              point.x < canvas.width, point.y < canvas.height,
+              includeBots || !record.bot,
+              record.distanceMeters.isFinite, record.distanceMeters >= 0,
+              record.distanceMeters <= Double(maximumDistance) else {
+            lastCaptureDiagnostic = "aim-record-filtered-without-reselection"
+            completion(nil); return
+        }
+        let predictedWorldPoint: CoreSetAimDisplayWorldPoint?
+        let predictedPoint: CGPoint?
+        if let world = record.predictedWorldPoint,
+           let projected = record.predictedScreenPoint,
+           world.x.isFinite, world.y.isFinite, world.z.isFinite,
+           projected.x.isFinite, projected.y.isFinite,
+           projected.x > 0, projected.y > 0,
+           projected.x < canvas.width, projected.y < canvas.height {
+            predictedWorldPoint = world; predictedPoint = projected
+        } else {
+            predictedWorldPoint = nil; predictedPoint = nil
+        }
+        let target = CoreSetAimPreviewTarget(actorAddress: record.actorAddress,
+            candidateKey: record.candidateKey,
+            candidateStartedMonotonicSeconds: record.candidateStartedMonotonicSeconds,
+            worldPoint: record.worldPoint, point: point,
+            predictedWorldPoint: predictedWorldPoint,
+            predictedPoint: predictedPoint,
+            bot: record.bot, distanceMeters: record.distanceMeters)
+        let frame = CoreSetAimPreviewFrame(sourceIdentity: record.identity,
+            captureStartedMonotonicSeconds: record.captureStartedMonotonicSeconds,
+            captureCompletedMonotonicSeconds: record.captureCompletedMonotonicSeconds,
+            target: target)
+        lastCaptureDiagnostic = "aim-record-confirmed actor=\(record.actorAddress)"
+        completion(frame)
     }
 
     @discardableResult
     func shutdown() -> Bool {
         precondition(Thread.isMainThread)
         stopped = true
-        probe?.invalidate(); probe = nil
-        let cleanup = worker.sync { session.disconnect() }
-        return cleanup.complete
+        store.clear()
+        return true
     }
 }

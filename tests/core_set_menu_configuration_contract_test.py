@@ -253,7 +253,7 @@ for row in rows:
     assert contract["receipt"] and set(contract["lifecycle"]) == {"start", "update", "stop"}
     assert not contract["runtime_device_verified"]
 missing_local = [row for row in rows if row["consumer_contract"].startswith("missing_")]
-assert len(missing_local) == 27
+assert len(missing_local) == 2
 counts = Counter(row["consumer_contract"] for row in rows)
 assert counts["local_appearance"] + counts["local_directory"] + counts["host_palette"] == 31
 assert counts["home_observation"] + counts["performance_observation"] == 10
@@ -271,7 +271,12 @@ for row in original_action_gaps:
     assert row["downstream_requirement"] == row["id"]
 assert [row["id"] for row in rows if row["alternative_preview_field"]] == [
     "v17-108", "v17-110", "v17-111", "v17-112", "v17-113", "v17-115", "v17-117"]
-assert all(row["consumer_contract"] == "missing_aim" for row in rows if row["alternative_preview_field"])
+preview_only = {"v17-108", "v17-110", "v17-111", "v17-112"}
+assert {row["id"] for row in rows if row["consumer_contract"] == "aim_display_alternative"} == preview_only
+assert all(row["consumer_contract"] == "aim" for row in rows
+           if row["id"].startswith("v17-") and 106 <= int(row["id"][4:]) <= 130
+           and row["id"] not in preview_only)
+assert sum(row["consumer_contract"] in ("aim", "recoil") for row in rows) == 27
 assert set(matrix["original_observation_producer_gaps"]) == {"v17-005", "v17-006", "v17-008", "v17-009", "v17-010"}
 assert all(extra["local_equivalent_producer_available"] for extra in matrix["original_observation_producer_gaps"].values())
 assert all(not extra["original_producer_available"] for extra in matrix["original_observation_producer_gaps"].values())
@@ -293,5 +298,5 @@ if args.inventory:
     print(f"REFERENCE: {len(pages)} pages / {len(cards)} cards / {len(points)} inventory points; all card names present")
 
 print("PASS: local configuration staging, live apply gates, observable unavailable actions, pointer lifetime; source only")
-print("MATRIX: 137 reference points, 29 missing original action consumers, 6 recoil points source-closed/device-unverified, 7 alternative previews, 5 missing original observation producers; device effect closure=0")
+print("MATRIX: 137 reference points, 6 missing original action consumers, 27 Aim/Recoil points source-closed/device-unverified, 7 alternative preview fields, 5 missing original observation producers; device effect closure=0")
 print("LIMIT: no Swift/UIKit compilation, physical hit testing, consumer receipt or device output verification")
