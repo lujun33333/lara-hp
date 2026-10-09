@@ -4,8 +4,8 @@
 
 // Presentation policy only. No game or process identity belongs in this module.
 typedef enum CoreSetHUDBackend {
-    CoreSetHUDBackendMetal = 0,
-    CoreSetHUDBackendUnavailable = 1,
+    CoreSetHUDBackendCoreAnimation = 0,
+    CoreSetHUDBackendMetal = 1,
 } CoreSetHUDBackend;
 
 static inline uint64_t CoreSetHUDNextGeneration(uint64_t generation) {
@@ -22,11 +22,13 @@ static inline bool CoreSetHUDFrameIsCurrent(bool running, uint64_t generation,
 static inline CoreSetHUDBackend CoreSetHUDSelectBackend(bool foreground,
                                                         bool metalAvailable,
                                                         bool crossApplicationHosted) {
-    (void)foreground;
-    (void)crossApplicationHosted;
-    // Core 1.7 has one ImGui/Metal frame pump. A missing Metal surface is an
-    // unavailable renderer, not a request to switch drawing implementations.
-    return metalAvailable ? CoreSetHUDBackendMetal : CoreSetHUDBackendUnavailable;
+    // The hosted source remains process-owned, but driving its MTKView while
+    // this app is in the background keeps a continuous drawable loop alive in
+    // parallel with the game. Use retained CoreAnimation for cross-application
+    // frames; it updates only when a composer frame changes and avoids stealing
+    // game/UI time from the foreground application.
+    return foreground && metalAvailable && !crossApplicationHosted
+        ? CoreSetHUDBackendMetal : CoreSetHUDBackendCoreAnimation;
 }
 
 static inline bool CoreSetHUDHostingReady(bool menuRegistered, bool drawRegistered) {

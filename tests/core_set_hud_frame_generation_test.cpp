@@ -17,12 +17,12 @@ int main() {
     assert(!CoreSetHUDFrameIsCurrent(true, newRenderGeneration,
                                      newRenderGeneration, oldLastSequence, 1));
 
-    // Core 1.7 has one ImGui/Metal backend. Foreground/hosting state cannot
-    // select a second renderer; a missing Metal surface is unavailable.
+    // WZ mirrors retain Core Animation content while the app is backgrounded;
+    // Metal remains the foreground non-hosted path.
     assert(CoreSetHUDSelectBackend(true, true, false) == CoreSetHUDBackendMetal);
-    assert(CoreSetHUDSelectBackend(false, true, true) == CoreSetHUDBackendMetal);
-    assert(CoreSetHUDSelectBackend(true, true, true) == CoreSetHUDBackendMetal);
-    assert(CoreSetHUDSelectBackend(false, true, false) == CoreSetHUDBackendMetal);
-    assert(CoreSetHUDSelectBackend(true, false, true) == CoreSetHUDBackendUnavailable);
+    assert(CoreSetHUDSelectBackend(false, true, true) == CoreSetHUDBackendCoreAnimation);
+    assert(CoreSetHUDSelectBackend(true, true, true) == CoreSetHUDBackendCoreAnimation);
+    assert(CoreSetHUDSelectBackend(false, true, false) == CoreSetHUDBackendCoreAnimation);
+    assert(CoreSetHUDSelectBackend(true, false, true) == CoreSetHUDBackendCoreAnimation);
     std::puts("CoreSet frame generation boundary passed");
 }
