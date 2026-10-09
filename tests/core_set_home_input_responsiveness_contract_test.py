@@ -34,6 +34,11 @@ def require_responsive_contract(coordinator, telemetry, menu):
     handler = body(menu, "func handleHostedControl(")
     assert "DispatchQueue.main.async" in handler
     assert "self.hostedDispatchControlID == nil" in handler
+    observations = body(menu, "func updateRuntimeObservations(")
+    assert "refreshHomeStatusLabels()" in observations
+    refresh = body(menu, "private func refreshHomeStatusLabels()")
+    assert "CATransaction.flush()" in refresh
+    assert "rebuildMenu()" not in refresh
 
     assert "producerLogSignatures[field] != logSignature" in telemetry
     assert "homeFieldStateLogSignatures[point] != logSignature" in menu
@@ -56,6 +61,10 @@ class HomeInputResponsivenessContract(unittest.TestCase):
         self.assertIn("UIPanGestureRecognizer", self.host)
         self.assertIn("IOHIDEventSystemClient", self.host)
         self.assertIn("BKSHID", self.host)
+        self.assertIn("if (ready) (void)[host armHostedInput]", self.host)
+        self.assertIn("if (!active && !_inputArmed.load()) (void)[self armHostedInput]", self.host)
+        self.assertIn("const BOOL hidOwnsBackground = !active && self.hostedInputMonitorArmed", self.host)
+        self.assertIn("_menuWindow.userInteractionEnabled = !hidOwnsBackground", self.host)
 
     def test_negative_mutants_fail_contract(self):
         mutants = (

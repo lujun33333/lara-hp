@@ -465,7 +465,13 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
             if (host) {
                 host->_menuRegistered = ready; host->_drawRegistered = ready;
                 host->_hostedReadbackGeneration = ready ? generation : 0;
-                [host selectBackend]; [host publishState];
+                [host selectBackend];
+                // The SpringBoard mirror publishes pixels only.  Unlike Core's
+                // removed SBS host, it does not deliver UIKit touches back to
+                // the source process, so keep the WZ HID owner armed across
+                // the foreground/background transition.
+                if (ready) (void)[host armHostedInput];
+                [host publishState];
             }
             completion(ready);
         }];
@@ -514,7 +520,9 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
                         current->_hostedReadbackGeneration = ready ? generation : 0;
                         current->_menuCleanupNeeded = YES;
                         current->_drawCleanupNeeded = YES;
-                        [current selectBackend]; [current publishState];
+                        [current selectBackend];
+                        if (ready) (void)[current armHostedInput];
+                        [current publishState];
                     }
                     completion(ready);
                 }];
@@ -1496,6 +1504,13 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 }
 - (void)togglePanel {
     if (!_running) return;
+    if (!_foreground && self.hostedInputMonitorArmed && _axParsed.load() > 0) {
+        // Once the WZ HID path owns background interaction, ignore any UIKit
+        // replay from the mirrored source context.  A physical touch must
+        // toggle the panel exactly once through handleHostedPointer:.
+        NSLog(@"Core-SET: hosted input stage=dispatch source=UIKit control=host.floating ignored=hid-owner");
+        return;
+    }
     NSLog(@"Core-SET: hosted input stage=dispatch source=UIKit control=host.floating panelBefore=%d",
           _panelVisible);
     [self togglePanelFromHostedPointer];
@@ -1557,8 +1572,10 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     // invalidateFrames below cancels queued pointers; foreground routing is
     // gated by _foreground in drainPendingTouchActionsOnQueue/handleHostedPointer.
     _foreground = active;
-    _menuWindow.backgroundPassThrough = NO;
-    _menuWindow.userInteractionEnabled = YES;
+    if (!active && !_inputArmed.load()) (void)[self armHostedInput];
+    const BOOL hidOwnsBackground = !active && self.hostedInputMonitorArmed;
+    _menuWindow.backgroundPassThrough = hidOwnsBackground;
+    _menuWindow.userInteractionEnabled = !hidOwnsBackground;
     [self invalidateFrames]; [self selectBackend]; [self layoutSurfaces]; [self publishState];
     if (!active && _inputArmed.load()) [self requestHostedReadback];
     NSLog(@"Core-SET: host active-transition active=%d previousGeneration=%llu state={%@}",

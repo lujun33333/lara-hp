@@ -41,7 +41,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
         session.diagnosticLabel = "player"
-        NSLog("Core-SET: player-loop contract=core17-filter-coalesced-final-reproject-v4 interval=0.15 deliveryFreshness=0.5 geometryFreshness=final-reprojected transportReads=actor-page-copy+bone-array-bulk emptyEffect=retry")
+        NSLog("Core-SET: player-loop contract=core17-filter-coalesced-final-reproject-v5 interval=0.15 deliveryFreshness=0.5 geometryFreshness=final-reprojected transportReads=actor-page-copy+bone-array-bulk configurationApply=immediate renderEvidence=separate")
         probe = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
@@ -117,7 +117,19 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         captureLaneClearedForFailure = false
         awaitingReceipt = false
         awaitingReceiptSince = nil
-        pendingApply = (request.token, completion)
+        expectedSnapshot = nil
+        expectedGeneration = nil
+        expectedSessionGeneration = nil
+        expectedProcessID = nil
+        expectedImageBase = nil
+        expectedCompletedAt = nil
+        expectedReadSemanticDiagnostic = nil
+        // Core v1.7 stores UI choices directly in its shared configuration and
+        // lets the frame loop consume the newest value.  Configuration is not
+        // held behind the presence of an on-screen actor or a renderer receipt;
+        // those receipts remain separate evidence of an actual drawn frame.
+        pendingApply = nil
+        completion(request.token, .applied(observed: settings))
         armCaptureLoop()
         capture()
     }

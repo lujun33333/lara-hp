@@ -83,6 +83,13 @@ for token in (
     "UIControlEventTouchUpInside", "UIPanGestureRecognizer",
     "IOHIDEventSystemClient", "BKSHIDEventRegisterEventCallback",
     "confirmHostedReadbackAsync",
+    "if (ready) (void)[host armHostedInput]",
+    "if (ready) (void)[current armHostedInput]",
+    "if (!active && !_inputArmed.load()) (void)[self armHostedInput]",
+    "const BOOL hidOwnsBackground = !active && self.hostedInputMonitorArmed",
+    "_menuWindow.backgroundPassThrough = hidOwnsBackground",
+    "_menuWindow.userInteractionEnabled = !hidOwnsBackground",
+    "ignored=hid-owner",
 ):
     assert token in host, token
 

@@ -118,7 +118,12 @@ class ConsumerConfigurationContract(unittest.TestCase):
             with self.subTest(consumer=name):
                 source = self.sources[name]
                 self.assertIn("coordinator?.playerCanvas != nil", body(source, "var availability:"))
-                self.assertNotIn(".applied(observed:", body(source, "func apply("))
+                apply = body(source, "func apply(")
+                if name == "Player":
+                    self.assertIn("completion(request.token, .applied(observed: settings))", apply)
+                    self.assertIn("configurationApply=immediate renderEvidence=separate", source)
+                else:
+                    self.assertNotIn(".applied(observed:", apply)
                 receipt = body(source, "func consumed(")
                 for identity in ("receipt.configRevision == revision", "receipt.snapshotID == expectedSnapshot",
                                  "receipt.hostGeneration == expectedGeneration", "receipt.requestToken",

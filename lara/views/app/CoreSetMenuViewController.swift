@@ -1,5 +1,6 @@
 import UIKit
 import Darwin
+import QuartzCore
 
 struct CoreSetMenuHostSettings: Equatable {
     var menuVisible = false
@@ -145,6 +146,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private weak var presentationRateLabel: UILabel?
     private var presentationProofSignature: String?
     private var performanceLogSignatures: [Int: String] = [:]
+    private var homeStatusValueLabels: [String: UILabel] = [:]
+    private var homeStatusProgressViews: [String: UIProgressView] = [:]
+    private var homeStatusStructureSignature: String?
     private var pageContentOffsets: [Int: CGPoint] = [:]
     private var hostedPointerID: String?
     private var homeStatusNeedsRebuild = false
@@ -189,7 +193,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         }
         guard changed else { return }
         if isViewLoaded && selectedPage == 0 {
-            if hostedPointerID == nil { rebuildMenu() }
+            if hostedPointerID == nil {
+                if !refreshHomeStatusLabels() { rebuildMenu() }
+            }
             else { homeStatusNeedsRebuild = true }
         }
     }
@@ -471,6 +477,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         hostedScrollID = nil
         hostedSliderID = nil
         performanceValueLabels.removeAll()
+        homeStatusValueLabels.removeAll()
+        homeStatusProgressViews.removeAll()
+        homeStatusStructureSignature = nil
         radarRangeCanvas = nil
         registerHosted(closeButton, .close)
         updateConsumerAvailability()
@@ -598,6 +607,12 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         hostedEntries.first(where: { $0.identifier == identifier })?.action.allowsDrag ?? false
     }
 
+    private func finishDeferredMenuRefresh() {
+        if selectedPage == 0 && refreshHomeStatusLabels() {
+            homeStatusNeedsRebuild = false
+        } else { rebuildMenu() }
+    }
+
     func handleHostedControl(_ identifier: String, phase: CoreSetHostedPointerPhase,
                              at point: CGPoint) -> Bool {
         precondition(Thread.isMainThread)
@@ -610,7 +625,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                               self.hostedDispatchControlID == nil,
                               self.trackingUIKitSlider == nil,
                               self.homeStatusNeedsRebuild else { return }
-                        self.rebuildMenu()
+                        self.finishDeferredMenuRefresh()
                     }
                 }
             }
@@ -789,7 +804,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         DispatchQueue.main.async { [weak self] in
             guard let self, self.trackingUIKitSlider == nil, self.hostedPointerID == nil,
                   self.hostedDispatchControlID == nil, self.homeStatusNeedsRebuild else { return }
-            self.rebuildMenu()
+            self.finishDeferredMenuRefresh()
         }
     }
 
@@ -3342,6 +3357,61 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         card.addSubview(detail)
         return detail
     }
+    private func homeFirmwareProgress(_ snapshot: CoreSetHomeSnapshot?) -> (title: String, value: String, fraction: Float)? {
+        guard let firmware = snapshot?.firmwareState, firmware.totalBytes > 0,
+              firmware.downloadedBytes <= firmware.totalBytes,
+              firmware.stage == "ota-download" ||
+                (firmware.localEquivalent && firmware.stage == "local-kernelcache-copy") else { return nil }
+        let title = firmware.localEquivalent
+            ? "本机 kernelcache 复制进度（Core 同位本地等价）" : "固件下载进度"
+        let fraction = Float(min(1, Double(firmware.downloadedBytes) / Double(firmware.totalBytes)))
+        return (title, "\(firmware.downloadedBytes)/\(firmware.totalBytes) B", fraction)
+    }
+    private func homeStatusStructure(_ snapshot: CoreSetHomeSnapshot?) -> String {
+        let active = snapshot?.executing == true || snapshot?.status == 3
+        let kernelProgress = snapshot?.kernelProgressFraction.map {
+            $0.isFinite && (0...1).contains($0) && snapshot?.executing == true
+        } ?? false
+        let pageProgress = active && (snapshot?.totalPages ?? 0) > 0 && snapshot?.completedPages != nil
+        let firmware = homeFirmwareProgress(snapshot)?.title ?? "none"
+        return "active=\(active)|kernel=\(kernelProgress)|page=\(pageProgress)|firmware=\(firmware)"
+    }
+    @discardableResult
+    private func refreshHomeStatusLabels() -> Bool {
+        guard selectedPage == 0,
+              homeStatusStructureSignature == homeStatusStructure(homeStatusSnapshot) else { return false }
+        let snapshot = homeStatusSnapshot
+        let values: [(String, String, String?)] = [
+            ("kernel", "内核状态", snapshot?.kernel),
+            ("stage", "当前阶段", snapshot?.stage),
+            ("environment", "运行环境", snapshot?.environment),
+            ("information", "获取信息状态", snapshot?.information),
+            ("floating", "悬浮菜单", snapshot?.floating),
+            ("page", "页面进度", snapshot.flatMap { state in
+                guard let total = state.totalPages, total > 0, let completed = state.completedPages else { return nil }
+                return "\(completed)/\(total)"
+            })
+        ]
+        for (key, title, value) in values where homeStatusValueLabels[key] != nil {
+            let display = statusText(value)
+            homeStatusValueLabels[key]?.text = display
+            homeStatusValueLabels[key]?.accessibilityLabel = "\(title)：\(display)"
+        }
+        if let fraction = snapshot?.kernelProgressFraction,
+           fraction.isFinite, (0...1).contains(fraction), snapshot?.executing == true {
+            let display = "\(Int((fraction * 100).rounded()))%"
+            homeStatusValueLabels["kernelProgress"]?.text = display
+            homeStatusValueLabels["kernelProgress"]?.accessibilityLabel = "本应用内核进度：\(display)"
+            homeStatusProgressViews["kernel"]?.progress = Float(fraction)
+        }
+        if let firmware = homeFirmwareProgress(snapshot) {
+            homeStatusValueLabels["firmware"]?.text = firmware.value
+            homeStatusValueLabels["firmware"]?.accessibilityLabel = "\(firmware.title)：\(firmware.value)"
+            homeStatusProgressViews["firmware"]?.progress = firmware.fraction
+        }
+        CATransaction.flush()
+        return true
+    }
     private func performanceValues() -> [String?] {
         let sample = featureState.performanceSnapshot
         let age = sample.map { Date().timeIntervalSince($0.observedAt) }
@@ -3378,40 +3448,38 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private func homeStatusRows(in card: UIView) {
         let snapshot = homeStatusSnapshot
         let active = snapshot?.executing == true || snapshot?.status == 3
+        homeStatusStructureSignature = homeStatusStructure(snapshot)
         var y: CGFloat = 134
-        func add(_ title: String, _ value: String?) {
-            statusRow(title, value: value, in: card, y: y)
+        func add(_ key: String, _ title: String, _ value: String?) {
+            homeStatusValueLabels[key] = statusRow(title, value: value, in: card, y: y)
             y += 30
         }
-        add("内核状态", snapshot?.kernel)
-        if active { add("当前阶段", snapshot?.stage) }
-        add("运行环境", snapshot?.environment)
-        add("获取信息状态", snapshot?.information)
-        add("悬浮菜单", snapshot?.floating)
+        add("kernel", "内核状态", snapshot?.kernel)
+        if active { add("stage", "当前阶段", snapshot?.stage) }
+        add("environment", "运行环境", snapshot?.environment)
+        add("information", "获取信息状态", snapshot?.information)
+        add("floating", "悬浮菜单", snapshot?.floating)
         if let fraction = snapshot?.kernelProgressFraction, fraction.isFinite,
            (0...1).contains(fraction), snapshot?.executing == true {
-            add("本应用内核进度", "\(Int((fraction * 100).rounded()))%")
+            add("kernelProgress", "本应用内核进度", "\(Int((fraction * 100).rounded()))%")
             let progress = UIProgressView(progressViewStyle: .default)
             progress.frame = CGRect(x: 20, y: y - 3, width: card.bounds.width - 40, height: 2)
             progress.progress = Float(fraction)
             progress.accessibilityLabel = "本应用 DarkSword 初始化进度"
             card.addSubview(progress)
+            homeStatusProgressViews["kernel"] = progress
         }
         if active, let total = snapshot?.totalPages, total > 0, let completed = snapshot?.completedPages {
-            add("页面进度", "\(completed)/\(total)")
+            add("page", "页面进度", "\(completed)/\(total)")
         }
-        if let firmware = snapshot?.firmwareState, firmware.totalBytes > 0,
-           firmware.downloadedBytes <= firmware.totalBytes,
-           firmware.stage == "ota-download" ||
-             (firmware.localEquivalent && firmware.stage == "local-kernelcache-copy") {
-            let title = firmware.localEquivalent
-                ? "本机 kernelcache 复制进度（Core 同位本地等价）" : "固件下载进度"
-            add(title, "\(firmware.downloadedBytes)/\(firmware.totalBytes) B")
+        if let firmware = homeFirmwareProgress(snapshot) {
+            add("firmware", firmware.title, firmware.value)
             let progress = UIProgressView(progressViewStyle: .default)
             progress.frame = CGRect(x: 20, y: y - 3, width: card.bounds.width - 40, height: 2)
-            progress.progress = Float(min(1, Double(firmware.downloadedBytes) / Double(firmware.totalBytes)))
-            progress.accessibilityLabel = title
+            progress.progress = firmware.fraction
+            progress.accessibilityLabel = firmware.title
             card.addSubview(progress)
+            homeStatusProgressViews["firmware"] = progress
         }
     }
 

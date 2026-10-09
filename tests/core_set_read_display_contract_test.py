@@ -24,7 +24,7 @@ def body(source: str, signature: str) -> str:
     raise AssertionError(f"unterminated {signature}")
 
 
-def require_receipt_gates(source: str) -> None:
+def require_receipt_gates(source: str, immediate_configuration: bool = False) -> None:
     receipt = body(source, "func consumed(")
     for gate in ("receipt.requestToken", "receipt.configRevision == revision",
                  "receipt.snapshotID == expectedSnapshot", "receipt.hostGeneration == expectedGeneration",
@@ -33,7 +33,12 @@ def require_receipt_gates(source: str) -> None:
                  "guard identityMatches && fresh else", "snapshot-stale stage=receipt"):
         assert gate in receipt, gate
     assert "logReadSemanticReceipt(receipt)" in receipt
-    assert ".applied(observed:" not in body(source, "func apply(")
+    apply = body(source, "func apply(")
+    if immediate_configuration:
+        assert "completion(request.token, .applied(observed: settings))" in apply
+        assert "configurationApply=immediate renderEvidence=separate" in source
+    else:
+        assert ".applied(observed:" not in apply
 
 
 def require_yaw_reread(source: str) -> None:
@@ -329,7 +334,7 @@ class ReadDisplayContracts(unittest.TestCase):
 
     def test_exact_receipts_and_throttled_no_sensitive_output(self) -> None:
         for source in (self.player, self.material, self.radar):
-            require_receipt_gates(source)
+            require_receipt_gates(source, immediate_configuration=source is self.player)
             logger = body(source, "private func logReadSemanticReceipt(")
             for gate in ("lastSemanticLogRevision != receipt.configRevision", "now - lastSemanticLogAt >= 30",
                          "receipt.snapshotID.uuidString", "session.generation", "session.processID",
