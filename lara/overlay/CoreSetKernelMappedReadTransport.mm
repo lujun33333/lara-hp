@@ -25,12 +25,26 @@ static const uint64_t CSArmTTETypeL3Block = 0x2;
 static const uint64_t CSArmTTETableMask = 0x0000FFFFFFFFC000ULL;
 static const uint64_t CSArmTTEPhysicalMask = 0x0000FFFFFFFFF000ULL;
 static const uint32_t CSPAPTMaximumEntries = 128;
+static const uint32_t CSTranslationCacheEntryCount = 2048;
+static const uint32_t CSTranslationCacheEntryMask =
+    CSTranslationCacheEntryCount - 1;
 
 typedef struct {
     uint64_t physicalStart;
     uint64_t apertureStart;
     uint64_t mappingCount;
 } CSSPTMPAPTEntry;
+
+typedef struct {
+    uint64_t targetTTEP;
+    uint64_t virtualPage;
+    uint64_t physicalPage;
+    const char *failureReason;
+    uint32_t contextGeneration;
+    uint32_t reserved;
+} CSPageTranslationCacheEntry;
+static_assert(sizeof(CSPageTranslationCacheEntry) == 0x28,
+              "Core 1.7 translation cache record ABI changed");
 
 static NSString *sCSPageTableInitError = @"not-attempted";
 
@@ -74,6 +88,9 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
     BOOL _targetTTEPIsPhysical;
     CSSPTMPAPTEntry _paptEntries[CSPAPTMaximumEntries];
     uint32_t _paptEntryCount;
+    uint32_t _contextGeneration;
+    CSPageTranslationCacheEntry
+        _translationCache[CSTranslationCacheEntryCount];
     NSString *_lastError;
     BOOL _connected;
 }
@@ -187,6 +204,8 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
         }
         memcpy(_paptEntries, first, tableLength);
         _paptEntryCount = count;
+        _contextGeneration = 1;
+        memset(_translationCache, 0, sizeof(_translationCache));
         _connected = YES;
         CSSetPageTableInitError([NSString stringWithFormat:
             @"none paptCount=%u ttepKind=%@", count,
@@ -218,6 +237,20 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
 
 - (BOOL)identityValid { @synchronized (self) { return [self identityValidLocked]; } }
 
+- (void)invalidateTranslationCacheLocked {
+    memset(_translationCache, 0, sizeof(_translationCache));
+    if (_contextGeneration == UINT32_MAX) _contextGeneration = 1;
+    else ++_contextGeneration;
+    if (_contextGeneration == 0) _contextGeneration = 1;
+}
+
+- (uint32_t)translationCacheIndexForVirtualPageLocked:(uint64_t)virtualPage {
+    const uint64_t pageNumber = virtualPage / CSKernelReadPageSize;
+    const uint64_t rootHash = (_targetTTEP >> 12) ^ (_targetTTEP >> 29);
+    const uint64_t value = rootHash ^ pageNumber ^ (pageNumber >> 17);
+    return (uint32_t)(value & CSTranslationCacheEntryMask);
+}
+
 - (uint64_t)kernelVirtualForPhysicalLocked:(uint64_t)physicalAddress {
     for (uint32_t index = 0; index < _paptEntryCount; ++index) {
         const CSSPTMPAPTEntry entry = _paptEntries[index];
@@ -244,7 +277,7 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
     return YES;
 }
 
-- (uint64_t)physicalAddressForUserAddressLocked:(uint64_t)virtualAddress {
+- (uint64_t)walkPhysicalAddressForUserAddressLocked:(uint64_t)virtualAddress {
     static const uint64_t shifts[] = {36, 25, 14};
     static const uint64_t indexMasksFixed[] = {
         0, 0x0000000FFE000000ULL, 0x0000000001FFC000ULL
@@ -298,6 +331,34 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
     return 0;
 }
 
+- (uint64_t)physicalAddressForUserAddressLocked:(uint64_t)virtualAddress {
+    const uint64_t pageOffset = virtualAddress & (CSKernelReadPageSize - 1);
+    const uint64_t virtualPage = virtualAddress - pageOffset;
+    const uint32_t index =
+        [self translationCacheIndexForVirtualPageLocked:virtualPage];
+    const CSPageTranslationCacheEntry cached = _translationCache[index];
+    if (cached.contextGeneration == _contextGeneration &&
+        cached.targetTTEP == _targetTTEP &&
+        cached.virtualPage == virtualPage && cached.physicalPage != 0 &&
+        cached.physicalPage <= UINT64_MAX - pageOffset) {
+        return cached.physicalPage + pageOffset;
+    }
+
+    const uint64_t physical =
+        [self walkPhysicalAddressForUserAddressLocked:virtualAddress];
+    if (!physical || physical < pageOffset) {
+        memset(&_translationCache[index], 0,
+               sizeof(_translationCache[index]));
+        return 0;
+    }
+    const uint64_t physicalPage = physical - pageOffset;
+    _translationCache[index] = {
+        _targetTTEP, virtualPage, physicalPage, NULL,
+        _contextGeneration, 0
+    };
+    return physical;
+}
+
 - (BOOL)readAt:(uint64_t)address
              to:(void *)destination
          length:(size_t)length
@@ -311,7 +372,14 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
         memset(destination, 0, length);
         if (address < CSMinimumUserAddress ||
             address >= CSMaximumUserAddress || address > UINT64_MAX - length ||
-            address + length > CSMaximumUserAddress || ![self identityValidLocked]) {
+            address + length > CSMaximumUserAddress) {
+            _lastError = @"mapped-read-arguments-or-identity-invalid";
+            return NO;
+        }
+        if (![self identityValidLocked]) {
+            pthread_mutex_lock(&CSKernelMappedReadLock);
+            [self invalidateTranslationCacheLocked];
+            pthread_mutex_unlock(&CSKernelMappedReadLock);
             _lastError = @"mapped-read-arguments-or-identity-invalid";
             return NO;
         }
@@ -321,14 +389,12 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
             return NO;
         }
         pthread_mutex_lock(&CSKernelMappedReadLock);
+        const uint32_t readGeneration = _contextGeneration;
+        const uint64_t readTTEP = _targetTTEP;
         size_t completed = 0;
         BOOL success = YES;
+        BOOL cacheInvalidated = NO;
         while (completed < length) {
-            if (![self identityValidLocked]) {
-                _lastError = @"mapped-read-identity-changed-before-page";
-                success = NO;
-                break;
-            }
             const uint64_t current = address + completed;
             const uint64_t pageAddress = current & ~(CSKernelReadPageSize - 1);
             const size_t pageOffset = (size_t)(current - pageAddress);
@@ -351,9 +417,11 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
                 }
                 if (success) {
                     const uint64_t retranslated =
-                        [self physicalAddressForUserAddressLocked:current];
+                        [self walkPhysicalAddressForUserAddressLocked:current];
                     if (retranslated != physical) {
                         _lastError = @"page-table-mapping-changed-during-read";
+                        [self invalidateTranslationCacheLocked];
+                        cacheInvalidated = YES;
                         success = NO;
                     } else {
                         completed += chunk;
@@ -362,9 +430,17 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
             }
             if (!success) break;
         }
-        if (success && ![self identityValidLocked]) {
+        const BOOL identityValidAfter = [self identityValidLocked];
+        const BOOL contextStable = _contextGeneration == readGeneration &&
+            _targetTTEP == readTTEP;
+        if (success &&
+            (!identityValidAfter || !contextStable)) {
             _lastError = @"mapped-read-identity-changed-after-read";
             success = NO;
+        }
+        if (!success && !cacheInvalidated &&
+            (!contextStable || !identityValidAfter)) {
+            [self invalidateTranslationCacheLocked];
         }
         pthread_mutex_unlock(&CSKernelMappedReadLock);
         if (completedBytes) *completedBytes = completed;
@@ -484,6 +560,7 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
         _targetTTEPIsPhysical = NO;
         _paptEntryCount = 0;
         memset(_paptEntries, 0, sizeof(_paptEntries));
+        [self invalidateTranslationCacheLocked];
         _lastError = @"disconnected";
         pthread_mutex_unlock(&CSKernelMappedReadLock);
         return YES;

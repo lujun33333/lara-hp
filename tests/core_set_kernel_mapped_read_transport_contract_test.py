@@ -46,13 +46,17 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         read_at = body(self.source, "- (BOOL)readAt:")
         for gate in ("identityValidLocked", "CSKernelMappedReadLock",
                      "physicalAddressForUserAddressLocked:current",
+                     "walkPhysicalAddressForUserAddressLocked:current",
                      "kernelVirtualForPhysicalLocked:physical",
                      "ds_kreadbuf_checked(kernelAddress",
                      "page-table-mapping-changed-during-read", "completed == length",
                      "memcpy(destination, scratch.bytes, length)"):
             self.assertIn(gate, read_at)
+        self.assertEqual(read_at.count("[self identityValidLocked]"), 2)
+        page_loop = body(read_at, "while (completed < length)")
+        self.assertNotIn("identityValidLocked", page_loop)
         self.assertNotIn("vmmapremotepagereadonly", self.source)
-        translate = body(self.source, "- (uint64_t)physicalAddressForUserAddressLocked:")
+        translate = body(self.source, "- (uint64_t)walkPhysicalAddressForUserAddressLocked:")
         for gate in ("coreset_arm_tt_l1_index_mask", "CSArmTTEValid",
                      "CSArmTTETableMask", "CSArmTTEPhysicalMask",
                      "_targetTTEPIsPhysical", "readPhysical64Locked"):
@@ -64,6 +68,27 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         self.assertIn("decoded & (1ULL << 55)", checked_pointer)
         self.assertIn("decoded | pac_mask", checked_pointer)
         self.assertIn("decoded & ~pac_mask", checked_pointer)
+
+    def test_translation_cache_is_bounded_and_context_bound(self) -> None:
+        self.assertIn("CSTranslationCacheEntryCount = 2048", self.source)
+        self.assertIn("CSTranslationCacheEntryMask", self.source)
+        self.assertIn("CSPageTranslationCacheEntry", self.source)
+        self.assertIn("sizeof(CSPageTranslationCacheEntry) == 0x28", self.source)
+        cached = body(
+            self.source,
+            "- (uint64_t)physicalAddressForUserAddressLocked:",
+        )
+        for key in ("cached.contextGeneration == _contextGeneration",
+                    "cached.targetTTEP == _targetTTEP",
+                    "cached.virtualPage == virtualPage",
+                    "cached.physicalPage"):
+            self.assertIn(key, cached)
+        self.assertIn("walkPhysicalAddressForUserAddressLocked:virtualAddress", cached)
+        invalidation = body(self.source, "- (void)invalidateTranslationCacheLocked")
+        self.assertIn("memset(_translationCache", invalidation)
+        self.assertIn("++_contextGeneration", invalidation)
+        cleanup = body(self.source, "- (BOOL)disconnect")
+        self.assertIn("invalidateTranslationCacheLocked", cleanup)
 
     def test_reduced_l1_root_does_not_require_full_page_alignment(self) -> None:
         observed_ios26_ttep = 0x101D2F25280

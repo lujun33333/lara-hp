@@ -110,10 +110,26 @@ for token in (
     "doRemoteCallCheckedWithTimeout:10000",
     "remoteSideObserved",
     "localSideObserved",
-    '@"core-sbs-three-surface-wz-fallback-v3"',
+    '@"core-sbs-three-surface-wz-fallback-v4"',
 ):
     assert token in adapter, token
-assert "CSLoadCore17Frameworks" not in adapter
+hosting_class = adapter[adapter.index("static void CSLoadCoreHostingFrameworks"):
+                        adapter.index("static BOOL CSChecked")]
+for framework in (
+    "FrontBoard.framework/FrontBoard",
+    "FrontBoardServices.framework/FrontBoardServices",
+    "RunningBoardServices.framework/RunningBoardServices",
+    "BoardServices.framework/BoardServices",
+    "BaseBoard.framework/BaseBoard",
+    "AccessibilityUtilities.framework/AccessibilityUtilities",
+    "SpringBoardServices.framework/SpringBoardServices",
+):
+    assert framework in hosting_class, framework
+assert "RTLD_LAZY | RTLD_LOCAL" in hosting_class
+assert "dispatch_once" not in hosting_class
+assert "static Class hostingClass" not in hosting_class
+assert hosting_class.count('NSClassFromString(@"SBSAccessibilityWindowHostingController")') == 2
+assert 'core-sbs probe build=%@ class=%d selector=%d' in adapter
 register_three = adapter[adapter.index("- (void)registerThreeSurfacesAsync:"):
                          adapter.index("- (void)unregisterBothSurfacesAsync:")]
 assert "!NSThread.isMainThread" in register_three

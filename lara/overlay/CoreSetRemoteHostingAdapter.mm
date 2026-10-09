@@ -17,16 +17,34 @@ static const double kCoreSetCoreMenuLevel = 999999.0;
 static const double kCoreSetCoreIconLevel = 1000000.0;
 static const double kCoreSetWZRemoteDrawLevel = 10000009.0;
 static const double kCoreSetWZRemoteMenuLevel = 10000010.0;
-static NSString *const CSHostBuildMarker = @"core-sbs-three-surface-wz-fallback-v3";
+static NSString *const CSHostBuildMarker = @"core-sbs-three-surface-wz-fallback-v4";
+
+static void CSLoadCoreHostingFrameworks(void) {
+    // Core 1.7 resolves the hosting class again for every registration attempt.
+    // Keep successful handles, but never cache a failed load/class lookup: the
+    // private framework graph can become available later in app startup.
+    static void *handles[7] = {};
+    static const char *const paths[] = {
+        "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard",
+        "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices",
+        "/System/Library/PrivateFrameworks/RunningBoardServices.framework/RunningBoardServices",
+        "/System/Library/PrivateFrameworks/BoardServices.framework/BoardServices",
+        "/System/Library/PrivateFrameworks/BaseBoard.framework/BaseBoard",
+        "/System/Library/PrivateFrameworks/AccessibilityUtilities.framework/AccessibilityUtilities",
+        "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices",
+    };
+    @synchronized ([NSBundle class]) {
+        for (NSUInteger index = 0; index < sizeof(paths) / sizeof(paths[0]); index++) {
+            if (!handles[index]) handles[index] = dlopen(paths[index], RTLD_LAZY | RTLD_LOCAL);
+        }
+    }
+}
 
 static Class CSAccessibilityHostingClass(void) {
-    static Class hostingClass;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
-        hostingClass = NSClassFromString(@"SBSAccessibilityWindowHostingController");
-    });
-    return hostingClass;
+    Class hostingClass = NSClassFromString(@"SBSAccessibilityWindowHostingController");
+    if (hostingClass) return hostingClass;
+    CSLoadCoreHostingFrameworks();
+    return NSClassFromString(@"SBSAccessibilityWindowHostingController");
 }
 
 static BOOL CSChecked(RemoteCall *process, const char *label, void *function,
@@ -138,8 +156,15 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 }
 + (BOOL)isCoreHostingAvailable {
     Class cls = CSAccessibilityHostingClass();
-    return cls && [cls instancesRespondToSelector:
+    const BOOL selectorAvailable = cls && [cls instancesRespondToSelector:
         NSSelectorFromString(@"registerWindowWithContextID:atLevel:")];
+    static std::atomic_int previousProbe{-1};
+    const int probe = (cls ? 1 : 0) | (selectorAvailable ? 2 : 0);
+    if (previousProbe.exchange(probe) != probe) {
+        NSLog(@"Core-SET: core-sbs probe build=%@ class=%d selector=%d",
+              CSHostBuildMarker, cls ? 1 : 0, selectorAvailable ? 1 : 0);
+    }
+    return selectorAvailable;
 }
 - (instancetype)initWithCoreHosting:(BOOL)coreHosting {
     if (!coreHosting || ![CoreSetRemoteHostingAdapter isCoreHostingAvailable]) return nil;
