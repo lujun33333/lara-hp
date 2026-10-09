@@ -3,11 +3,14 @@
 NS_ASSUME_NONNULL_BEGIN
 
 // Private target-byte read transport used only by CoreSetReadSession when the
-// task port is unavailable. Its exact-profile-gated alias setup changes kernel
-// metadata, but it never exposes a mapped address or target-byte write API.
+// task port is unavailable. It walks the target pmap and reads translated
+// physical pages through the SPTM physical aperture; no target or kernel write
+// primitive is exposed or used.
 @interface CoreSetKernelMappedReadTransport : NSObject
 @property(nonatomic, readonly) int32_t processID;
 @property(nonatomic, copy, readonly) NSString *lastError;
+
++ (NSString *)lastInitializationError;
 
 - (nullable instancetype)initWithKernelProcess:(uint64_t)kernelProcess
                                     expectedPID:(int32_t)expectedPID;
@@ -18,8 +21,7 @@ NS_ASSUME_NONNULL_BEGIN
              to:(void *)destination
          length:(size_t)length
  completedBytes:(size_t *)completedBytes;
-// Returns NO only when a temporary alias could not be fully released. In that
-// case the object retains its cleanup state so a later call can retry.
+// The page-table transport owns no temporary mappings or Mach ports.
 - (BOOL)disconnect;
 @end
 

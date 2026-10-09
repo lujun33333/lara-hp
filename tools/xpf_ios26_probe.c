@@ -12,23 +12,28 @@ int main(int argc, char **argv)
         fprintf(stderr, "xpf-start: %s\n", xpf_get_error() ?: "unknown");
         return 1;
     }
-    const char *required[] = {
-        "kernelSymbol.cpu_ttep",
-        "kernelSymbol.gVirtBase",
-        "kernelSymbol.gPhysBase",
-        "kernelSymbol.gPhysSize",
-        "kernelSymbol.libsptm_n_papt_ranges",
-        "kernelSymbol.libsptm_papt_ranges",
-        "kernelConstant.ARM_TT_L1_INDEX_MASK",
-        "kernelConstant.T1SZ_BOOT",
-        "kernelStruct.vm_map.pmap",
-        NULL,
+    printf("0x%016" PRIx64 " <- gXPF.kernelBase\n", gXPF.kernelBase);
+    printf("0x%016" PRIx64 " <- gXPF.sptmBase\n", gXPF.sptmBase);
+    struct {
+        const char *name;
+        uint64_t expected;
+    } required[] = {
+        { "kernelSymbol.cpu_ttep", 0xfffffff007c14f60ULL },
+        { "kernelSymbol.gVirtBase", 0xfffffff007c38c68ULL },
+        { "kernelSymbol.gPhysBase", 0xfffffff007c69dc0ULL },
+        { "kernelSymbol.gPhysSize", 0xfffffff007c69dc8ULL },
+        { "kernelSymbol.libsptm_n_papt_ranges", 0xfffffff007cace30ULL },
+        { "kernelSymbol.libsptm_papt_ranges", 0xfffffff007cace38ULL },
+        { "kernelConstant.ARM_TT_L1_INDEX_MASK", 0x0000007000000000ULL },
+        { "kernelConstant.T1SZ_BOOT", 0x19ULL },
+        { "kernelStruct.vm_map.pmap", 0x40ULL },
     };
-    int failed = 0;
-    for (const char **name = required; *name; ++name) {
-        uint64_t value = xpf_item_resolve(*name);
-        printf("0x%016" PRIx64 " <- %s\n", value, *name);
-        if (value == 0) failed = 1;
+    int failed = gXPF.kernelBase != 0xfffffff007004000ULL ||
+        gXPF.sptmBase != 0xfffffff027004000ULL;
+    for (size_t index = 0; index < sizeof(required) / sizeof(required[0]); ++index) {
+        uint64_t value = xpf_item_resolve(required[index].name);
+        printf("0x%016" PRIx64 " <- %s\n", value, required[index].name);
+        if (value != required[index].expected) failed = 1;
     }
     if (failed) fprintf(stderr, "xpf-required: %s\n", xpf_get_error() ?: "missing item");
     xpf_stop();

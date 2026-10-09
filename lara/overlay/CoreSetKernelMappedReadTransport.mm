@@ -10,12 +10,32 @@
 #import <string.h>
 #import <unistd.h>
 
-extern "C" kern_return_t mach_vm_deallocate(task_t, mach_vm_address_t, mach_vm_size_t);
-
 static const uint64_t CSKernelReadPageSize = 0x4000;
 static const uint64_t CSMinimumUserAddress = 0x100000000ULL;
 static const uint64_t CSMaximumUserAddress = 0x8000000000ULL;
 static pthread_mutex_t CSKernelMappedReadLock = PTHREAD_MUTEX_INITIALIZER;
+
+static const uint64_t CSArmTTEValid = 0x1;
+static const uint64_t CSArmTTETypeMask = 0x2;
+static const uint64_t CSArmTTETypeBlock = 0x0;
+static const uint64_t CSArmTTETypeL3Block = 0x2;
+static const uint64_t CSArmTTETableMask = 0x0000FFFFFFFFF000ULL;
+static const uint64_t CSArmTTEPhysicalMask = 0x0000FFFFFFFFF000ULL;
+static const uint32_t CSPAPTMaximumEntries = 128;
+
+typedef struct {
+    uint64_t physicalStart;
+    uint64_t apertureStart;
+    uint64_t mappingCount;
+} CSSPTMPAPTEntry;
+
+static NSString *sCSPageTableInitError = @"not-attempted";
+
+static void CSSetPageTableInitError(NSString *value) {
+    @synchronized ([CoreSetKernelMappedReadTransport class]) {
+        sCSPageTableInitError = [value copy] ?: @"unknown";
+    }
+}
 
 static BOOL CSOffsetIsUsable(uint32_t value, uint32_t alignment) {
     return value != 0 && value < 0x10000 && (value & (alignment - 1)) == 0;
@@ -29,38 +49,16 @@ static BOOL CSKernelMappedReadPrerequisites(void) {
         CSOffsetIsUsable(off_proc_p_proc_ro, 8) &&
         CSOffsetIsUsable(off_proc_ro_pr_task, 8) &&
         CSOffsetIsUsable(off_task_map, 8) &&
+        coreset_vm_map_pmap_offset == 0x40 &&
+        coreset_arm_tt_l1_index_mask == 0x0000007000000000ULL &&
+        coreset_libsptm_n_papt_ranges_offset != 0 &&
+        coreset_libsptm_papt_ranges_offset != 0 &&
         CSOffsetIsUsable(off_vm_map_hdr, 8) &&
         CSOffsetIsUsable(off_vm_map_header_nentries, 4) &&
         CSOffsetIsUsable(off_vm_map_header_links_next, 8) &&
         CSOffsetIsUsable(off_vm_map_entry_links_next, 8) &&
-        CSOffsetIsUsable(off_vm_object_ref_count, 4) &&
-        CSOffsetIsUsable(off_vm_named_entry_backing_copy, 8) &&
-        CSOffsetIsUsable(off_vm_named_entry_size, 8) &&
         smr_base && t1sz_boot > 0 && t1sz_boot < 64 &&
         VM_MIN_KERNEL_ADDRESS && VM_MAX_KERNEL_ADDRESS > VM_MIN_KERNEL_ADDRESS;
-}
-
-static BOOL CSReleaseMappedPage(struct vmshmem *mapping) {
-    if (!mapping) return YES;
-    BOOL released = YES;
-    if (mapping->localAddress) {
-        if (mach_vm_deallocate(mach_task_self(), mapping->localAddress,
-                               CSKernelReadPageSize) == KERN_SUCCESS) {
-            mapping->localAddress = 0;
-        } else {
-            released = NO;
-        }
-    }
-    if (mapping->port) {
-        if (mach_port_deallocate(mach_task_self(),
-                                 (mach_port_name_t)mapping->port) == KERN_SUCCESS) {
-            mapping->port = 0;
-        } else {
-            released = NO;
-        }
-    }
-    if (released) memset(mapping, 0, sizeof(*mapping));
-    return released;
 }
 
 @interface CoreSetKernelMappedReadTransport () {
@@ -68,31 +66,121 @@ static BOOL CSReleaseMappedPage(struct vmshmem *mapping) {
     uint64_t _kernelProcess;
     uint64_t _kernelTask;
     uint64_t _kernelVMMap;
+    uint64_t _kernelPmap;
+    uint64_t _targetTTEP;
+    BOOL _targetTTEPIsPhysical;
+    CSSPTMPAPTEntry _paptEntries[CSPAPTMaximumEntries];
+    uint32_t _paptEntryCount;
     NSString *_lastError;
     BOOL _connected;
-    BOOL _pendingCleanup;
-    struct vmshmem _pendingMapping;
 }
 @end
 
 @implementation CoreSetKernelMappedReadTransport
 
++ (NSString *)lastInitializationError {
+    @synchronized (self) { return [sCSPageTableInitError copy] ?: @"unknown"; }
+}
+
 - (instancetype)initWithKernelProcess:(uint64_t)kernelProcess
                            expectedPID:(int32_t)expectedPID {
     if (!CSKernelMappedReadPrerequisites() || expectedPID <= 0 ||
-        !ds_address_usable(kernelProcess)) return nil;
-    uint32_t pid = ds_kread32(kernelProcess + off_proc_p_pid);
+        !ds_address_usable(kernelProcess)) {
+        CSSetPageTableInitError(@"page-table-prerequisites-or-process-invalid");
+        return nil;
+    }
+    uint32_t pid = 0;
+    if (!ds_kread32_checked(kernelProcess + off_proc_p_pid, &pid)) {
+        CSSetPageTableInitError(@"page-table-pid-read-failed");
+        return nil;
+    }
     uint64_t task = taskbyproc(kernelProcess);
     uint64_t vmMap = task ? task_get_vm_map(task) : 0;
+    uint64_t pmap = 0;
+    uint64_t ttep = 0;
+    if (!vmMap || !ds_kreadptr_checked(vmMap + coreset_vm_map_pmap_offset, &pmap) ||
+        !pmap || !ds_kread64_checked(pmap + 0x8, &ttep)) {
+        CSSetPageTableInitError(@"page-table-pmap-or-ttep-read-failed");
+        return nil;
+    }
     if (pid != (uint32_t)expectedPID || !ds_address_usable(task) ||
-        !ds_address_usable(vmMap)) return nil;
+        !ds_address_usable(vmMap) || !ds_address_usable(pmap) ||
+        ttep == 0 || (ttep & (CSKernelReadPageSize - 1)) != 0) {
+        CSSetPageTableInitError(@"page-table-identity-or-ttep-invalid");
+        return nil;
+    }
+    const BOOL ttepIsPhysical = (ttep & 0xF000000000000000ULL) == 0;
+    if (!ttepIsPhysical && !ds_address_usable(ttep)) {
+        CSSetPageTableInitError(@"page-table-virtual-ttep-invalid");
+        return nil;
+    }
     if ((self = [super init])) {
         _processID = expectedPID;
         _kernelProcess = kernelProcess;
         _kernelTask = task;
         _kernelVMMap = vmMap;
+        _kernelPmap = pmap;
+        _targetTTEP = ttep;
+        _targetTTEPIsPhysical = ttepIsPhysical;
         _lastError = @"none";
+
+        if (kernel_base > UINT64_MAX - coreset_libsptm_n_papt_ranges_offset ||
+            kernel_base > UINT64_MAX - coreset_libsptm_papt_ranges_offset) {
+            CSSetPageTableInitError(@"page-table-papt-symbol-overflow");
+            return nil;
+        }
+        const uint64_t countSymbol = kernel_base +
+            coreset_libsptm_n_papt_ranges_offset;
+        const uint64_t tableSymbol = kernel_base +
+            coreset_libsptm_papt_ranges_offset;
+        uint64_t countAddress = 0;
+        uint64_t tableAddress = 0;
+        uint32_t count = 0;
+        if (!ds_kreadptr_checked(countSymbol, &countAddress) ||
+            !ds_kreadptr_checked(tableSymbol, &tableAddress) ||
+            !ds_address_usable(countAddress) ||
+            !ds_kread32_checked(countAddress, &count)) {
+            CSSetPageTableInitError(@"page-table-papt-globals-read-failed");
+            return nil;
+        }
+        if (!ds_address_usable(tableAddress) || count == 0 ||
+            count > CSPAPTMaximumEntries) {
+            CSSetPageTableInitError([NSString stringWithFormat:
+                @"page-table-papt-count-invalid count=%u", count]);
+            return nil;
+        }
+        CSSPTMPAPTEntry first[CSPAPTMaximumEntries] = {0};
+        CSSPTMPAPTEntry second[CSPAPTMaximumEntries] = {0};
+        const size_t tableLength = (size_t)count * sizeof(CSSPTMPAPTEntry);
+        if (!ds_kreadbuf_checked(tableAddress, first, tableLength) ||
+            !ds_kreadbuf_checked(tableAddress, second, tableLength) ||
+            memcmp(first, second, tableLength) != 0) {
+            CSSetPageTableInitError(@"page-table-papt-table-read-or-stability-failed");
+            return nil;
+        }
+        uint32_t confirmedCount = 0;
+        if (!ds_kread32_checked(countAddress, &confirmedCount) || confirmedCount != count) {
+            CSSetPageTableInitError(@"page-table-papt-count-changed");
+            return nil;
+        }
+        for (uint32_t index = 0; index < count; ++index) {
+            const CSSPTMPAPTEntry entry = first[index];
+            if ((entry.physicalStart & (CSKernelReadPageSize - 1)) != 0 ||
+                (entry.apertureStart & (CSKernelReadPageSize - 1)) != 0 ||
+                !ds_address_usable(entry.apertureStart) ||
+                entry.mappingCount == 0 ||
+                entry.mappingCount > UINT64_MAX / CSKernelReadPageSize) {
+                CSSetPageTableInitError([NSString stringWithFormat:
+                    @"page-table-papt-entry-invalid index=%u", index]);
+                return nil;
+            }
+        }
+        memcpy(_paptEntries, first, tableLength);
+        _paptEntryCount = count;
         _connected = YES;
+        CSSetPageTableInitError([NSString stringWithFormat:
+            @"none paptCount=%u ttepKind=%@", count,
+            ttepIsPhysical ? @"physical" : @"virtual"]);
     }
     return self;
 }
@@ -102,15 +190,103 @@ static BOOL CSReleaseMappedPage(struct vmshmem *mapping) {
 - (NSString *)lastError { @synchronized (self) { return [_lastError copy] ?: @"unknown"; } }
 
 - (BOOL)identityValidLocked {
-    if (!_connected || _pendingCleanup || !CSKernelMappedReadPrerequisites() ||
+    if (!_connected || !CSKernelMappedReadPrerequisites() ||
         _processID <= 0 || !ds_address_usable(_kernelProcess) ||
-        !ds_address_usable(_kernelTask) || !ds_address_usable(_kernelVMMap)) return NO;
-    return ds_kread32(_kernelProcess + off_proc_p_pid) == (uint32_t)_processID &&
+        !ds_address_usable(_kernelTask) || !ds_address_usable(_kernelVMMap) ||
+        !ds_address_usable(_kernelPmap) || !_targetTTEP || !_paptEntryCount) return NO;
+    uint32_t currentPID = 0;
+    uint64_t currentPmap = 0;
+    uint64_t currentTTEP = 0;
+    if (!ds_kread32_checked(_kernelProcess + off_proc_p_pid, &currentPID) ||
+        !ds_kreadptr_checked(_kernelVMMap + coreset_vm_map_pmap_offset, &currentPmap) ||
+        !ds_kread64_checked(_kernelPmap + 0x8, &currentTTEP)) return NO;
+    return currentPID == (uint32_t)_processID &&
         taskbyproc(_kernelProcess) == _kernelTask &&
-        task_get_vm_map(_kernelTask) == _kernelVMMap;
+        task_get_vm_map(_kernelTask) == _kernelVMMap &&
+        currentPmap == _kernelPmap && currentTTEP == _targetTTEP;
 }
 
 - (BOOL)identityValid { @synchronized (self) { return [self identityValidLocked]; } }
+
+- (uint64_t)kernelVirtualForPhysicalLocked:(uint64_t)physicalAddress {
+    for (uint32_t index = 0; index < _paptEntryCount; ++index) {
+        const CSSPTMPAPTEntry entry = _paptEntries[index];
+        const uint64_t length = entry.mappingCount * CSKernelReadPageSize;
+        if (physicalAddress >= entry.physicalStart &&
+            physicalAddress - entry.physicalStart < length) {
+            const uint64_t delta = physicalAddress - entry.physicalStart;
+            if (entry.apertureStart <= UINT64_MAX - delta) {
+                const uint64_t address = entry.apertureStart + delta;
+                return ds_address_usable(address) ? address : 0;
+            }
+        }
+    }
+    return 0;
+}
+
+- (BOOL)readPhysical64Locked:(uint64_t)physicalAddress value:(uint64_t *)value {
+    if (!value) return NO;
+    const uint64_t address = [self kernelVirtualForPhysicalLocked:physicalAddress];
+    if (!address || !ds_kread64_checked(address, value)) {
+        _lastError = @"page-table-physical-read-failed";
+        return NO;
+    }
+    return YES;
+}
+
+- (uint64_t)physicalAddressForUserAddressLocked:(uint64_t)virtualAddress {
+    static const uint64_t shifts[] = {36, 25, 14};
+    static const uint64_t indexMasksFixed[] = {
+        0, 0x0000000FFE000000ULL, 0x0000000001FFC000ULL
+    };
+    static const uint64_t offsetMasks[] = {
+        0x0000000FFFFFFFFFULL,
+        0x0000000001FFFFFFULL,
+        0x0000000000003FFFULL,
+    };
+    uint64_t tablePhysical = _targetTTEP;
+    BOOL tableIsPhysical = _targetTTEPIsPhysical;
+    for (uint32_t level = 0; level < 3; ++level) {
+        const uint64_t indexMask = level == 0
+            ? coreset_arm_tt_l1_index_mask : indexMasksFixed[level];
+        const uint64_t index = (virtualAddress & indexMask) >> shifts[level];
+        if (index > 0x7FF || tablePhysical > UINT64_MAX - index * sizeof(uint64_t)) {
+            _lastError = @"page-table-index-invalid";
+            return 0;
+        }
+        uint64_t entry = 0;
+        const uint64_t entryAddress = tablePhysical + index * sizeof(uint64_t);
+        if (tableIsPhysical) {
+            if (![self readPhysical64Locked:entryAddress value:&entry]) return 0;
+        } else if (!ds_kread64_checked(entryAddress, &entry)) {
+            _lastError = @"page-table-virtual-read-failed";
+            return 0;
+        }
+        if ((entry & CSArmTTEValid) != CSArmTTEValid) {
+            _lastError = @"page-table-entry-invalid";
+            return 0;
+        }
+        const uint64_t expectedBlockType = level == 2
+            ? CSArmTTETypeL3Block : CSArmTTETypeBlock;
+        if ((entry & CSArmTTETypeMask) == expectedBlockType) {
+            return (entry & CSArmTTEPhysicalMask & ~offsetMasks[level]) |
+                (virtualAddress & offsetMasks[level]);
+        }
+        const uint64_t nextPhysical = entry & CSArmTTETableMask;
+        if (!nextPhysical || (nextPhysical & (CSKernelReadPageSize - 1)) != 0) {
+            _lastError = @"page-table-next-level-invalid";
+            return 0;
+        }
+        tablePhysical = tableIsPhysical ? nextPhysical
+            : [self kernelVirtualForPhysicalLocked:nextPhysical];
+        if (!tablePhysical) {
+            _lastError = @"page-table-next-level-aperture-missing";
+            return 0;
+        }
+    }
+    _lastError = @"page-table-leaf-missing";
+    return 0;
+}
 
 - (BOOL)readAt:(uint64_t)address
              to:(void *)destination
@@ -148,29 +324,31 @@ static BOOL CSReleaseMappedPage(struct vmshmem *mapping) {
             const size_t pageOffset = (size_t)(current - pageAddress);
             const size_t chunk = MIN(length - completed,
                                      (size_t)CSKernelReadPageSize - pageOffset);
-            struct vmshmem mapping = {0};
-            @try {
-                mapping = vmmapremotepagereadonly(_kernelVMMap, pageAddress);
-            } @catch (NSException *exception) {
-                (void)exception;
-                _lastError = @"mapped-read-alias-exception";
-                success = NO;
-            }
-            if (!success) break;
-            if (!mapping.used || !mapping.localAddress || !mapping.port ||
-                mapping.remoteAddress != pageAddress) {
-                _lastError = @"mapped-read-alias-invalid";
+            const uint64_t physical =
+                [self physicalAddressForUserAddressLocked:current];
+            const uint64_t kernelAddress = physical
+                ? [self kernelVirtualForPhysicalLocked:physical] : 0;
+            if (!physical || !kernelAddress) {
+                if ([_lastError isEqualToString:@"none"]) {
+                    _lastError = @"page-table-physical-aperture-missing";
+                }
                 success = NO;
             } else {
-                memcpy((uint8_t *)scratch.mutableBytes + completed,
-                       (const void *)(uintptr_t)(mapping.localAddress + pageOffset), chunk);
-                completed += chunk;
-            }
-            if (!CSReleaseMappedPage(&mapping)) {
-                _pendingMapping = mapping;
-                _pendingCleanup = YES;
-                _lastError = @"mapped-read-alias-release-failed";
-                success = NO;
+                if (!ds_kreadbuf_checked(kernelAddress,
+                        (uint8_t *)scratch.mutableBytes + completed, chunk)) {
+                    _lastError = @"page-table-data-read-failed";
+                    success = NO;
+                }
+                if (success) {
+                    const uint64_t retranslated =
+                        [self physicalAddressForUserAddressLocked:current];
+                    if (retranslated != physical) {
+                        _lastError = @"page-table-mapping-changed-during-read";
+                        success = NO;
+                    } else {
+                        completed += chunk;
+                    }
+                }
             }
             if (!success) break;
         }
@@ -231,8 +409,13 @@ static BOOL CSReleaseMappedPage(struct vmshmem *mapping) {
             return 0;
         }
         const uint64_t headerAddress = _kernelVMMap + off_vm_map_hdr;
-        uint64_t entry = ds_kreadptr(headerAddress + off_vm_map_header_links_next);
-        uint32_t count = ds_kread32(headerAddress + off_vm_map_header_nentries);
+        uint64_t entry = 0;
+        uint32_t count = 0;
+        if (!ds_kreadptr_checked(headerAddress + off_vm_map_header_links_next, &entry) ||
+            !ds_kread32_checked(headerAddress + off_vm_map_header_nentries, &count)) {
+            _lastError = @"page-table-vm-map-header-read-failed";
+            return 0;
+        }
         if (!ds_address_usable(entry) || count == 0 || count > 8192) {
             _lastError = @"mapped-read-vm-map-header-invalid";
             return 0;
@@ -246,7 +429,10 @@ static BOOL CSReleaseMappedPage(struct vmshmem *mapping) {
             if (!ds_address_usable(entry) || entry > UINT64_MAX - sizeof(struct vmmapentry) ||
                 entry > UINT64_MAX - off_vm_map_entry_links_next) break;
             struct vmmapentry targetEntry = {0};
-            ds_kreadbuf(entry, &targetEntry, sizeof(targetEntry));
+            if (!ds_kreadbuf_checked(entry, &targetEntry, sizeof(targetEntry))) {
+                _lastError = @"page-table-vm-map-entry-read-failed";
+                return 0;
+            }
             const uint64_t start = targetEntry.links.start, end = targetEntry.links.end;
             if ((visited > 0 && start <= previousStart) || end <= start) {
                 _lastError = @"mapped-read-vm-map-range-invalid";
@@ -262,7 +448,11 @@ static BOOL CSReleaseMappedPage(struct vmshmem *mapping) {
                 (start & (CSKernelReadPageSize - 1)) == 0 &&
                 end - start >= sizeof(struct mach_header_64) &&
                 [self imageAt:start matchesUUID:uuid]) return start;
-            uint64_t next = ds_kreadptr(entry + off_vm_map_entry_links_next);
+            uint64_t next = 0;
+            if (!ds_kreadptr_checked(entry + off_vm_map_entry_links_next, &next)) {
+                _lastError = @"page-table-vm-map-next-read-failed";
+                return 0;
+            }
             if (next == entry) {
                 _lastError = @"mapped-read-vm-map-cycle";
                 return 0;
@@ -277,18 +467,16 @@ static BOOL CSReleaseMappedPage(struct vmshmem *mapping) {
 - (BOOL)disconnect {
     @synchronized (self) {
         pthread_mutex_lock(&CSKernelMappedReadLock);
-        BOOL released = !_pendingCleanup || CSReleaseMappedPage(&_pendingMapping);
-        if (released) {
-            _pendingCleanup = NO;
-            _connected = NO;
-            _processID = -1;
-            _kernelProcess = _kernelTask = _kernelVMMap = 0;
-            _lastError = @"disconnected";
-        } else {
-            _lastError = @"mapped-read-alias-release-retry-failed";
-        }
+        _connected = NO;
+        _processID = -1;
+        _kernelProcess = _kernelTask = _kernelVMMap = 0;
+        _kernelPmap = _targetTTEP = 0;
+        _targetTTEPIsPhysical = NO;
+        _paptEntryCount = 0;
+        memset(_paptEntries, 0, sizeof(_paptEntries));
+        _lastError = @"disconnected";
         pthread_mutex_unlock(&CSKernelMappedReadLock);
-        return released;
+        return YES;
     }
 }
 

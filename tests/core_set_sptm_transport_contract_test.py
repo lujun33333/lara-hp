@@ -85,6 +85,33 @@ class SPTMTransportContract(unittest.TestCase):
             "kernelSymbol.libsptm_papt_ranges", "kernelConstant.T1SZ_BOOT",
         ):
             self.assertIn(item, probe)
+        for expected in (
+            "0xfffffff007004000ULL", "0xfffffff027004000ULL",
+            "0xfffffff007cace30ULL", "0xfffffff007cace38ULL",
+            "0x0000007000000000ULL", "0x40ULL",
+        ):
+            self.assertIn(expected, probe)
+
+    def test_runtime_consumes_xpf_papt_values_through_checked_reads(self) -> None:
+        items = read("lara/kexploit/xpfitems.m")
+        offsets = read("lara/kexploit/offsets.m")
+        transport = read("lara/overlay/CoreSetKernelMappedReadTransport.mm")
+        darksword = read("lara/kexploit/darksword.m")
+        for item in (
+            '"kernelConstant.ARM_TT_L1_INDEX_MASK"',
+            '"kernelStruct.vm_map.pmap"',
+            '"kernelSymbol.libsptm_n_papt_ranges"',
+            '"kernelSymbol.libsptm_papt_ranges"',
+        ):
+            self.assertIn(item, items)
+        self.assertIn("gxpf_libsptm_papt_ranges - gXPF.kernelBase", offsets)
+        self.assertIn("gxpf_libsptm_n_papt_ranges - gXPF.kernelBase", offsets)
+        self.assertIn("CSSPTMPAPTEntry", transport)
+        self.assertIn("_targetTTEPIsPhysical", transport)
+        self.assertIn("physicalAddressForUserAddressLocked", transport)
+        self.assertNotIn("vmmapremotepagereadonly", transport)
+        self.assertIn("bool ds_kreadbuf_checked", darksword)
+        self.assertIn("read_data_length == (socklen_t)size", darksword)
 
 
 if __name__ == "__main__":

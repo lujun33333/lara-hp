@@ -271,7 +271,9 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         read_at = body(self.session, "- (BOOL)readAt:")
         self.assertNotRegex(read_at, r"\b(?:task_for_pid|remoteRead|vmmapremotepage|ds_kread\w*)\s*\(")
         self.assertNotIn("mach_vm_write", self.session)
-        self.assertIn("vmmapremotepagereadonly(_kernelVMMap, pageAddress)", self.kernel_transport)
+        self.assertIn("physicalAddressForUserAddressLocked:current", self.kernel_transport)
+        self.assertIn("ds_kreadbuf_checked(kernelAddress", self.kernel_transport)
+        self.assertNotIn("vmmapremotepagereadonly", self.kernel_transport)
         for forbidden in ("ds_kwrite", "mach_vm_write", "VM_PROT_WRITE", "RemoteCall"):
             self.assertNotIn(forbidden, self.kernel_transport)
         aim = read("lara/views/app/CoreSetAimConsumer.swift")

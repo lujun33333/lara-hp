@@ -1,4 +1,4 @@
-"""Kernel-mapped fallback contracts; source-only, no device-success claim."""
+"""SPTM page-table fallback contracts; source-only, no device-success claim."""
 
 from pathlib import Path
 import unittest
@@ -27,7 +27,7 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         cls.header = read("lara/overlay/CoreSetKernelMappedReadTransport.h")
         cls.source = read("lara/overlay/CoreSetKernelMappedReadTransport.mm")
         cls.profile = read("lara/overlay/CoreSetKernelReadProfile.mm")
-        cls.vm = read("lara/kexploit/TaskRop/vm.m")
+        cls.darksword = read("lara/kexploit/darksword.m")
         cls.session = read("lara/overlay/CoreSetReadSession.mm")
 
     def test_transport_exposes_read_and_cleanup_only(self) -> None:
@@ -42,37 +42,31 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         for forbidden in ("RemoteCall", "mach_vm_write", "ds_kwrite", "VM_PROT_WRITE"):
             self.assertNotIn(forbidden, self.source)
 
-    def test_page_alias_is_structurally_readonly_and_immediately_released(self) -> None:
+    def test_sptm_page_table_walk_is_checked_and_readonly(self) -> None:
         read_at = body(self.source, "- (BOOL)readAt:")
         for gate in ("identityValidLocked", "CSKernelMappedReadLock",
-                     "vmmapremotepagereadonly(_kernelVMMap, pageAddress)",
-                     "memcpy((uint8_t *)scratch.mutableBytes + completed",
-                     "CSReleaseMappedPage(&mapping)", "completed == length",
+                     "physicalAddressForUserAddressLocked:current",
+                     "kernelVirtualForPhysicalLocked:physical",
+                     "ds_kreadbuf_checked(kernelAddress",
+                     "page-table-mapping-changed-during-read", "completed == length",
                      "memcpy(destination, scratch.bytes, length)"):
             self.assertIn(gate, read_at)
-        readonly = body(self.vm, "struct vmshmem vmmapremotepagereadonly(")
-        self.assertIn("vmcreateshmemwithobjprotection(&before, VM_PROT_READ)", readonly)
-        self.assertIn("vmmapfindentry(vmmap, address)", readonly)
-        self.assertGreaterEqual(readonly.count("vmgetptratentry(entryaddr, address)"), 3)
-        self.assertIn("before.address != confirm.address", readonly)
-        self.assertIn("before.address != after.address", readonly)
-        self.assertIn("shmem.used = false", readonly)
-        create = body(self.vm, "static struct vmshmem vmcreateshmemwithobjprotection(")
-        self.assertIn("entryProtection = requestedProtection == VM_PROT_READ", create)
-        self.assertIn("entryProtection, &memobj", create)
-        self.assertIn("curprot = requestedProtection", create)
-        self.assertIn("maxprot = requestedProtection", create)
-        release = body(self.source, "static BOOL CSReleaseMappedPage(")
-        self.assertIn("mach_vm_deallocate", release)
-        self.assertIn("mach_port_deallocate", release)
-        self.assertLess(read_at.index("memcpy((uint8_t *)scratch.mutableBytes + completed"),
-                        read_at.index("CSReleaseMappedPage(&mapping)"))
+        self.assertNotIn("vmmapremotepagereadonly", self.source)
+        translate = body(self.source, "- (uint64_t)physicalAddressForUserAddressLocked:")
+        for gate in ("coreset_arm_tt_l1_index_mask", "CSArmTTEValid",
+                     "CSArmTTETableMask", "CSArmTTEPhysicalMask",
+                     "_targetTTEPIsPhysical", "readPhysical64Locked"):
+            self.assertIn(gate, translate)
+        checked = body(self.darksword, "bool ds_kreadbuf_checked(")
+        self.assertIn("early_kread(addr + off, &val, chunk)", checked)
+        self.assertNotIn("early_kread64", checked)
 
-    def test_identity_binds_proc_pid_task_and_vm_map(self) -> None:
+    def test_identity_binds_proc_pid_task_vm_map_pmap_and_ttep(self) -> None:
         identity = body(self.source, "- (BOOL)identityValidLocked")
         for gate in ("_kernelProcess", "off_proc_p_pid",
                      "taskbyproc(_kernelProcess) == _kernelTask",
-                     "task_get_vm_map(_kernelTask) == _kernelVMMap"):
+                     "task_get_vm_map(_kernelTask) == _kernelVMMap",
+                     "currentPmap == _kernelPmap", "currentTTEP == _targetTTEP"):
             self.assertIn(gate, identity)
         find_image = body(self.source, "- (uint64_t)findImageWithUUID:")
         for gate in ("count > 8192", "start <= previousStart", "end <= start",
@@ -85,9 +79,14 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         for gate in ("MH_EXECUTE", "LC_UUID", "memcmp(value->uuid, uuid, 16) == 0"):
             self.assertIn(gate, image)
 
-    def test_indirect_kernel_metadata_write_requires_known_build_profile(self) -> None:
+    def test_page_table_values_require_known_build_profile(self) -> None:
         prerequisites = body(self.source, "static BOOL CSKernelMappedReadPrerequisites(")
         self.assertIn("[CoreSetKernelReadProfile matchesCurrentKernel]", prerequisites)
+        for exact in ("coreset_vm_map_pmap_offset == 0x40",
+                      "coreset_arm_tt_l1_index_mask == 0x0000007000000000ULL",
+                      "coreset_libsptm_n_papt_ranges_offset != 0",
+                      "coreset_libsptm_papt_ranges_offset != 0"):
+            self.assertIn(exact, prerequisites)
         for exact in ("23A341", "iPhone17,2", "xnu-12377.2.8~1",
                       "off_proc_p_pid == 0x60", "off_task_itk_space == 0x310",
                       "off_ipc_space_is_table == 0x48", "sizeof_ipc_entry == 0x18",
@@ -98,23 +97,15 @@ class KernelMappedReadTransportContract(unittest.TestCase):
                       "kernel-uuid-unavailable-or-unstable", "kernel-uuid-changed",
                       "kernel_base == sPinnedKernelBase"):
             self.assertIn(exact, self.profile)
-        get_object = body(self.vm, "static struct vmobj vmgetptratentry(")
-        for gate in ("entry.is_sub_map", "entry.vme_kernel_object",
-                     "entry.protection & VM_PROT_READ", "entry.vme_object_or_delta == 0",
-                     "ds_address_usable(vmeobj)", "refcount == 0"):
-            self.assertIn(gate, get_object)
-        # The alias helper still performs kernel metadata writes internally;
-        # the contract is exact-profile-gated and never claims strict zero-write.
-        self.assertIn("ds_kwrite32", self.vm)
-        self.assertIn("ds_kwritezoneelement", self.vm)
+        for forbidden in ("ds_kwrite", "vmmapremotepage", "mach_vm_write"):
+            self.assertNotIn(forbidden, self.source)
 
     def test_session_prefers_task_port_then_uses_bounded_fallback(self) -> None:
         connect = body(self.session, "- (BOOL)connect")
         self.assertLess(connect.index("CSAcquireTaskForPID(pid)"),
                         connect.index("initWithKernelProcess:candidate.kernelProc"))
         for gate in ("findImageWithUUID:CSUUID", "CSResolveKernelTarget(true)",
-                     "[transport identityValid]", '@"kernel-mapped-read"',
-                     "kernel-mapped-read-cleanup-pending"):
+                     "[transport identityValid]", '@"kernel-page-table-read"'):
             self.assertIn(gate, connect)
         read_at = body(self.session, "- (BOOL)readAt:")
         self.assertIn("to:scratch.mutableBytes", read_at)

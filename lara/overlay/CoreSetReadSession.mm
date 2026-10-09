@@ -502,29 +502,22 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
                 uint64_t base = transport ? [transport findImageWithUUID:CSUUID] : 0;
                 lastKernelTransportError = transport
                     ? transport.lastError : [NSString stringWithFormat:
-                        @"mapped-read-prerequisites-or-identity-invalid profile=%@",
+                        @"%@ profile=%@",
+                        [CoreSetKernelMappedReadTransport lastInitializationError],
                         [CoreSetKernelReadProfile lastFailure]];
                 const CSKernelTarget current = CSResolveKernelTarget(true);
                 if (!transport || !base || current.pid != pid ||
                     current.kernelProc != candidate.kernelProc || ![transport identityValid]) {
                     kernelIdentityChanged = transport &&
                         (current.pid != pid || current.kernelProc != candidate.kernelProc);
-                    if (transport && ![transport disconnect]) {
-                        // Retain the owner so a later disconnect can retry every
-                        // cached alias/port release. Never orphan cleanup state.
-                        _kernelTransport = transport;
-                        _pid = pid;
-                        _taskSource = @"kernel-mapped-read-cleanup-pending";
-                        lastKernelTransportError = transport.lastError;
-                        break;
-                    }
+                    if (transport) (void)[transport disconnect];
                     continue;
                 }
                 sawTask = YES;
                 sawPID = YES;
                 _kernelTransport = transport; _pid = pid; _base = base; _path = [path copy];
                 _pidSource = [NSString stringWithUTF8String:candidate.source ?: "unknown"];
-                _taskSource = @"kernel-mapped-read";
+                _taskSource = @"kernel-page-table-read";
                 _profileSource = profileSource;
             } else {
                 continue;
@@ -551,7 +544,7 @@ static CSTaskAcquisition CSAcquireTaskForPID(int pid) {
         else if (!sawProfile) reason = [NSString stringWithFormat:@"profile-mismatch expected=1.38.12/15915 actual={%@}",
             lastProfile ?: @"unreadable"];
         else if (!sawTask && lastKernelTransportError.length) reason = [NSString stringWithFormat:
-            @"kernel-mapped-read-unavailable reason=%@ machSource=%s machKr=0x%x",
+            @"kernel-page-table-read-unavailable reason=%@ machSource=%s machKr=0x%x",
             lastKernelTransportError, lastTaskSource, lastTaskResult];
         else if (!taskMechanismAvailable) reason = @"task-read-symbol-missing acquisition=task_for_pid/task_read_for_pid/processor_set_tasks";
         else if (!sawTask) reason = [NSString stringWithFormat:@"task-read-denied source=%s kr=0x%x",
