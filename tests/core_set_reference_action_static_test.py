@@ -36,6 +36,27 @@ ANCHORS = {
     0x1000C2F1C: "496969f8",  # Load selected A entry.
     0x1000C2F20: "290108ca",  # Decode runtime offset as A XOR B.
     0x1000C2F38: "21011a8b",  # Sink address = controller + decoded offset.
+    0x1000C5B08: "f30308aa",  # c5ad8 hidden result record is caller x8.
+    0x1000C5BE8: "68060039",  # Dual-axis class-2 sets result byte +1.
+    0x1000C5C50: "68060039",  # Single-axis class-2 sets result byte +1.
+    0x10006308C: "a8008052",  # Exact readback success encodes raw low status 5.
+    0x100063090: "e8b302b9",  # Raw status is returned through c620b8 x0.
+    0x1000C3148: "e8574139",  # Non-fire path loads c5ad8 result byte +1.
+    0x1000C3150: "21300054",  # exact-one result gate.
+    0x1000C3694: "e8574139",  # Fire path loads the same result byte +1.
+    0x1000C3698: "e8050036",  # low-bit result gate.
+    0x1000C1F88: "08e15d39",  # Alternate state skips config observation.
+    0x1000C1F90: "086741b9",  # Per-cycle C+0x164 load.
+    0x1000C1FAC: "28f109b9",  # priorConfig update.
+    0x1000C1FB8: "280100b9",  # modeFlag update.
+    0x1000C1FBC: "3f2500b9",  # resultGateCount reset.
+    0x1000C1FC4: "1fc12639",  # cached input validity reset.
+    0x1000C2C38: "14008052",  # Default w20=0.
+    0x1000C35F0: "34008052",  # Direct-control path w20=1.
+    0x1000C38E8: "14008052",  # Paused-input path w20=0.
+    0x1000C3984: "14008052",  # Threshold-confirm path w20=0.
+    0x1000C39B8: "14008052",  # Deadline path w20=0.
+    0x1000C32E0: "a3030094",  # c416c result is separate from c5ad8 result byte.
     0x1000C2F9C: "08c12191",  # Index-66 current-input read path.
     0x1000C5010: "604a00bd",  # Geometry result +0x48 producer.
     0x1000C2B20: "ea5b42bd",  # Result caller read into s10.
@@ -126,7 +147,7 @@ def main() -> None:
     print(f"PASS: reference image={EXPECTED_IMAGE}; {len(ANCHORS)} opcode anchors; "
           "six identical guarded templates; loader-first producer=0x100011620; slots65/66=0x620/0x828")
     print("PASS: merge w19=0/1 selects slot65/66; sink address=published controller+decoded offset")
-    print("LIMIT: static Mach-O ABI only; loader execution, live controller lifetime, input concurrency and stop receipts remain open")
+    print("LIMIT: route owner still lacks C+0x164 semantics and raw c620b8 status/w20 feedback; authority remains unresolved")
 
 
 if __name__ == "__main__":
