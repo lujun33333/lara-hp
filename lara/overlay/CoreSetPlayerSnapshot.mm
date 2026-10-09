@@ -452,17 +452,26 @@ static const uint8_t *CSBoneProfile(int32_t count) {
 }
 
 struct CSBoneSample { uint8_t index; std::array<uint8_t, 0x2c> bytes; };
+struct CSBoneArrayState { uint64_t data; int32_t count; int32_t capacity; };
 struct CSBoneState {
     uint64_t mesh = 0;
     uint64_t callback = 0;
     uint32_t flags = 0, key = 0;
     uint8_t registered = 0;
+    uint16_t arrayOffset = 0;
     uint8_t status = 0; // 1 missing mesh, 2 unregistered, 3 invalid array, 4 bounds, 5 unknown decoder, 6 plain, 7 XOR.
-    struct { uint64_t data; int32_t count; int32_t capacity; } array = {0};
+    CSBoneArrayState array = {0};
     std::array<uint8_t, 0x2c> component = {};
     std::vector<CSBoneSample> samples;
     const uint8_t *edges = nullptr;
 };
+
+static bool CSBoneArrayValid(const CSBoneArrayState &array) {
+    return array.count >= 6 && array.count <= 256 &&
+        array.capacity >= array.count && array.capacity <= 256 &&
+        array.data >= 0x100000000ULL &&
+        array.data <= 0x8000000000ULL - 256 * 0x30;
+}
 
 static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation, uint64_t base,
                             uint64_t actor, CSBoneState *state, bool *present,
@@ -481,11 +490,19 @@ static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation, ui
     if (!(state->registered & 4)) { state->status = 2; return true; }
     if (!CSCaptureRead(session, generation, state->mesh + 0x838, &state->array,
                        sizeof(state->array), &cache)) return false;
+    state->arrayOffset = 0x838;
+    if (!CSBoneArrayValid(state->array)) {
+        // Core v1.7 falls through to the adjacent transform array when its
+        // primary ComponentSpaceTransforms TArray is empty. Keep both reads
+        // bounded by the same Num/Max/data/stride contract.
+        CSBoneArrayState fallback = {};
+        if (!CSCaptureRead(session, generation, state->mesh + 0x848, &fallback,
+                           sizeof(fallback), &cache)) return false;
+        if (!CSBoneArrayValid(fallback)) { state->status = 3; return true; }
+        state->array = fallback;
+        state->arrayOffset = 0x848;
+    }
     const auto &array = state->array;
-    if (array.count < 0 || array.count > 256 || array.capacity < array.count ||
-        array.capacity > 256 || (array.count && !array.data)) { state->status = 3; return true; }
-    if (array.count < 6) { state->status = 3; return true; }
-    if (array.data < 0x100000000ULL || array.data > 0x8000000000ULL - 256 * 0x30) { state->status = 3; return true; }
     state->edges = CSBoneProfile(array.count);
     for (unsigned edge = 0; edge < 28; ++edge)
         if (state->edges[edge] >= array.count) { state->status = 4; return true; }
@@ -606,6 +623,41 @@ static CoreSetWorldPoint *CSBoneWorldPoint(const CSBoneState &state, uint8_t ind
 }
 @end
 
+@interface CSBoneWorldSegment : NSObject
+@property(nonatomic) CoreSetWorldPoint *start;
+@property(nonatomic) CoreSetWorldPoint *end;
+@end
+@implementation CSBoneWorldSegment @end
+
+static NSArray<CSBoneWorldSegment *> *CSBoneWorldSegments(const CSBoneState &state) {
+    NSMutableArray<CSBoneWorldSegment *> *result = [NSMutableArray arrayWithCapacity:14];
+    for (unsigned edge = 0; edge < 28; edge += 2) {
+        CoreSetWorldPoint *start = CSBoneWorldPoint(state, state.edges[edge]);
+        CoreSetWorldPoint *end = CSBoneWorldPoint(state, state.edges[edge + 1]);
+        if (!start || !end) return @[];
+        CSBoneWorldSegment *segment = [CSBoneWorldSegment new];
+        segment.start = start; segment.end = end;
+        [result addObject:segment];
+    }
+    return result;
+}
+
+static NSArray<CoreSetBoneSegment *> *CSProjectBoneWorldSegments(
+    NSArray<CSBoneWorldSegment *> *segments, CSCamera camera, CGSize size) {
+    NSMutableArray<CoreSetBoneSegment *> *result = [NSMutableArray arrayWithCapacity:segments.count];
+    for (CSBoneWorldSegment *world in segments) {
+        CGPoint start = CGPointZero, end = CGPointZero;
+        const CSVector startWorld = {world.start.x, world.start.y, world.start.z};
+        const CSVector endWorld = {world.end.x, world.end.y, world.end.z};
+        if (!CSProject(camera, startWorld, size, &start) ||
+            !CSProject(camera, endWorld, size, &end)) return @[];
+        CoreSetBoneSegment *segment = [CoreSetBoneSegment new];
+        segment.start = start; segment.end = end;
+        [result addObject:segment];
+    }
+    return result;
+}
+
 @interface CoreSetPlayerMark ()
 @property(nonatomic) uint64_t actorAddress;
 @property(nonatomic) CoreSetWorldPoint *actorWorldPosition;
@@ -635,6 +687,10 @@ static CoreSetWorldPoint *CSBoneWorldPoint(const CSBoneState &state, uint8_t ind
 @property(nonatomic) NSNumber *warningServerYawDegrees;
 @property(nonatomic) NSNumber *warningYawDegrees;
 @property(nonatomic) CoreSetWarningYawSource warningYawSource;
+@property(nonatomic) uint64_t rosterRootComponent;
+@property(nonatomic) uint64_t rosterMeshComponent;
+@property(nonatomic) NSArray<CSBoneWorldSegment *> *boneWorldSegments;
+@property(nonatomic, nullable) CoreSetWorldPoint *headWorldPosition;
 @end
 @implementation CoreSetPlayerMark @end
 
@@ -677,6 +733,12 @@ static void CSPublishAimAnchors(CoreSetPlayerMark *mark, const CSBoneState &stat
 
 @interface CoreSetPlayerSnapshot ()
 @property(nonatomic) CSCamera motionCamera;
+@property(nonatomic) uint64_t rosterWorldAddress;
+@property(nonatomic) uint64_t rosterLevelAddress;
+@property(nonatomic) uint64_t rosterControllerAddress;
+@property(nonatomic) uint64_t rosterCameraManagerAddress;
+@property(nonatomic) uint64_t rosterLocalActorAddress;
+@property(nonatomic) uint32_t rosterLocalTeam;
 @property(nonatomic) uint64_t sessionGeneration;
 @property(nonatomic) int32_t processID;
 @property(nonatomic) uint64_t imageBase;
@@ -819,6 +881,93 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     const std::string text = CoreSet::referenceWarningText(playerName.UTF8String, bot,
         weaponName.UTF8String, weaponID, distance);
     return text.empty() ? nil : [NSString stringWithUTF8String:text.c_str()];
+}
+
+static CoreSetWorldPoint *CSTranslatedWorldPoint(CoreSetWorldPoint *point,
+                                                  double dx, double dy, double dz) {
+    if (!point) return nil;
+    const double x = point.x + dx, y = point.y + dy, z = point.z + dz;
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return nil;
+    return [CoreSetWorldPoint pointWithX:(float)x y:(float)y z:(float)z];
+}
+
+static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
+                                               const CSCorePlayerState &state,
+                                               CSVector position, CSVector localPosition,
+                                               CSCamera camera, CGSize size,
+                                               BOOL includeOffscreen,
+                                               double maximumDrawDistance) {
+    const double dx = (double)position.x - localPosition.x;
+    const double dy = (double)position.y - localPosition.y;
+    const double dz = (double)position.z - localPosition.z;
+    const double distance = std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
+    if (!std::isfinite(distance) || state.health <= 0 ||
+        (maximumDrawDistance != 0 && distance > maximumDrawDistance)) return nil;
+    CSVector head = position, feet = position;
+    head.z += 90; feet.z -= 90;
+    CGPoint centerPoint = CGPointZero, headPoint = CGPointZero, feetPoint = CGPointZero;
+    const bool projectedCenter = CSProject(camera, position, size, &centerPoint);
+    const bool projectedHead = CSProject(camera, head, size, &headPoint);
+    const bool projectedFeet = CSProject(camera, feet, size, &feetPoint);
+    const bool onScreen = projectedCenter && centerPoint.x >= 0 && centerPoint.x <= size.width &&
+        centerPoint.y >= 0 && centerPoint.y <= size.height;
+    CGPoint indicator = CGPointZero;
+    if ((onScreen && (!projectedHead || !projectedFeet)) ||
+        (!onScreen && (!includeOffscreen ||
+            !CSProjectIndicator(camera, position, size, &indicator)))) return nil;
+
+    CoreSetPlayerMark *mark = [CoreSetPlayerMark new];
+    mark.actorAddress = source.actorAddress;
+    mark.actorWorldPosition = [CoreSetWorldPoint pointWithX:position.x y:position.y z:position.z];
+    mark.healthStatusCode = state.status;
+    mark.referenceStateWord = state.stateFlags;
+    mark.referenceFlag14 = state.status == 1 ? 1 : (uint8_t)((state.stateFlags >> 19) & 1);
+    mark.downedKnown = YES;
+    mark.downed = (mark.referenceFlag14 & 1) != 0;
+    mark.weaponName = source.weaponName; mark.weaponID = source.weaponID;
+    mark.playerName = source.playerName; mark.teamID = state.team;
+    mark.health = state.health; mark.maximumHealth = state.maximum;
+    mark.bot = state.ai != 0;
+    mark.center = centerPoint; mark.head = headPoint; mark.feet = feetPoint;
+    mark.distanceUnitsDividedBy100 = distance;
+    mark.onScreen = onScreen; mark.indicatorProjection = indicator;
+    mark.radarCameraDelta = CGPointMake((double)camera.location.x - position.x,
+                                        (double)camera.location.y - position.y);
+    mark.warningServerYawDegrees = source.warningServerYawDegrees;
+    mark.warningYawDegrees = source.warningYawDegrees;
+    mark.warningYawSource = source.warningYawSource;
+    mark.rosterRootComponent = state.rootComponent;
+    mark.rosterMeshComponent = state.meshComponent;
+
+    CoreSetWorldPoint *old = source.actorWorldPosition;
+    const double translateX = old ? (double)position.x - old.x : 0;
+    const double translateY = old ? (double)position.y - old.y : 0;
+    const double translateZ = old ? (double)position.z - old.z : 0;
+    mark.referenceAnchor1e0WorldPosition = CSTranslatedWorldPoint(
+        source.referenceAnchor1e0WorldPosition, translateX, translateY, translateZ);
+    mark.referenceAnchor1ecWorldPosition = CSTranslatedWorldPoint(
+        source.referenceAnchor1ecWorldPosition, translateX, translateY, translateZ);
+    mark.headWorldPosition = CSTranslatedWorldPoint(
+        source.headWorldPosition, translateX, translateY, translateZ);
+    if (mark.headWorldPosition) {
+        const CSVector headWorld = {mark.headWorldPosition.x, mark.headWorldPosition.y,
+                                    mark.headWorldPosition.z};
+        CGPoint projected = CGPointZero;
+        if (CSProject(camera, headWorld, size, &projected)) {
+            mark.head = projected; mark.headBoneIndex = source.headBoneIndex;
+        }
+    }
+    NSMutableArray<CSBoneWorldSegment *> *worldSegments = [NSMutableArray arrayWithCapacity:source.boneWorldSegments.count];
+    for (CSBoneWorldSegment *sourceSegment in source.boneWorldSegments) {
+        CSBoneWorldSegment *segment = [CSBoneWorldSegment new];
+        segment.start = CSTranslatedWorldPoint(sourceSegment.start, translateX, translateY, translateZ);
+        segment.end = CSTranslatedWorldPoint(sourceSegment.end, translateX, translateY, translateZ);
+        if (!segment.start || !segment.end) { [worldSegments removeAllObjects]; break; }
+        [worldSegments addObject:segment];
+    }
+    mark.boneWorldSegments = [worldSegments copy];
+    mark.boneSegments = CSProjectBoneWorldSegments(mark.boneWorldSegments, camera, size);
+    return mark;
 }
 
 @implementation CoreSetPlayerCollector
@@ -1031,6 +1180,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     NSUInteger warningPrimaryValid = 0, warningPrimaryInvalid = 0;
     NSUInteger warningFallbackRead = 0, warningFallbackValid = 0, warningUnavailable = 0;
     NSUInteger boneRequested = 0, bonePresent = 0, bonePlain = 0, boneDecoded = 0;
+    NSUInteger boneArrayPrimary = 0, boneArrayFallback = 0;
     NSUInteger boneUnavailable[6] = {};
     NSUInteger boneHeadKnownProfile = 0, boneHeadProjected = 0, boneHeadUnknownProfile = 0;
     NSUInteger nameRequested = 0, namePresent = 0, weaponRequested = 0, weaponKnown = 0;
@@ -1321,6 +1471,8 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             if (wantsInformation) { ++nameRequested; if (playerName.length) ++namePresent; }
             CoreSetPlayerMark *mark = [CoreSetPlayerMark new];
             mark.actorAddress = actor; mark.bot = ai != 0;
+            mark.rosterRootComponent = rootComponent;
+            mark.rosterMeshComponent = meshComponent;
             mark.healthStatusCode = status;
             mark.referenceStateWord = coreStateFlags;
             mark.referenceFlag14 = status == 1 ? 1 : (uint8_t)((coreStateFlags >> 19) & 1);
@@ -1368,6 +1520,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                 }
                 if (present) {
                     ++bonePresent;
+                    if (bones.arrayOffset == 0x848) ++boneArrayFallback; else ++boneArrayPrimary;
                     if (bones.status == 7) ++boneDecoded; else ++bonePlain;
                     mark.boneSegments = CSProjectBones(bones, camera, size);
                     CSPublishAimAnchors(mark, bones);
@@ -1756,14 +1909,17 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
                                                &after, &present, knownMesh);
         if (!boneRead || !present) {
             mark.boneSegments = @[];
+            mark.boneWorldSegments = @[];
             mark.headBoneIndex = nil;
+            mark.headWorldPosition = nil;
             mark.referenceAnchor1e0WorldPosition = nil;
             mark.referenceAnchor1ecWorldPosition = nil;
             continue;
         }
         finalBoneObservations.push_back({bone.actor, bone.markIndex, std::move(after)});
         const CSBoneState &finalBone = finalBoneObservations.back().state;
-        mark.boneSegments = CSProjectBones(finalBone, cameraAfter, size);
+        mark.boneWorldSegments = CSBoneWorldSegments(finalBone);
+        mark.boneSegments = CSProjectBoneWorldSegments(mark.boneWorldSegments, cameraAfter, size);
         CSPublishAimAnchors(mark, finalBone);
         uint8_t headIndex = 0;
         CGPoint top = CGPointZero;
@@ -1771,8 +1927,10 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             CSProjectBoneHead(finalBone, cameraAfter, size, &top, &headIndex)) {
             mark.head = top;
             mark.headBoneIndex = @(headIndex);
+            mark.headWorldPosition = CSBoneWorldPoint(finalBone, headIndex);
         } else {
             mark.headBoneIndex = nil;
+            mark.headWorldPosition = nil;
         }
     }
     const double finalBonesCompletedAt = CACurrentMediaTime();
@@ -1843,6 +2001,8 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             continue;
         }
         CoreSetPlayerMark *mark = marks[actor.markIndex];
+        mark.rosterRootComponent = validated->second.state.rootComponent;
+        mark.rosterMeshComponent = validated->second.state.meshComponent;
         mark.actorWorldPosition = [CoreSetWorldPoint pointWithX:position.x y:position.y z:position.z];
         mark.center = centerPoint;
         mark.head = headPoint;
@@ -1883,7 +2043,8 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     for (const CSFinalBoneObservation &bone : finalBoneObservations) {
         if ([invalidActorMarks containsIndex:bone.markIndex]) continue;
         CoreSetPlayerMark *mark = marks[bone.markIndex];
-        mark.boneSegments = CSProjectBones(bone.state, cameraAfter, size);
+        mark.boneWorldSegments = CSBoneWorldSegments(bone.state);
+        mark.boneSegments = CSProjectBoneWorldSegments(mark.boneWorldSegments, cameraAfter, size);
         CSPublishAimAnchors(mark, bone.state);
         uint8_t headIndex = 0;
         CGPoint top = CGPointZero;
@@ -1891,8 +2052,10 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
             CSProjectBoneHead(bone.state, cameraAfter, size, &top, &headIndex)) {
             mark.head = top;
             mark.headBoneIndex = @(headIndex);
+            mark.headWorldPosition = CSBoneWorldPoint(bone.state, headIndex);
         } else {
             mark.headBoneIndex = nil;
+            mark.headWorldPosition = nil;
         }
     }
     if (invalidActorMarks.count) [marks removeObjectsAtIndexes:invalidActorMarks];
@@ -1952,6 +2115,12 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
     CoreSetPlayerSnapshot *snapshot = [CoreSetPlayerSnapshot new];
     snapshot.sessionGeneration = generation; snapshot.processID = pid;
     snapshot.imageBase = base; snapshot.snapshotID = [NSUUID UUID];
+    snapshot.rosterWorldAddress = world;
+    snapshot.rosterLevelAddress = level;
+    snapshot.rosterControllerAddress = controller;
+    snapshot.rosterCameraManagerAddress = manager;
+    snapshot.rosterLocalActorAddress = local;
+    snapshot.rosterLocalTeam = localTeam;
     snapshot.cameraYawDegrees = cameraAfter.rotation.y;
     snapshot.motionCamera = cameraAfter;
     snapshot.cameraPitchDegrees = cameraAfter.rotation.x;
@@ -2006,7 +2175,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
          "grenadeTimer=target-server-clock-clamped grenadeRadius=unproven grenadeAnimation=local-prediction-partial "
          "warningRequested=%d warningPrimaryValid=%lu warningPrimaryInvalid=%lu warningFallbackRead=%lu warningFallbackValid=%lu "
          "warningUnavailable=%lu warningFallbackOwner=actor-replicated-movement-rotation-yaw "
-         "boneRequested=%lu bonePresent=%lu bonePlain=%lu boneDecoded=%lu boneMissing=%lu boneUnregistered=%lu boneArrayInvalid=%lu boneBounds=%lu boneDecoderUnknown=%lu "
+         "boneRequested=%lu bonePresent=%lu bonePlain=%lu boneDecoded=%lu boneArrayPrimary=%lu boneArrayFallback=%lu boneMissing=%lu boneUnregistered=%lu boneArrayInvalid=%lu boneBounds=%lu boneDecoderUnknown=%lu "
          "boneHeadKnownProfile=%lu boneHeadProjected=%lu boneHeadUnknownProfile=%lu headScope=requested-bones-only headParity=partial "
          "networkFreshness=unproven captureStability=stable-identity-plus-bounded-dynamic-reread grenadeAnimationScope=local-position-history grenadeRadiusGap=no-verified-elite-blast-field "
          "nameRequested=%lu namePresent=%lu weaponRequested=%lu weaponKnown=%lu informationLayout=local-subset informationGap=native-font-icons-and-anchors "
@@ -2036,6 +2205,7 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         includeWarningYaw, (unsigned long)warningPrimaryValid, (unsigned long)warningPrimaryInvalid,
         (unsigned long)warningFallbackRead, (unsigned long)warningFallbackValid, (unsigned long)warningUnavailable,
         (unsigned long)boneRequested, (unsigned long)bonePresent, (unsigned long)bonePlain, (unsigned long)boneDecoded,
+        (unsigned long)boneArrayPrimary, (unsigned long)boneArrayFallback,
         (unsigned long)boneUnavailable[1], (unsigned long)boneUnavailable[2], (unsigned long)boneUnavailable[3],
         (unsigned long)boneUnavailable[4], (unsigned long)boneUnavailable[5],
         (unsigned long)boneHeadKnownProfile, (unsigned long)boneHeadProjected, (unsigned long)boneHeadUnknownProfile,
@@ -2043,6 +2213,126 @@ NSString *CoreSetReferenceWarningText(NSString *playerName, BOOL bot, NSString *
         (unsigned long)weaponRequested, (unsigned long)weaponKnown,
         snapshot.captureCompletedMonotonicSeconds - captureStartedAt, finalReprojectionAge];
     CSLastCaptureDiagnostic = "ready";
+    return snapshot;
+}
+
++ (CoreSetPlayerSnapshot *)refreshGeometryForSnapshot:(CoreSetPlayerSnapshot *)source
+                                               session:(CoreSetReadSession *)session
+                                            canvasSize:(CGSize)size
+                                       includeOffscreen:(BOOL)includeOffscreen
+                                   maximumDrawDistance:(double)maximumDrawDistance {
+    if (!source || !session.ready || session.capabilities != 1 ||
+        session.processID != source.processID || session.imageBase != source.imageBase ||
+        !std::isfinite(size.width) || !std::isfinite(size.height) ||
+        size.width <= 0 || size.height <= 0 ||
+        !std::isfinite(maximumDrawDistance) || maximumDrawDistance < 0) return nil;
+    const double startedAt = CACurrentMediaTime();
+    const uint64_t generation = session.generation, base = session.imageBase;
+    uint64_t world = 0, level = 0, manager = 0;
+    if (!CSReadValue(session, generation, base + CSWorldSlot, &world) ||
+        world != source.rosterWorldAddress ||
+        !CSReadValue(session, generation, world + 0xb8, &level) ||
+        level != source.rosterLevelAddress ||
+        !CSReadValue(session, generation, source.rosterControllerAddress + 0x680, &manager) ||
+        manager != source.rosterCameraManagerAddress) return nil;
+
+    CSCamera camera = {};
+    bool cameraFound = false;
+    for (uint64_t offset : {UINT64_C(0x650), UINT64_C(0x14b0), UINT64_C(0x2320)}) {
+        CSCamera candidate = {};
+        if (CSRead(session, generation, manager + offset, &candidate, sizeof(candidate)) &&
+            CSCameraValid(candidate)) { camera = candidate; cameraFound = true; break; }
+    }
+    if (!cameraFound) return nil;
+    uint32_t localTeam = 0;
+    CSVector localPosition = {};
+    bool localPresent = false;
+    if (!CSReadValue(session, generation, source.rosterLocalActorAddress + 0xb78, &localTeam) ||
+        localTeam != source.rosterLocalTeam ||
+        !CSPosition(session, generation, base, source.rosterLocalActorAddress,
+                    &localPosition, &localPresent) || !localPresent) return nil;
+
+    NSMutableArray<CoreSetPlayerMark *> *marks = [NSMutableArray arrayWithCapacity:source.marks.count];
+    NSUInteger players = 0, bots = 0;
+    for (CoreSetPlayerMark *oldMark in source.marks) {
+        CSCaptureReadCache cache;
+        cache.reserve(4);
+        CSCorePlayerState state;
+        if (!CSReadCorePlayerState(session, generation, oldMark.actorAddress,
+                                   source.rosterLocalActorAddress, localTeam, &state, &cache) ||
+            state.rootComponent != oldMark.rosterRootComponent ||
+            state.meshComponent != oldMark.rosterMeshComponent) continue;
+        CSVector position = {};
+        bool present = false;
+        if (!CSPosition(session, generation, base, oldMark.actorAddress, &position, &present,
+                        &cache, state.rootComponent) || !present) continue;
+        CoreSetPlayerMark *mark = CSRefreshPlayerMark(oldMark, state, position,
+            localPosition, camera, size, includeOffscreen, maximumDrawDistance);
+        if (!mark) continue;
+        [marks addObject:mark];
+        if (mark.bot) ++bots; else ++players;
+    }
+
+    NSMutableArray<CoreSetGrenadeMark *> *grenades = [NSMutableArray arrayWithCapacity:source.grenadeMarks.count];
+    for (CoreSetGrenadeMark *oldMark in source.grenadeMarks) {
+        CGPoint point = CGPointZero;
+        const CSVector position = oldMark.motionPosition;
+        const double dx = (double)position.x - localPosition.x;
+        const double dy = (double)position.y - localPosition.y;
+        const double dz = (double)position.z - localPosition.z;
+        const double distance = std::sqrt(dx * dx + dy * dy + dz * dz) / 100.0;
+        if (!std::isfinite(distance) || !CSProject(camera, position, size, &point) ||
+            point.x < 0 || point.x > size.width || point.y < 0 || point.y > size.height) continue;
+        CoreSetGrenadeMark *mark = [CoreSetGrenadeMark new];
+        mark.point = point; mark.distanceUnitsDividedBy100 = distance;
+        mark.countdownSeconds = oldMark.countdownSeconds;
+        mark.predictionSegments = @[]; mark.predictionEndpointPresent = NO;
+        mark.predictionEndpoint = CGPointZero;
+        mark.motionPosition = position; mark.motionActor = oldMark.motionActor;
+        mark.motionType = oldMark.motionType; mark.motionNameIndex = oldMark.motionNameIndex;
+        mark.motionExplosionRaw = oldMark.motionExplosionRaw;
+        [grenades addObject:mark];
+    }
+    const double completedAt = CACurrentMediaTime();
+    if (!session.ready || session.generation != generation ||
+        session.processID != source.processID || session.imageBase != base ||
+        !std::isfinite(completedAt - startedAt) || completedAt - startedAt > 0.5) return nil;
+
+    CoreSetPlayerSnapshot *snapshot = [CoreSetPlayerSnapshot new];
+    snapshot.sessionGeneration = generation; snapshot.processID = source.processID;
+    snapshot.imageBase = base; snapshot.snapshotID = [NSUUID UUID];
+    snapshot.rosterWorldAddress = source.rosterWorldAddress;
+    snapshot.rosterLevelAddress = source.rosterLevelAddress;
+    snapshot.rosterControllerAddress = source.rosterControllerAddress;
+    snapshot.rosterCameraManagerAddress = source.rosterCameraManagerAddress;
+    snapshot.rosterLocalActorAddress = source.rosterLocalActorAddress;
+    snapshot.rosterLocalTeam = source.rosterLocalTeam;
+    snapshot.motionCamera = camera;
+    snapshot.cameraYawDegrees = camera.rotation.y;
+    snapshot.cameraPitchDegrees = camera.rotation.x;
+    snapshot.cameraRollDegrees = camera.rotation.z;
+    snapshot.cameraFieldOfViewDegrees = camera.fov;
+    snapshot.cameraWorldPosition = [CoreSetWorldPoint pointWithX:camera.location.x
+        y:camera.location.y z:camera.location.z];
+    snapshot.localWorldPosition = [CoreSetWorldPoint pointWithX:localPosition.x
+        y:localPosition.y z:localPosition.z];
+    snapshot.canvasSize = size;
+    snapshot.controllerAddress = source.controllerAddress;
+    snapshot.localActorAddress = source.localActorAddress;
+    snapshot.localADS = source.localADS; snapshot.localFiring = source.localFiring;
+    snapshot.controlPitchDegrees = source.controlPitchDegrees;
+    snapshot.controlYawDegrees = source.controlYawDegrees;
+    snapshot.rotationInputPitch = source.rotationInputPitch;
+    snapshot.rotationInputYaw = source.rotationInputYaw;
+    snapshot.marks = [marks copy]; snapshot.grenadeMarks = [grenades copy];
+    snapshot.observedPlayerCount = players; snapshot.observedBotCount = bots;
+    snapshot.captureStartedMonotonicSeconds = startedAt;
+    snapshot.captureCompletedMonotonicSeconds = completedAt;
+    snapshot.readSemanticDiagnostic = [NSString stringWithFormat:
+        @"geometry-refresh roster=%@ rosterMarks=%lu marks=%lu players=%lu bots=%lu duration=%.3f camera=current actorRoots=current screenPoints=reprojected",
+        source.snapshotID.UUIDString, (unsigned long)source.marks.count,
+        (unsigned long)marks.count, (unsigned long)players, (unsigned long)bots,
+        completedAt - startedAt];
     return snapshot;
 }
 @end

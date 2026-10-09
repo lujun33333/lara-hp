@@ -26,10 +26,11 @@ def body(source: str, signature: str) -> str:
 
 def require_receipt_gates(source: str, immediate_configuration: bool = False) -> None:
     receipt = body(source, "func consumed(")
+    session = "geometrySession" if immediate_configuration else "session"
     for gate in ("receipt.requestToken", "receipt.configRevision == revision",
                  "receipt.snapshotID == expectedSnapshot", "receipt.hostGeneration == expectedGeneration",
-                 "receipt.acceptedByLocalRenderer", "session.generation == expectedSessionGeneration",
-                 "session.processID == expectedProcessID", "session.imageBase == expectedImageBase",
+                 "receipt.acceptedByLocalRenderer", f"{session}.generation == expectedSessionGeneration",
+                 f"{session}.processID == expectedProcessID", f"{session}.imageBase == expectedImageBase",
                  "guard identityMatches && fresh else", "snapshot-stale stage=receipt"):
         assert gate in receipt, gate
     assert "logReadSemanticReceipt(receipt)" in receipt
@@ -112,6 +113,7 @@ class ReadDisplayContracts(unittest.TestCase):
             self.assertIn(checked, selection)
 
     def test_unproven_fields_stay_diagnostic_not_read_offsets(self) -> None:
+        capture = self.collector[self.collector.index('CSLastCaptureDiagnostic = "request-validation"'):]
         for status in ("grenadeTimer=target-server-clock-clamped", "grenadeRadius=unproven", "grenadeAnimation=local-prediction-partial",
                        "warningFallbackOwner=actor-replicated-movement-rotation-yaw", "informationLayout=local-subset",
                        "countScope=positive-health-or-last-breath-enemy-draw-range", "countParity=partial"):
@@ -120,8 +122,8 @@ class ReadDisplayContracts(unittest.TestCase):
             self.assertNotIn(guessed, self.collector)
         self.assertIn("health <= maximum * 1.5f", self.collector)
         self.assertIn("if (health == 0 && !countEligible) continue", self.collector)
-        self.assertLess(self.collector.index("distance > maximumDrawDistance"), self.collector.index("++observedBotCount"))
-        self.assertLess(self.collector.index("++observedBotCount"), self.collector.index("bool onScreen ="))
+        self.assertLess(capture.index("distance > maximumDrawDistance"), capture.index("++observedBotCount"))
+        self.assertLess(capture.index("++observedBotCount"), capture.index("bool onScreen ="))
 
     def test_optional_grenade_and_bone_failures_do_not_poison_player_frame(self) -> None:
         for token in ("const bool nameIndexReady", "if (nameIndexReady)",
@@ -218,14 +220,15 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertIn("phaseBones=", self.collector)
 
     def test_zero_health_extension_is_count_only_and_has_lifecycle_reread(self) -> None:
+        capture = self.collector[self.collector.index('CSLastCaptureDiagnostic = "request-validation"'):]
         for scoped in ("CoreSet::playerCountEligible(health, maximum, countStatus)",
                        "actor + 0x3be0, &state->status",
                        "CoreSet::playerCountEligible(current.health, current.maximum, current.status)",
                        "zeroHealthLastBreath=%lu",
                        "if (health == 0) continue; // Count-only"):
             self.assertIn(scoped, self.collector)
-        self.assertLess(self.collector.index("if (health == 0) continue; // Count-only"),
-                        self.collector.index("CoreSetPlayerMark *mark ="))
+        self.assertLess(capture.index("if (health == 0) continue; // Count-only"),
+                        capture.index("CoreSetPlayerMark *mark ="))
         count = read("lara/overlay/CoreSetPlayerCount.h")
         for scoped in ("health < 0", "status >= 4", "health > 0 || status == 1"):
             self.assertIn(scoped, count)
@@ -265,11 +268,12 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertIn("point->y <= size.height", head)
         bones = body(self.collector, "static bool CSReadBoneState(")
         for gate in ("state->registered & 4", "state->flags", "state->callback != base + CSPositionCallbackRVA",
-                     "CoreSet::decodePositionBlock", "array.count > 256", "state->edges[edge] >= array.count"):
+                     "CoreSet::decodePositionBlock", "CSBoneArrayValid(state->array)",
+                     "state->mesh + 0x848", "state->edges[edge] >= array.count"):
             self.assertIn(gate, bones)
         for stable in ("CSReadBoneState(session, generation, base, bone.actor,",
                        "finalBoneObservations.push_back",
-                       "CSProjectBones(bone.state, cameraAfter, size)",
+                       "CSProjectBoneWorldSegments(mark.boneWorldSegments, cameraAfter, size)",
                        "CSProjectBoneHead(bone.state, cameraAfter, size, &top, &headIndex)"):
             self.assertIn(stable, self.collector)
         self.assertIn("mark.head = top; mark.headBoneIndex = @(headIndex)", self.collector)
@@ -289,15 +293,14 @@ class ReadDisplayContracts(unittest.TestCase):
             self.assertIn(gate, decorate)
         for target_read in ("CSRead", "session readAt", "CSPosition", "CSReadValue"):
             self.assertNotIn(target_read, decorate)
-        capture = body(self.player, "private func capture(")
-        self.assertLess(capture.index("snapshot.sessionGeneration == self.session.generation"),
-                        capture.index("self.grenadeMotion.decorate"))
-        self.assertLess(capture.index("self.activeToken == token, self.revision == expectedRevision"),
-                        capture.index("self.grenadeMotion.decorate"))
+        geometry = body(self.player, "private func submitGeometry(")
+        self.assertLess(geometry.index("precondition(Thread.isMainThread)"),
+                        geometry.index("grenadeMotion.decorate"))
+        self.assertIn("CoreSetPlayerCollector.refreshGeometry", self.player)
         self.assertIn("grenadeMotion.clear()", body(self.player, "private func clearStaleLane("))
         shutdown = body(self.player, "func shutdownReadSession()")
         self.assertIn("let motionClean = grenadeMotion.clear()", shutdown)
-        self.assertIn("motionClean && cleanup.complete", shutdown)
+        self.assertIn("motionClean && cleanup.complete && geometryCleanup.complete", shutdown)
         render = body(self.player, "private func render(")
         self.assertIn("for segment in mark.predictionSegments", render)
         self.assertIn("if mark.predictionEndpointPresent", render)
@@ -336,8 +339,9 @@ class ReadDisplayContracts(unittest.TestCase):
         for source in (self.player, self.material, self.radar):
             require_receipt_gates(source, immediate_configuration=source is self.player)
             logger = body(source, "private func logReadSemanticReceipt(")
+            session = "geometrySession" if source is self.player else "session"
             for gate in ("lastSemanticLogRevision != receipt.configRevision", "now - lastSemanticLogAt >= 30",
-                         "receipt.snapshotID.uuidString", "session.generation", "session.processID",
+                         "receipt.snapshotID.uuidString", f"{session}.generation", f"{session}.processID",
                          "evidence=local-renderer-frame parity=partial"):
                 self.assertIn(gate, logger)
             for sensitive in ("playerName", "weaponName", "actorAddress", "imageBase"):
@@ -347,8 +351,24 @@ class ReadDisplayContracts(unittest.TestCase):
         self.assertGreaterEqual(radar_receipt.count("if confirmedLanes == ownedLanes {"), 3)
         self.assertIn("confirmedLanes.removeAll() // Each frame", body(self.radar, "private func submit("))
 
+    def test_full_roster_and_live_geometry_are_independent(self) -> None:
+        refresh = body(self.collector, "+ (CoreSetPlayerSnapshot *)refreshGeometryForSnapshot:")
+        for gate in ("session.processID != source.processID", "session.imageBase != source.imageBase",
+                     "source.rosterControllerAddress + 0x680", "manager != source.rosterCameraManagerAddress",
+                     "UINT64_C(0x650)", "UINT64_C(0x14b0)", "UINT64_C(0x2320)",
+                     "CSReadCorePlayerState", "state.rootComponent != oldMark.rosterRootComponent",
+                     "CSPosition", "CSRefreshPlayerMark", "snapshot.snapshotID = [NSUUID UUID]",
+                     "camera=current actorRoots=current screenPoints=reprojected"):
+            self.assertIn(gate, refresh)
+        self.assertNotIn("mark.center = source.center", refresh)
+        self.assertNotIn("mark.boneSegments = source.boneSegments", refresh)
+        self.assertIn("geometryWorker", self.player)
+        self.assertIn("if currentRoster != nil { refreshGeometry() }", self.player)
+        self.assertIn("now - freshest >= 0.5", self.player)
+        self.assertIn("commands: []", body(self.player, "private func expireGeometryIfNeeded()"))
+
     def test_negative_missing_identity_generation_full_length_and_scope_rejected(self) -> None:
-        for removed in ("receipt.snapshotID == expectedSnapshot", "session.generation == expectedSessionGeneration",
+        for removed in ("receipt.snapshotID == expectedSnapshot", "geometrySession.generation == expectedSessionGeneration",
                         "receipt.acceptedByLocalRenderer", "guard identityMatches && fresh else"):
             with self.subTest(removed=removed), self.assertRaises(AssertionError):
                 require_receipt_gates(self.player.replace(removed, "REMOVED"))

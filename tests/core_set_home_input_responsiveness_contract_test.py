@@ -37,8 +37,13 @@ def require_responsive_contract(coordinator, telemetry, menu):
     observations = body(menu, "func updateRuntimeObservations(")
     assert "refreshHomeStatusLabels()" in observations
     refresh = body(menu, "private func refreshHomeStatusLabels()")
-    assert "CATransaction.flush()" in refresh
+    assert "view.setNeedsLayout()" in refresh
+    assert "CATransaction.flush()" not in refresh
     assert "rebuildMenu()" not in refresh
+    page = body(menu, "private func rebuildCurrentPage()")
+    assert "pageViews.forEach" in page
+    assert "panel.subviews.forEach" not in page
+    assert "pageButtons.contains" in page
 
     assert "producerLogSignatures[field] != logSignature" in telemetry
     assert "homeFieldStateLogSignatures[point] != logSignature" in menu

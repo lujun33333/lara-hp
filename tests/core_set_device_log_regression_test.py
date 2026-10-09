@@ -24,7 +24,8 @@ def test_hosted_draw_is_event_driven_and_empty_metal_frames_pause():
     metal = read("lara/overlay/CoreSetMetalRenderAdapter.mm")
     assert "foreground && metalAvailable && !crossApplicationHosted" in lifecycle
     assert "_hasVisibleCommands = frame.commands.count > 0" in metal
-    assert "_metalView.paused = !_visible || !_hasVisibleCommands" in metal
+    assert "_metalView.paused = YES" in metal
+    assert "leaving MTKView unpaused" in metal
     assert "_hasVisibleCommands = NO" in body(metal, "- (void)clear")
 
 

@@ -247,6 +247,15 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
                          botInformation:(BOOL)botInformation
                        includeWarningYaw:(BOOL)includeWarningYaw
                     maximumDrawDistance:(double)maximumDrawDistance;
+// Refreshes only live camera/root geometry for an identity-stable roster.
+// Static metadata is retained from the full scan; every returned screen point
+// is recomputed from current target reads and a new snapshot identity.
++ (nullable CoreSetPlayerSnapshot *)refreshGeometryForSnapshot:(CoreSetPlayerSnapshot *)snapshot
+                                                       session:(CoreSetReadSession *)session
+                                                    canvasSize:(CGSize)canvasSize
+                                               includeOffscreen:(BOOL)includeOffscreen
+                                           maximumDrawDistance:(double)maximumDrawDistance
+    NS_SWIFT_NAME(refreshGeometry(for:session:canvasSize:includeOffscreen:maximumDrawDistance:));
 @end
 
 // Pure local projection of an already captured, identity-stable camera delta.

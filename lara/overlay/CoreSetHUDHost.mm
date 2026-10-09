@@ -168,6 +168,8 @@ static BOOL CoreSetAXHasUsableHand(CoreSetAXEvent *representation) {
 - (BOOL)startInputMonitor;
 - (void)invalidatePendingTouchActions;
 - (void)drainPendingTouchActionsOnQueue;
+- (void)updateHostedInteractionBounds;
+- (BOOL)surfacePointMayHitHostedInteraction:(CGPoint)point;
 - (void)drainHostedReadbackIdleWaiters;
 - (BOOL)startPreparedInScene:(UIWindowScene *)scene menuController:(UIViewController *)menuController
                        error:(NSError **)error hostedCompletion:(void (^)(BOOL))hostedCompletion;
@@ -234,6 +236,10 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     std::atomic_uint_fast64_t _pendingTouchGeneration;
     BOOL _pendingTouchDrainInFlight;
     std::atomic_bool _inputArmed;
+    std::atomic_int_fast64_t _queuedInputPointer;
+    std::atomic<double> _panelHitMinX, _panelHitMinY, _panelHitMaxX, _panelHitMaxY;
+    std::atomic<double> _floatingHitMinX, _floatingHitMinY, _floatingHitMaxX, _floatingHitMaxY;
+    std::atomic_bool _panelHitEnabled;
     std::atomic_uint_fast64_t _hidCallbacks;
     std::atomic_uint_fast64_t _hidTypeVendor;
     std::atomic_uint_fast64_t _hidTypeDigitizer;
@@ -276,6 +282,12 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         _hostedOrientation = UIInterfaceOrientationPortrait;
         _touchPointerID = -1;
         _inputArmed.store(false);
+        _queuedInputPointer.store(-1);
+        _panelHitEnabled.store(false);
+        _panelHitMinX.store(NAN); _panelHitMinY.store(NAN);
+        _panelHitMaxX.store(NAN); _panelHitMaxY.store(NAN);
+        _floatingHitMinX.store(NAN); _floatingHitMinY.store(NAN);
+        _floatingHitMaxX.store(NAN); _floatingHitMaxY.store(NAN);
         _hidCallbacks.store(0); _axParsed.store(0);
         _hidTypeVendor.store(0); _hidTypeDigitizer.store(0); _hidTypeOther.store(0);
         _axClassMissing.store(0); _axFactoryNil.store(0);
@@ -546,6 +558,12 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
 - (void)applyHostedOrientation:(UIInterfaceOrientation)orientation {
     if (!NSThread.isMainThread || !_adapter || !_menuWindow || !_drawWindow ||
         !CoreSetHostedOrientationValid(orientation) || _hostedOrientation == orientation) return;
+    if (!_foreground && UIInterfaceOrientationIsLandscape(_hostedOrientation) &&
+        !UIInterfaceOrientationIsLandscape(orientation)) {
+        NSLog(@"Core-SET: hosted orientation ignored=%ld reason=background-landscape-lock",
+              (long)orientation);
+        return;
+    }
     const CGRect surface = _menuWindow.windowScene.screen.fixedCoordinateSpace.bounds;
     const CGSize previous = UIInterfaceOrientationIsLandscape(_hostedOrientation)
         ? CGSizeMake(surface.size.height, surface.size.width) : surface.size;
@@ -566,7 +584,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     }
     [self layoutSurfaces];
     [_drawWindow layoutIfNeeded]; [_menuWindow layoutIfNeeded];
-    [CATransaction flush];
     if (_running) [self publishState];
     NSLog(@"Core-SET: hosted orientation=%ld surface=%.0fx%.0f logical=%.0fx%.0f angle=%.3f",
           (long)orientation, surface.size.width, surface.size.height,
@@ -657,6 +674,34 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
               (long)_hostedOrientation, screen.scale);
     return converted;
 }
+- (void)updateHostedInteractionBounds {
+    if (!NSThread.isMainThread || !_menuWindow || !_panel || !_floating ||
+        !_menuWindow.windowScene.screen) return;
+    id<UICoordinateSpace> fixed = _menuWindow.windowScene.screen.fixedCoordinateSpace;
+    CGRect panel = [_panel convertRect:_panel.bounds toCoordinateSpace:fixed];
+    CGRect floating = [_floating convertRect:_floating.bounds toCoordinateSpace:fixed];
+    floating = CGRectInset(floating, -6, -6);
+    const BOOL panelValid = _panelVisible && !_panel.hidden &&
+        !CGRectIsNull(panel) && !CGRectIsEmpty(panel);
+    _panelHitEnabled.store(panelValid);
+    _panelHitMinX.store(CGRectGetMinX(panel)); _panelHitMinY.store(CGRectGetMinY(panel));
+    _panelHitMaxX.store(CGRectGetMaxX(panel)); _panelHitMaxY.store(CGRectGetMaxY(panel));
+    _floatingHitMinX.store(CGRectGetMinX(floating)); _floatingHitMinY.store(CGRectGetMinY(floating));
+    _floatingHitMaxX.store(CGRectGetMaxX(floating)); _floatingHitMaxY.store(CGRectGetMaxY(floating));
+}
+- (BOOL)surfacePointMayHitHostedInteraction:(CGPoint)point {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) return NO;
+    const double fx0 = _floatingHitMinX.load(), fy0 = _floatingHitMinY.load();
+    const double fx1 = _floatingHitMaxX.load(), fy1 = _floatingHitMaxY.load();
+    const BOOL floating = std::isfinite(fx0) && std::isfinite(fy0) &&
+        point.x >= fx0 && point.x <= fx1 && point.y >= fy0 && point.y <= fy1;
+    if (floating) return YES;
+    if (!_panelHitEnabled.load()) return NO;
+    const double px0 = _panelHitMinX.load(), py0 = _panelHitMinY.load();
+    const double px1 = _panelHitMaxX.load(), py1 = _panelHitMaxY.load();
+    return std::isfinite(px0) && std::isfinite(py0) &&
+        point.x >= px0 && point.x <= px1 && point.y >= py0 && point.y <= py1;
+}
 - (NSString *)hostedControlIDAtSurfacePoint:(CGPoint)point missReason:(const char **)missReason {
     if (missReason) *missReason = "no-eligible-control";
     if (!_menuWindow || !_floating || !_menuController ||
@@ -693,11 +738,6 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     if (!NSThread.isMainThread || !_inputArmed.load() || !_running || _foreground ||
         UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
         CoreSetLogInputStage("hit", "host-not-interactive", &_inputCounts.hitDropped,
-            self.generation, phase, nil, 0);
-        [self resetHostedPointer]; return;
-    }
-    if (CFAbsoluteTimeGetCurrent() - timestamp > 0.75) {
-        CoreSetLogInputStage("hit", "event-expired", &_inputCounts.hitDropped,
             self.generation, phase, nil, 0);
         [self resetHostedPointer]; return;
     }
@@ -820,6 +860,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
               identifier, dispatched, (unsigned long long)generation, (unsigned long long)dispatchCount);
 }
 - (void)invalidatePendingTouchActions {
+    _queuedInputPointer.store(-1);
     const uint64_t next = _pendingTouchGeneration.fetch_add(1) + 1;
     __weak CoreSetHUDHost *weakSelf = self;
     dispatch_async(_pendingTouchSerialQueue, ^{
@@ -1038,7 +1079,25 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
             CoreSetLogAXDrop("nonfinite-point", &_inputCounts.nonfinitePoint, &_inputCounts.parseDropped); return;
         }
+        if (phase == CoreSetHostedPointerPhaseBegan) {
+            if (![self surfacePointMayHitHostedInteraction:point]) {
+                CoreSetLogInputStage("queue", "outside-interaction-bounds",
+                    &_inputCounts.queueDropped, self.generation, phase, nil, 0);
+                return;
+            }
+            int64_t expected = -1;
+            if (!_queuedInputPointer.compare_exchange_strong(expected, pointerID)) {
+                CoreSetLogInputStage("queue", "another-pointer-owned",
+                    &_inputCounts.queueDropped, self.generation, phase, nil, 0);
+                return;
+            }
+        } else if (_queuedInputPointer.load() != pointerID) {
+            CoreSetLogInputStage("queue", "unowned-game-pointer",
+                &_inputCounts.queueDropped, self.generation, phase, nil, 0);
+            return;
+        }
         if (phase == CoreSetHostedPointerPhaseCancelled) {
+            _queuedInputPointer.store(-1);
             CoreSetLogAXDrop("physical-cancel", &_inputCounts.cancelled, &_inputCounts.parseDropped);
             [self invalidatePendingTouchActions];
             return;
@@ -1076,6 +1135,9 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
             CoreSetLogInputStage("queue", reason,
                 accepted ? &host->_inputCounts.queued : &host->_inputCounts.queueDropped,
                 host.generation, phase, nil, accepted);
+            if ((!accepted && phase == CoreSetHostedPointerPhaseBegan) ||
+                (accepted && phase == CoreSetHostedPointerPhaseEnded))
+                host->_queuedInputPointer.store(-1);
             if (result == coreset_pending_touch::EnqueueResult::AppendedAfterDroppingLifecycle) {
                 // Expiry cleared the pending lifecycle. Release its active
                 // pointer before the newly appended Begin reaches main.
@@ -1499,6 +1561,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     _floatingCenter.x = MIN(MAX(_floatingCenter.x, CGRectGetMinX(safe) + 22), MAX(CGRectGetMinX(safe) + 22, CGRectGetMaxX(safe) - 22));
     _floatingCenter.y = MIN(MAX(_floatingCenter.y, CGRectGetMinY(safe) + 22), MAX(CGRectGetMinY(safe) + 22, CGRectGetMaxY(safe) - 22));
     _floating.center = _floatingCenter;
+    [self updateHostedInteractionBounds];
     _layoutApplying = NO;
     if (directHosted && !floatingInitialized && !_panelVisible) [self layoutSurfaces];
 }

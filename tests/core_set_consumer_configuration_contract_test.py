@@ -132,8 +132,9 @@ class ConsumerConfigurationContract(unittest.TestCase):
                 self.assertIn(".applied(observed:", receipt)
         for name in ("Player", "Material", "Radar"):
             receipt = body(self.sources[name], "func consumed(")
-            for identity in ("session.ready", "session.generation == expectedSessionGeneration",
-                             "session.processID == expectedProcessID", "session.imageBase == expectedImageBase"):
+            owner = "geometrySession" if name == "Player" else "session"
+            for identity in (f"{owner}.ready", f"{owner}.generation == expectedSessionGeneration",
+                             f"{owner}.processID == expectedProcessID", f"{owner}.imageBase == expectedImageBase"):
                 self.assertIn(identity, receipt)
         radar = body(self.sources["Radar"], "func consumed(")
         self.assertIn("confirmedLanes == ownedLanes", radar)

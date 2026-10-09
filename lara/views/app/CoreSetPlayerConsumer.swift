@@ -7,11 +7,19 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     let capability = CoreSetCapability.playerRendering
     private weak var coordinator: CoreSetRuntimeCoordinator?
     private let session = CoreSetReadSession()
+    private let geometrySession = CoreSetReadSession()
     private let grenadeMotion = CoreSetGrenadeMotionTracker()
     private let worker = DispatchQueue(label: "coreset.player.read", qos: .userInitiated)
+    private let geometryWorker = DispatchQueue(label: "coreset.player.geometry", qos: .userInteractive)
     private var probe: Timer?
     private var refresh: Timer?
     private var inFlight = false
+    private var geometryInFlight = false
+    private var currentRoster: CoreSetPlayerSnapshot?
+    private var lastFullCaptureStartedAt: Double = 0
+    private var lastGeometrySubmittedAt: Double?
+    private var lastGeometryReceiptAt: Double?
+    private var geometryExpired = false
     private var stopped = false
     private var revision: UInt64 = 0
     private var settings = CoreSetPlayerSettings()
@@ -41,7 +49,8 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     init(coordinator: CoreSetRuntimeCoordinator) {
         self.coordinator = coordinator
         session.diagnosticLabel = "player"
-        NSLog("Core-SET: player-loop contract=core17-filter-coalesced-final-reproject-v5 interval=0.15 deliveryFreshness=0.5 geometryFreshness=final-reprojected transportReads=actor-page-copy+bone-array-bulk configurationApply=immediate renderEvidence=separate")
+        geometrySession.diagnosticLabel = "player-geometry"
+        NSLog("Core-SET: player-loop contract=core17-roster-plus-live-geometry-v6 interval=0.15 geometryTTL=0.5 transportReads=full-roster+independent-camera-root-reprojection configurationApply=immediate renderEvidence=separate")
         probe = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
@@ -72,10 +81,11 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     }
 
     private func probeTarget() {
-        guard !stopped, !session.ready else { return }
+        guard !stopped, !session.ready || !geometrySession.ready else { return }
         worker.async { [weak self] in
             guard let self else { return }
-            _ = self.session.connect()
+            if !self.session.ready { _ = self.session.connect() }
+            if !self.geometrySession.ready { _ = self.geometrySession.connect() }
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.stopped else { return }
                 self.coordinator?.refreshPlayerAvailability()
@@ -131,15 +141,23 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         pendingApply = nil
         completion(request.token, .applied(observed: settings))
         armCaptureLoop()
-        capture()
+        tick()
     }
 
     private func armCaptureLoop() {
         precondition(Thread.isMainThread)
         guard !stopped, activeToken != nil, refresh == nil else { return }
         refresh = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
-            self?.capture()
+            self?.tick()
         }
+    }
+
+    private func tick() {
+        precondition(Thread.isMainThread)
+        guard !stopped, activeToken != nil else { return }
+        expireGeometryIfNeeded()
+        if currentRoster != nil { refreshGeometry() }
+        if !inFlight, CACurrentMediaTime() - lastFullCaptureStartedAt >= 1.0 { capture() }
     }
 
     private var activeSessionMatches: Bool {
@@ -152,6 +170,8 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         refresh?.invalidate(); refresh = nil
         awaitingReceipt = false
         awaitingReceiptSince = nil
+        currentRoster = nil; lastGeometrySubmittedAt = nil; lastGeometryReceiptAt = nil
+        geometryExpired = false
         let pending = pendingApply
         pendingApply = nil
         clearStaleLane(token: token, reason: reason)
@@ -173,7 +193,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             NSLog("Core-SET: target-read lane=player stage=capture ready=0 retrying=1 reason=%@", reason)
         }
         if captureFailureStartedAt == nil { captureFailureStartedAt = now }
-        if !captureLaneClearedForFailure,
+        if currentRoster == nil, !captureLaneClearedForFailure,
            now - (captureFailureStartedAt ?? now) >= 0.5 {
             captureLaneClearedForFailure = true
             clearStaleLane(token: token, reason: reason,
@@ -183,30 +203,120 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         coordinator?.refreshPlayerAvailability()
     }
 
-    private func capture() {
-        guard !stopped, !inFlight, let token = activeToken,
-              let canvas = coordinator?.playerCanvas else { return }
-        if awaitingReceipt {
-            guard let since = awaitingReceiptSince,
-                  CACurrentMediaTime() - since >= 0.5 else { return }
+    private var requiresRenderableEvidence: Bool {
+        settings.player.box == true || settings.player.ray == true ||
+        settings.player.distance == true || settings.player.bones == true ||
+        settings.player.weapon.enabled == true || settings.player.count.enabled == true ||
+        settings.player.information.enabled == true ||
+        (settings.hideBots != true && (settings.bot.box == true || settings.bot.ray == true ||
+            settings.bot.distance == true || settings.bot.bones == true ||
+            settings.bot.weapon.enabled == true || settings.bot.count.enabled == true ||
+            settings.bot.information.enabled == true)) ||
+        settings.backIndicator?.showIndicator == true || settings.grenadeWarning == true
+    }
+
+    private func expireGeometryIfNeeded() {
+        guard let token = activeToken, let canvas = coordinator?.playerCanvas else { return }
+        let now = CACurrentMediaTime()
+        if awaitingReceipt, let since = awaitingReceiptSince, now - since >= 0.5 {
             awaitingReceipt = false; awaitingReceiptSince = nil
             expectedSnapshot = nil; expectedGeneration = nil
             expectedSessionGeneration = nil; expectedProcessID = nil; expectedImageBase = nil
-            expectedCompletedAt = nil
-            retryCapture("player-renderer-receipt-timeout", token: token)
-            return
+            expectedCompletedAt = nil; expectedReadSemanticDiagnostic = nil
         }
+        let freshest = lastGeometryReceiptAt ?? lastGeometrySubmittedAt
+        guard requiresRenderableEvidence, !geometryExpired, let freshest,
+              now - freshest >= 0.5 else { return }
+        let id = UUID()
+        let empty = CoreSetLaneSubmission(lane: .player, hostGeneration: canvas.generation,
+            configRevision: revision, snapshotID: id, requestToken: token,
+            canvasSize: canvas.size, commands: [])
+        if coordinator?.submitLane(empty) == true {
+            geometryExpired = true
+            NSLog("Core-SET: target-read lane=player stage=geometry-expired age=%.3f action=empty-lane",
+                  now - freshest)
+        }
+    }
+
+    private func refreshGeometry() {
+        guard !stopped, !geometryInFlight, !awaitingReceipt,
+              let roster = currentRoster, let token = activeToken,
+              let canvas = coordinator?.playerCanvas else { return }
+        guard geometrySession.ready,
+              geometrySession.processID == roster.processID,
+              geometrySession.imageBase == roster.imageBase else {
+            probeTarget(); return
+        }
+        geometryInFlight = true
+        let expectedRevision = revision
+        let rosterID = roster.snapshotID
+        let includeOffscreen = settings.backIndicator?.showIndicator == true
+        let maximumDrawDistance = Double(settings.drawingDistance.value ?? 0)
+        geometryWorker.async { [weak self] in
+            guard let self else { return }
+            let snapshot = CoreSetPlayerCollector.refreshGeometry(for: roster,
+                session: self.geometrySession, canvasSize: canvas.size,
+                includeOffscreen: includeOffscreen,
+                maximumDrawDistance: maximumDrawDistance)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.geometryInFlight = false
+                guard !self.stopped, self.activeToken == token,
+                      self.revision == expectedRevision,
+                      self.currentRoster?.snapshotID == rosterID,
+                      let currentCanvas = self.coordinator?.playerCanvas,
+                      currentCanvas.generation == canvas.generation,
+                      currentCanvas.size == canvas.size,
+                      let snapshot else { return }
+                self.submitGeometry(snapshot, token: token, revision: expectedRevision,
+                                    canvas: currentCanvas)
+            }
+        }
+    }
+
+    private func submitGeometry(_ snapshot: CoreSetPlayerSnapshot, token: CoreSetRequestToken,
+                                revision expectedRevision: UInt64,
+                                canvas: (generation: UInt64, size: CGSize)) {
+        precondition(Thread.isMainThread)
+        if settings.grenadeWarning == true {
+            grenadeMotion.decorate(snapshot, canvasSize: canvas.size,
+                                    nativeScale: Double(UIScreen.main.nativeScale))
+        } else { _ = grenadeMotion.clear() }
+        let id = UUID(uuidString: snapshot.snapshotID.uuidString) ?? UUID()
+        guard let commands = render(snapshot, on: canvas.size) else { return }
+        guard !requiresRenderableEvidence || !commands.isEmpty else { return }
+        let input = CoreSetLaneSubmission(lane: .player, hostGeneration: canvas.generation,
+            configRevision: expectedRevision, snapshotID: id, requestToken: token,
+            canvasSize: canvas.size, commands: commands)
+        guard coordinator?.submitLane(input) == true else { return }
+        expectedSnapshot = id; expectedGeneration = canvas.generation
+        expectedSessionGeneration = snapshot.sessionGeneration
+        expectedProcessID = snapshot.processID; expectedImageBase = snapshot.imageBase
+        expectedCompletedAt = snapshot.captureCompletedMonotonicSeconds
+        expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
+            " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog rayGeometry=reference-top-native-scale headAnchor=current-bone-world-or-root-plus90"
+        awaitingReceipt = true; awaitingReceiptSince = CACurrentMediaTime()
+        lastGeometrySubmittedAt = CACurrentMediaTime()
+        geometryExpired = false
+    }
+
+    private func capture() {
+        guard !stopped, !inFlight, let token = activeToken,
+              let canvas = coordinator?.playerCanvas else { return }
         guard activeSessionMatches else {
             finishUnavailable("player-active-session-changed-before-capture", token: token)
             return
         }
         inFlight = true
+        lastFullCaptureStartedAt = CACurrentMediaTime()
         let expectedRevision = revision
         let playerBones = settings.player.bones == true
         let botBones = settings.bot.bones == true && settings.hideBots != true
         let boneDistanceLimit = Double(settings.boneDistance.value ?? 0)
         let maximumDrawDistance = Double(settings.drawingDistance.value ?? 0)
-        let includeOffscreen = settings.backIndicator?.showIndicator == true
+        // The slow roster must retain enemies that are currently outside the
+        // viewport so the fast camera pass can bring them on-screen instantly.
+        let includeOffscreen = true
         // The collector reads a canonical ID for both modes; the name also serves as image fallback.
         let playerWeaponText = settings.player.weapon.enabled == true
         let botWeaponText = settings.bot.weapon.enabled == true &&
@@ -215,15 +325,6 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         let includeCounts = settings.player.count.enabled == true || settings.bot.count.enabled == true
         let playerInformation = settings.player.information.enabled == true
         let botInformation = settings.bot.information.enabled == true && settings.hideBots != true
-        let requiresRenderableEvidence = settings.player.box == true || settings.player.ray == true ||
-            settings.player.distance == true || settings.player.bones == true ||
-            settings.player.weapon.enabled == true || settings.player.count.enabled == true ||
-            settings.player.information.enabled == true ||
-            (settings.hideBots != true && (settings.bot.box == true || settings.bot.ray == true ||
-                settings.bot.distance == true || settings.bot.bones == true ||
-                settings.bot.weapon.enabled == true || settings.bot.count.enabled == true ||
-                settings.bot.information.enabled == true)) ||
-            settings.backIndicator?.showIndicator == true || settings.grenadeWarning == true
         worker.async { [weak self] in
             guard let self else { return }
             let failureSequence = self.session.readFailureSequence
@@ -242,10 +343,6 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 guard let self else { return }
                 self.inFlight = false
                 guard !self.stopped else { return }
-                guard self.activeToken == token, self.revision == expectedRevision else {
-                    if self.pendingApply != nil { self.capture() }
-                    return
-                }
                 let captureAge = snapshot.map { CACurrentMediaTime() - $0.captureCompletedMonotonicSeconds } ?? .nan
                 let failureReason = snapshot != nil && !(0...0.5).contains(captureAge)
                     ? String(format: "snapshot-stale stage=capture ageSeconds=%.3f limit=0.5", captureAge)
@@ -255,53 +352,17 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                       snapshot.processID == self.session.processID,
                       snapshot.imageBase == self.session.imageBase,
                       captureAge >= 0, captureAge <= 0.5 else {
-                    self.retryCapture(failureReason, token: token)
+                    if self.activeToken == token, self.revision == expectedRevision {
+                        self.retryCapture(failureReason, token: token)
+                    }
                     return
                 }
                 self.lastCaptureFailure = nil
                 self.captureFailureStartedAt = nil
                 self.captureLaneClearedForFailure = false
-                if includeGrenadeWarning {
-                    self.grenadeMotion.decorate(snapshot, canvasSize: canvas.size,
-                                                 nativeScale: Double(UIScreen.main.nativeScale))
-                } else { _ = self.grenadeMotion.clear() }
-                let id = UUID(uuidString: snapshot.snapshotID.uuidString) ?? UUID()
-                guard let commands = self.render(snapshot, on: canvas.size) else {
-                    self.refresh?.invalidate(); self.refresh = nil
-                    self.clearStaleLane(token: token)
-                    if let pending = self.pendingApply, pending.0 == token {
-                        self.pendingApply = nil
-                        pending.1(token, .failed(reason: "玩家绘制命令超出本地宿主上限"))
-                    }
-                    return
-                }
-                guard !requiresRenderableEvidence || !commands.isEmpty else {
-                    self.retryCapture("no-renderable-evidence marks=\(snapshot.marks.count) grenades=\(snapshot.grenadeMarks.count)",
-                                      token: token)
-                    return
-                }
-                let input = CoreSetLaneSubmission(lane: .player, hostGeneration: canvas.generation,
-                    configRevision: expectedRevision, snapshotID: id, requestToken: token,
-                    canvasSize: canvas.size, commands: commands)
-                guard self.coordinator?.submitLane(input) == true else {
-                    self.refresh?.invalidate(); self.refresh = nil
-                    self.clearStaleLane(token: token)
-                    if let pending = self.pendingApply, pending.0 == token {
-                        self.pendingApply = nil
-                        pending.1(token, .failed(reason: "玩家帧未进入本地合成器"))
-                    }
-                    return
-                }
-                self.expectedSnapshot = id
-                self.expectedGeneration = canvas.generation
-                self.expectedSessionGeneration = snapshot.sessionGeneration
-                self.expectedProcessID = snapshot.processID
-                self.expectedImageBase = snapshot.imageBase
-                self.expectedCompletedAt = snapshot.captureCompletedMonotonicSeconds
-                self.expectedReadSemanticDiagnostic = snapshot.readSemanticDiagnostic +
-                    " commands=\(commands.count) playerDistance=truncate-space-mi weaponImage=local-catalog rayGeometry=reference-top-native-scale headAnchor=known-requested-bone-or-root-plus90"
-                self.awaitingReceipt = true
-                self.awaitingReceiptSince = CACurrentMediaTime()
+                self.currentRoster = snapshot
+                self.geometryExpired = false
+                self.refreshGeometry()
             }
         }
     }
@@ -572,8 +633,8 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
            receipt.hostGeneration == expectedGeneration {
             awaitingReceipt = false
             awaitingReceiptSince = nil
-            let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
-                session.processID == expectedProcessID && session.imageBase == expectedImageBase
+            let identityMatches = geometrySession.ready && geometrySession.generation == expectedSessionGeneration &&
+                geometrySession.processID == expectedProcessID && geometrySession.imageBase == expectedImageBase
             let fresh = expectedCompletedAt.map {
                 CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
             } ?? false
@@ -602,8 +663,8 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
            receipt.hostGeneration == expectedGeneration {
             awaitingReceipt = false
             awaitingReceiptSince = nil
-            let identityMatches = session.ready && session.generation == expectedSessionGeneration &&
-                session.processID == expectedProcessID && session.imageBase == expectedImageBase
+            let identityMatches = geometrySession.ready && geometrySession.generation == expectedSessionGeneration &&
+                geometrySession.processID == expectedProcessID && geometrySession.imageBase == expectedImageBase
             let fresh = expectedCompletedAt.map {
                 CACurrentMediaTime() - $0 >= 0 && CACurrentMediaTime() - $0 <= 0.5
             } ?? false
@@ -616,7 +677,11 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             } else if !receipt.acceptedByLocalRenderer {
                 clearStaleLane(token: receipt.requestToken,
                     reason: "player-renderer-rejected")
-            } else { logReadSemanticReceipt(receipt) }
+            } else {
+                lastGeometryReceiptAt = CACurrentMediaTime()
+                geometryExpired = false
+                logReadSemanticReceipt(receipt)
+            }
         } else if activeToken == receipt.requestToken && availability != .ready {
             finishUnavailable("player-receipt-session-unavailable", token: receipt.requestToken)
         }
@@ -628,7 +693,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         guard lastSemanticLogRevision != receipt.configRevision || now - lastSemanticLogAt >= 30 else { return }
         lastSemanticLogRevision = receipt.configRevision; lastSemanticLogAt = now
         NSLog("Core-SET: read-semantic lane=player stage=receipt confirmed=1 evidence=local-renderer-frame parity=partial session=%llu pid=%d host=%llu revision=%llu snapshot=%@ scope=%@",
-              session.generation, session.processID, receipt.hostGeneration, receipt.configRevision,
+              geometrySession.generation, geometrySession.processID, receipt.hostGeneration, receipt.configRevision,
               receipt.snapshotID.uuidString, diagnostic)
     }
 
@@ -663,6 +728,8 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         probe?.invalidate(); probe = nil
         refresh?.invalidate(); refresh = nil
         activeToken = nil; pendingApply = nil
+        currentRoster = nil; geometryInFlight = false; geometryExpired = false
+        lastGeometrySubmittedAt = nil; lastGeometryReceiptAt = nil
         awaitingReceipt = false
         awaitingReceiptSince = nil
         activeSessionGeneration = nil; activeProcessID = nil; activeImageBase = nil
@@ -671,6 +738,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         let motionClean = grenadeMotion.clear()
         CoreSetWeaponImageCatalog.stop()
         let cleanup = worker.sync { session.disconnect() } // Drain queued connects/captures first.
-        return motionClean && cleanup.complete
+        let geometryCleanup = geometryWorker.sync { geometrySession.disconnect() }
+        return motionClean && cleanup.complete && geometryCleanup.complete
     }
 }

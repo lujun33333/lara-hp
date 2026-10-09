@@ -1,6 +1,5 @@
 import UIKit
 import Darwin
-import QuartzCore
 
 struct CoreSetMenuHostSettings: Equatable {
     var menuVisible = false
@@ -351,6 +350,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     var localHostHitRegions: [UIView] { [panel, closeButton] }
     private let pageTitles = ["主页", "玩家", "物资", "调整", "雷达", "自瞄", "压枪"]
     private var pageViews: [UIView] = []
+    private var pageButtons: [UIButton] = []
+    private var fontCache: [CGFloat: UIFont] = [:]
     private var selectedPage = 0
     private var isLight: Bool { featureState.home.desired.theme == .light }
     private var isClosing = false
@@ -448,7 +449,10 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     }
 
     private func font(_ size: CGFloat) -> UIFont {
-        UIFont(name: "OPPOSans-H", size: size) ?? .systemFont(ofSize: size)
+        if let cached = fontCache[size] { return cached }
+        let value = UIFont(name: "OPPOSans-H", size: size) ?? .systemFont(ofSize: size)
+        fontCache[size] = value
+        return value
     }
 
     private func gray(_ dark: CGFloat, _ light: CGFloat) -> UIColor {
@@ -486,6 +490,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         panel.subviews.forEach { $0.removeFromSuperview() }
         pageViews.forEach { $0.removeFromSuperview() }
         pageViews.removeAll()
+        pageButtons.removeAll()
         panel.backgroundColor = gray(26, 250)
         panel.layer.borderColor = gray(50, 215).cgColor
         closeButton.setTitleColor(gray(255, 80), for: .normal)
@@ -527,6 +532,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             button.accessibilityTraits = selectedPage == index ? [.button, .selected] : .button
             button.addTarget(self, action: #selector(selectPage(_:)), for: .touchUpInside)
             sidebar.addSubview(button)
+            pageButtons.append(button)
             registerHosted(button, .page)
         }
         sidebar.addSubview(exitHUDButton)
@@ -558,11 +564,51 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         installUnavailableFeedback(in: panel)
     }
 
+    private func rebuildCurrentPage() {
+        guard hostedPointerID == nil, hostedDispatchControlID == nil,
+              trackingUIKitSlider == nil else {
+            homeStatusNeedsRebuild = true
+            return
+        }
+        hostedMenuRevision &+= 1
+        homeStatusNeedsRebuild = false
+        performanceValueLabels.removeAll()
+        homeStatusValueLabels.removeAll()
+        homeStatusProgressViews.removeAll()
+        homeStatusStructureSignature = nil
+        radarRangeCanvas = nil
+        pageViews.forEach { $0.removeFromSuperview() }
+        pageViews.removeAll()
+        hostedEntries = hostedEntries.filter { entry in
+            guard let view = entry.view else { return false }
+            return view === closeButton || view === exitHUDButton || view === content ||
+                pageButtons.contains(where: { $0 === view })
+        }
+        for (index, button) in pageButtons.enumerated() {
+            let selected = index == selectedPage
+            button.backgroundColor = selected ? accent : .clear
+            button.setTitleColor(selected ? .white : gray(255, 80), for: .normal)
+            button.accessibilityTraits = selected ? [.button, .selected] : .button
+        }
+        updateConsumerAvailability()
+        content.contentOffset = .zero
+        content.contentSize = CGSize(width: 658, height: 492)
+        rebuildPage()
+        content.layoutIfNeeded()
+        let offset = pageContentOffsets[selectedPage] ?? .zero
+        content.contentOffset = CGPoint(
+            x: min(max(0, offset.x), max(0, content.contentSize.width - content.bounds.width)),
+            y: min(max(0, offset.y), max(0, content.contentSize.height - content.bounds.height)))
+        registerHostedColorEditor()
+        installUnavailableFeedback(in: panel)
+    }
+
     @objc private func selectPage(_ sender: UIButton) {
         guard pageTitles.indices.contains(sender.tag) else { return }
+        if hostedColorOverlay != nil { dismissHostedColorEditor() }
         pageContentOffsets[selectedPage] = content.contentOffset
         selectedPage = sender.tag
-        rebuildMenu(preservingCurrentOffset: false)
+        rebuildCurrentPage()
         NSLog("Core-SET: hosted input stage=actual capability=menuPage page=%ld confirmed=%d",
               selectedPage, pageViews.isEmpty ? 0 : 1)
     }
@@ -3409,7 +3455,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             homeStatusValueLabels["firmware"]?.accessibilityLabel = "\(firmware.title)：\(firmware.value)"
             homeStatusProgressViews["firmware"]?.progress = firmware.fraction
         }
-        CATransaction.flush()
+        view.setNeedsLayout()
         return true
     }
     private func performanceValues() -> [String?] {

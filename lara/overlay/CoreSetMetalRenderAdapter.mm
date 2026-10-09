@@ -268,7 +268,10 @@ static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect),
     }
     _frame = frame;
     _hasVisibleCommands = frame.commands.count > 0;
-    _metalView.paused = !_visible || !_hasVisibleCommands;
+    // Geometry producers submit complete frames. Draw exactly once here;
+    // leaving MTKView unpaused would also redraw the same stale screen-space
+    // commands every display tick and compete with hosted input on main.
+    _metalView.paused = YES;
     _lastDrawSucceeded = NO;
     [_metalView draw];
     if (!_lastDrawSucceeded && error) *error = CSMetalError(3, @"ImGui Metal submission failed");
@@ -279,15 +282,15 @@ static ImVec2 CSRectMax(CGRect rect) { return ImVec2((float)CGRectGetMaxX(rect),
     if (_visible != (visible && _metalView != nil)) _presentationCadence.reset();
     _visible = visible && _metalView != nil;
     _metalView.hidden = !_visible;
-    _metalView.paused = !_visible || !_hasVisibleCommands;
+    _metalView.paused = YES;
 }
 - (NSInteger)observedRenderFPS {
     if (!NSThread.isMainThread || !_visible || !_metalView.window ||
-        _metalView.paused || !_lastDrawSucceeded) return 0;
+        !_lastDrawSucceeded) return 0;
     return _metalView.preferredFramesPerSecond;
 }
 - (CoreSetPresentationCadenceSample)observedPresentationCadence {
-    if (!NSThread.isMainThread || !_visible || !_metalView.window || _metalView.paused)
+    if (!NSThread.isMainThread || !_visible || !_metalView.window)
         return CoreSetPresentationCadenceSample{};
     return _presentationCadence.observe(CACurrentMediaTime());
 }

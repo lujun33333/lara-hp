@@ -89,6 +89,11 @@ for token in (
     "const BOOL hidOwnsBackground = !active && self.hostedInputMonitorArmed",
     "_menuWindow.backgroundPassThrough = hidOwnsBackground",
     "_menuWindow.userInteractionEnabled = !hidOwnsBackground",
+    "surfacePointMayHitHostedInteraction",
+    "outside-interaction-bounds",
+    "unowned-game-pointer",
+    "_queuedInputPointer.compare_exchange_strong",
+    "background-landscape-lock",
     "ignored=hid-owner",
 ):
     assert token in host, token

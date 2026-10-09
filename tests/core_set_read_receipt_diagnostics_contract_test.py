@@ -166,14 +166,14 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         player = self.consumers["Player"]
         collector = read("lara/overlay/CoreSetPlayerSnapshot.mm")
         apply = body(player, "func apply(")
-        self.assertLess(apply.index("armCaptureLoop()"), apply.index("capture()"))
+        self.assertLess(apply.index("armCaptureLoop()"), apply.index("tick()"))
         self.assertIn("completion(request.token, .applied(observed: settings))", apply)
         self.assertNotIn("pendingApply = (request.token, completion)", apply)
         self.assertLess(apply.index("completion(request.token, .applied(observed: settings))"),
                         apply.index("armCaptureLoop()"))
-        self.assertIn("player-loop contract=core17-filter-coalesced-final-reproject-v5", player)
-        self.assertIn("transportReads=actor-page-copy+bone-array-bulk", player)
-        self.assertIn("geometryFreshness=final-reprojected", player)
+        self.assertIn("player-loop contract=core17-roster-plus-live-geometry-v6", player)
+        self.assertIn("transportReads=full-roster+independent-camera-root-reprojection", player)
+        self.assertIn("geometryTTL=0.5", player)
         self.assertIn("configurationApply=immediate renderEvidence=separate", player)
         loop = body(player, "private func armCaptureLoop()")
         self.assertIn("withTimeInterval: 0.15, repeats: true", loop)
@@ -182,17 +182,20 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
                      ">= 0.5", "recordInvalidation: false", "preserveRefresh: true",
                      "armCaptureLoop()"):
             self.assertIn(gate, retry)
+        expiry = body(player, "private func expireGeometryIfNeeded()")
+        for gate in ("CACurrentMediaTime()", "now - since >= 0.5",
+                     "now - freshest >= 0.5", "commands: []", "geometryExpired = true"):
+            self.assertIn(gate, expiry)
+        geometry = body(player, "private func refreshGeometry()")
+        for gate in ("geometryInFlight", "CoreSetPlayerCollector.refreshGeometry",
+                     "currentRoster?.snapshotID == rosterID", "submitGeometry"):
+            self.assertIn(gate, geometry)
         capture = body(player, "private func capture()")
-        for gate in ("if awaitingReceipt", "CACurrentMediaTime() - since >= 0.5",
-                     'retryCapture("player-renderer-receipt-timeout", token: token)',
-                     "self.awaitingReceiptSince = CACurrentMediaTime()",
-                     "let requiresRenderableEvidence =", "!requiresRenderableEvidence || !commands.isEmpty",
-                     'retryCapture("no-renderable-evidence marks='):
-            self.assertIn(gate, capture)
         self.assertIn("self.retryCapture(failureReason, token: token)", capture)
         failed_capture = capture[capture.index("guard let snapshot,"):capture.index("self.lastCaptureFailure = nil")]
         self.assertNotIn("pendingApply = nil", failed_capture)
-        self.assertIn("self.awaitingReceipt = true", capture)
+        self.assertIn("self.currentRoster = snapshot", capture)
+        self.assertIn("awaitingReceipt = true", body(player, "private func submitGeometry("))
         receipt = body(player, "func consumed(")
         self.assertGreaterEqual(receipt.count("awaitingReceipt = false"), 2)
         self.assertIn("retryCapture(reason, token: pending.0)", receipt)
