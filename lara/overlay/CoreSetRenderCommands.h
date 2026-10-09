@@ -106,4 +106,7 @@ typedef NS_ENUM(NSInteger, CoreSetRenderStyleRole) {
 - (CoreSetPresentationCadenceSample)observedPresentationCadence;
 @end
 
+@interface CoreSetCoreAnimationConsumer : NSObject <CoreSetFrameConsumer>
+@end
+
 NS_ASSUME_NONNULL_END

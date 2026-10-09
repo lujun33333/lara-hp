@@ -115,17 +115,15 @@ for result in ("applied", "notApplied:", "unavailable:", "failed:"):
 host = read("lara/overlay/CoreSetHUDHost.mm")
 adapter = read("lara/overlay/CoreSetRemoteHostingAdapter.mm")
 scenes = read("lara/overlay/CoreSetFloatingSceneManager.mm")
-for forbidden in ("BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation"):
-    assert forbidden not in host
+for contract in ("BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation"):
+    assert contract in host
 for contract in (
-    "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
-    "_primary.level = 999998.0", "menu.level = 1000000.0", "draw.level = 999999.0",
+    "CALayerHost", "SBMainWorkspace", "mainWindowScene", "setContextId:",
+    "kCoreSetRemoteMenuLevel", "kCoreSetRemoteDrawLevel",
     "RemoteCall", "remote_getClass", "doRemoteCallCheckedWithTimeout",
-    'NSSelectorFromString(@"_contextId")', '[window.layer valueForKey:@"contextId"]',
-    "CSRemoteLoadImage", 'CSChecked(process, "dlopen", (void *)dlopen',
 ):
     assert contract in adapter, contract
-assert "CALayerHost" not in adapter
+assert "SBSAccessibilityWindowHostingController" not in adapter
 for contract in ("FBSceneManager", "-touchFloating", "-noTouchFloating"):
     assert contract in scenes, contract
 
@@ -144,7 +142,7 @@ for missing in ("task-read-denied", "main-image-or-uuid-not-found"):
     combined = session
     assert missing in combined
     assert missing not in combined.replace(missing, "REMOVED", 1)
-assert "SBSAccessibilityWindowHostingController" in adapter
+assert "CALayerHost" in adapter
 
 print("PASS: target read stages, consumer labels, truthful manifest and Core 1.7 scene/SBS diagnostics")
 print("LIMIT: source contract only; requires a fresh device log for runtime closure")

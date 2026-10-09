@@ -71,7 +71,7 @@ for implicit in ["views/app/CoreSetMenuViewController.swift", "views/app/Content
 need(project, "PBXFileSystemSynchronizedRootGroup", "QuartzCore.framework in Frameworks", 'SWIFT_OBJC_BRIDGING_HEADER = "lara/lara-Bridging-Header.h"')
 assert bridge.count('#import "overlay/CoreSetHUDHost.h"') == 1
 need(header, "NS_SWIFT_NAME(startLocal(in:menuController:))", "NS_SWIFT_NAME(startHosted(in:menuController:completion:))", "NS_SWIFT_NAME(applyLocalMenu(visible:colors:))")
-start_host = objc(host[host.index("@implementation CoreSetHUDHost {"):], "startPreparedInMenuScene")
+start_host = objc(host[host.index("@implementation CoreSetHUDHost {"):], "startPreparedInScene")
 assert start_host.index("_drawWindow.hidden = NO; _menuWindow.hidden = NO;") < start_host.index("[CATransaction flush];") < start_host.index("registerBothSurfacesAsync:menuWindow")
 
 
@@ -230,8 +230,8 @@ need(stop_body, "[self invalidateFrames]", "_drawRegistered = NO; _menuRegistere
 assert stop_body.index("_drawWindow.hidden = YES; _menuWindow.hidden = YES;") < stop_body.index("[CATransaction flush];")
 assert stop_body.index("[CATransaction flush];") < stop_body.index("_drawWindow.rootViewController = nil; _menuWindow.rootViewController = nil;")
 assert stop_body.index("_drawWindow.rootViewController = nil; _menuWindow.rootViewController = nil;") < stop_body.index("if (!_drawCleanupNeeded) _drawWindow = nil;")
-need(start_host, "_drawWindow = [[CoreSetDrawWindow alloc] initWithWindowScene:drawScene]",
-     "_menuWindow = [[CoreSetMenuWindow alloc] initWithWindowScene:menuScene]", "[self invalidateFrames]")
+need(start_host, "_drawWindow = [[CoreSetDrawWindow alloc] initWithWindowScene:scene]",
+     "_menuWindow = [[CoreSetMenuWindow alloc] initWithWindowScene:scene]", "[self invalidateFrames]")
 assert start_host.index("[self invalidateFrames]") < start_host.index("_drawWindow = [[CoreSetDrawWindow alloc]")
 assert "ForegroundTouchCalibration" not in launch
 assert launch.index("axDeviceSupportStatus()") < launch.index("init_offsets()") < launch.index("offsets_init()") < launch.index("manager.run") < launch.index("prepareKernelOffsets")
@@ -240,10 +240,9 @@ need(kernel_offsets, "fetchkcache()", "fetched && dlkcache()", "manager.hasOffse
 assert kernel_offsets.index("fetchkcache()") < kernel_offsets.index("fetched && dlkcache()") < kernel_offsets.index("manager.hasOffsets = loaded") < kernel_offsets.index("guard loaded else") < kernel_offsets.rindex("prepareSpringBoardHosting")
 need(coordinator, 'rcinit(process: "SpringBoard"', "rebuildHostedWindows(process:")
 remote = swift(coordinator, "rebuildHostedWindows")
-need(remote, "CoreSetFloatingSceneManager.shared().createScenes", "host.startHosted(menuScene: touchScene, drawScene: drawScene",
-     "CoreSetRemoteHostingAdapter(remoteCall: process, primaryWindow: primaryWindow)")
-for forbidden in ("CoreSetLocalHostingAdapter", "verifyHostedWindows", "confirmHostedReadbackAsync"):
-    assert forbidden not in coordinator
+need(remote, "host.localSurfacesReady", "host.attach(adapter)",
+     "CoreSetRemoteHostingAdapter(remoteCall: process)", "verifyWZHostedWindows")
+need(swift(coordinator, "verifyWZHostedWindows"), "confirmHostedReadbackAsync", ".milliseconds(1200)")
 action_stop = swift(menu, "suspendActionConsumers")
 need(action_stop, "stop(\\.aim)", "stop(\\.recoil)", "group.notify(queue: .main)")
 need(swift(menu, "resumeActionConsumers"), "featureState.aim.resume()", "featureState.recoil.resume()")
@@ -277,17 +276,16 @@ need(swift(launcher, "launchApplication"),
      "error != CoreSetRuntimeCoordinator.userCancelledLaunchReason",
      "error != CoreSetRuntimeCoordinator.sceneEndedLaunchReason")
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
-need(remote_adapter, "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
-     "_primary.level = 999998.0", "menu.level = 1000000.0", "draw.level = 999999.0",
-     "RemoteCall", "remote_getClass", "doRemoteCallCheckedWithTimeout",
-     'NSSelectorFromString(@"_contextId")', '[window.layer valueForKey:@"contextId"]')
-assert "CALayerHost" not in remote_adapter
+need(remote_adapter, "CALayerHost", "SBMainWorkspace", "mainWindowScene", "setContextId:",
+     "kCoreSetRemoteMenuLevel", "kCoreSetRemoteDrawLevel", "RemoteCall",
+     "doRemoteCallCheckedWithTimeout", '@"wz-springboard-mirror-v1"')
+assert "SBSAccessibilityWindowHostingController" not in remote_adapter
 open_game = swift(coordinator, "showHostedMenuAndOpenGame")
 need(open_game, "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication")
-assert "confirmHostedReadbackAsync" not in open_game
+assert "confirmHostedReadbackAsync" in open_game
 assert "CoreSetGameTarget.openApplication" not in swift(launcher, "launchApplication")
 need(swift(launcher, "launchApplication"), "coreSetRuntime.launchGame")
-print("PASS: D1 project/owner/host contracts and Core 1.7 SpringBoard SBS registration; source only")
+print("PASS: D1 project/owner/host contracts and WZ SpringBoard mirror registration; source only")
 print("LIMIT: no Swift/ObjC/UIKit compile, cross-app physical touch or device lifecycle execution")
 for name in paths:
     print(name + "=" + hashlib.sha256((ROOT / name).read_bytes()).hexdigest())

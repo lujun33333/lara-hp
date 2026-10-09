@@ -41,7 +41,7 @@ class LocalObservationReceiptContract(unittest.TestCase):
         self.assertIn("palette.referenceColors", colors)
         self.assertNotIn("/ 255", colors)
         observe = body(self.host, "- (NSArray<UIColor *> *)observedFloatingColors")
-        for gate in ("self.floatingControlReady", "_floating.tintColor"):
+        for gate in ("self.floatingControlReady", "_floatingGradient.colors"):
             self.assertIn(gate, observe)
 
     def test_palette_negative_generation_and_model_only_mutants(self):

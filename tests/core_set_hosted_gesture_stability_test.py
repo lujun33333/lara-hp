@@ -1,4 +1,4 @@
-"""Core 1.7 floating-scene/hosting source contract; no device-effect claim."""
+"""WZ SpringBoard mirror/hosted-input source contract; no device-effect claim."""
 
 from pathlib import Path
 
@@ -47,31 +47,22 @@ for token in (
     assert token in app, token
 
 for token in (
-    'CSClass(_process, "SBSAccessibilityWindowHostingController")',
-    'CSSel(_process, "registerWindowWithContextID:atLevel:")',
-    "_primary.level = 999998.0",
-    "menu.level = 1000000.0",
-    "draw.level = 999999.0",
-    "primaryReady && menuReady && drawReady",
+    'CSClass(_process, "CALayerHost")',
+    'CSClass(_process, "SBMainWorkspace")',
+    'CSSel(_process, "setContextId:")',
+    "kCoreSetRemoteMenuLevel",
+    "kCoreSetRemoteDrawLevel",
+    "menuReady && drawReady",
     "RemoteCall *_process",
     "remote_getClass(process, name)",
     "doRemoteCallCheckedWithTimeout:10000",
-    'NSSelectorFromString(@"_contextId")',
-    '[window.layer valueForKey:@"contextId"]',
-    "[value unsignedIntValue]",
-    "[CATransaction flush]",
-    "_primary.context = CSContext(_primary.source)",
-    "stage=context-capture primary=%u menu=%u draw=%u",
-    '@"sbs-springboard-remote-load-v3"',
-    "CSRemoteLoadImage(_process, CSHostImage)",
-    'CSChecked(process, "dlopen", (void *)dlopen',
-    "RTLD_NOW | RTLD_GLOBAL",
-    "stage=remote-class",
-    "stage=remote-registered",
+    "remoteSideObserved",
+    "localSideObserved",
+    '@"wz-springboard-mirror-v1"',
 ):
     assert token in adapter, token
 for forbidden in (
-    "CALayerHost", "CSLoadCore17Frameworks",
+    "SBSAccessibilityWindowHostingController", "CSLoadCore17Frameworks",
 ):
     assert forbidden not in adapter, forbidden
 for token in (
@@ -84,26 +75,23 @@ for token in (
     assert token in project + packaging, token
 assert "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard" in frontboard_stub
 assert "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices" in fbs_stub
-assert project.count("CURRENT_PROJECT_VERSION = 4;") == 2
+assert project.count("CURRENT_PROJECT_VERSION = 5;") == 2
 
 for token in (
-    'UIImage imageNamed:@"CoreSetLoading"',
-    "CGRectMake(0, 0, 64, 64)",
-    '@"hud_button_center_x"', '@"hud_button_center_y"',
-    "UITapGestureRecognizer", "UIPanGestureRecognizer",
+    "UIButton buttonWithType:UIButtonTypeCustom",
+    "CGRectMake(0, 0, 44, 44)",
+    "UIControlEventTouchUpInside", "UIPanGestureRecognizer",
+    "IOHIDEventSystemClient", "BKSHIDEventRegisterEventCallback",
+    "confirmHostedReadbackAsync",
 ):
     assert token in host, token
 
-for forbidden in (
-    "CoreSetLocalHostingAdapter", "prepareLocalHosting", "fallbackToSpringBoard",
-    "verifyHostedWindows", "confirmHostedReadbackAsync", "armHostedInput()",
-):
-    assert forbidden not in owner, forbidden
 for token in (
-    "CoreSetFloatingSceneManager.shared().createScenes",
-    "CoreSetRemoteHostingAdapter(remoteCall: process, primaryWindow: primaryWindow)",
-    "host.startHosted(menuScene: touchScene, drawScene: drawScene",
-    "hosting mode=core17-floating-scenes registered=1",
+    "CoreSetRemoteHostingAdapter(remoteCall: process)",
+    "host.attach(adapter)",
+    "verifyWZHostedWindows",
+    "hosting mode=wz-springboard-mirror registered=1",
+    "confirmHostedReadbackAsync",
 ):
     assert token in owner, token
 for token in ("prepareSpringBoardHosting", 'rcinit(process: "SpringBoard"',
@@ -120,4 +108,4 @@ for token in (
 for forbidden in ("CIContext", "CoreSetCoreAnimationConsumer", "renderInContext"):
     assert forbidden not in metal, forbidden
 
-print("PASS: Core 1.7 floating scenes, three SBS contexts, UIKit floating button and ImGui/Metal are the only active host path; source only")
+print("PASS: WZ SpringBoard mirrors, remote readback, hosted input and ImGui/Metal host path; source only")

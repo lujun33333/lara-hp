@@ -506,7 +506,8 @@ final class CoreSetRuntimeCoordinator {
         hostChanged()
     }
 
-    // Core 1.7 uses one floating-scene + SpringBoard SBS registration path.
+    // iOS 26 compatibility path: mirror the existing menu/draw contexts into
+    // SpringBoard with the previously device-proven WZ UIWindow/CALayerHost chain.
     func launchGame(completion: @escaping (String?) -> Void) {
         precondition(Thread.isMainThread)
         guard !stopping, let scene, scene.activationState == .foregroundActive else {
@@ -613,7 +614,7 @@ final class CoreSetRuntimeCoordinator {
         !stopping && gameLaunchPending && gameLaunchEpoch == epoch
     }
 
-    // Logs cached state only; registration itself is the Core 1.7 receipt.
+    // Logs cached state only; the adapter's remote readback owns the receipt.
     private func recordHostingDiagnostic(_ stage: String, epoch: UInt64, remoteDecision: Int = -1) {
         NSLog("Core-SET: hosting stage=%@ epoch=%llu remoteDecision=%d sceneState=%ld appState=%ld host={%@} remote={%@}",
               stage, epoch, remoteDecision, scene?.activationState.rawValue ?? -1,
@@ -633,7 +634,7 @@ final class CoreSetRuntimeCoordinator {
         gameLaunchPending = false
         let finishedCompletion = pendingLaunchCompletion
         pendingLaunchCompletion = nil
-        gameLaunchStatus = error ?? "Core 1.7 浮窗已注册；真机显示待验收"
+        gameLaunchStatus = error ?? "王者兼容浮窗已注册；真机显示待验收"
         NSLog("Core-SET: game launch host epoch=%llu result=%@", epoch, gameLaunchStatus ?? "unknown")
         if let scene, scene.activationState != .foregroundActive {
             host.setApplicationActive(false)
@@ -686,59 +687,66 @@ final class CoreSetRuntimeCoordinator {
             finishGameLaunch(epoch: epoch, error: "场景已失活，已取消跨应用托管", completion: completion)
             return
         }
-        guard let primaryWindow = launcher?.view.window else {
-            finishGameLaunch(epoch: epoch, error: "Core 1.7 主窗口 context 不可用", completion: completion)
+        if !host.localSurfacesReady,
+           !host.startLocal(in: scene, menuController: menu) {
+            finishGameLaunch(epoch: epoch, error: "王者双窗口源创建失败", completion: completion)
             return
         }
-        let adapter = CoreSetRemoteHostingAdapter(remoteCall: process, primaryWindow: primaryWindow)
+        let adapter = CoreSetRemoteHostingAdapter(remoteCall: process)
         if let reason = adapter.sessionIdentityFailureReason {
             let detail = "SpringBoard 会话身份未通过核对：\(reason)"
             globallogger.log("Core-SET: \(detail)")
             finishGameLaunch(epoch: epoch, error: detail, completion: completion)
             return
         }
-        CoreSetFloatingSceneManager.shared().createScenes { [weak self] touchScene, drawScene in
+        aimSuspendedForHost = true
+        menu.suspendActionConsumers { [weak self] confirmed in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
-            guard let touchScene, let drawScene else {
-                self.finishGameLaunch(epoch: epoch, error: "Core 1.7 浮窗场景创建失败", completion: completion)
+            guard confirmed else {
+                self.finishGameLaunch(epoch: epoch, error: "目标动作停止失败", completion: completion)
                 return
             }
-            self.aimSuspendedForHost = true
-            self.menu.suspendActionConsumers { [weak self] confirmed in
+            self.remoteHostingAdapter = adapter
+            self.remoteCleanupFailed = false
+            self.host.attach(adapter) { [weak self] registered in
                 guard let self, self.gameLaunchCurrent(epoch) else { return }
-                guard confirmed else {
-                    self.finishGameLaunch(epoch: epoch, error: "目标动作停止失败", completion: completion)
+                guard registered else {
+                    self.rollbackGameLaunch(epoch: epoch,
+                        error: "王者 SpringBoard 双窗口注册或读回失败", completion: completion)
                     return
                 }
-                if self.host.localSurfacesReady {
-                    let stopped = self.host.stop()
-                    guard stopped.complete.boolValue else {
-                        self.finishGameLaunch(epoch: epoch, error: "原窗口停止失败", completion: completion)
+                self.host.setApplicationActive(true)
+                self.hostChanged()
+                self.menu.setHostedExitAvailable(true)
+                NSLog("Core-SET: hosting mode=wz-springboard-mirror registered=1")
+                self.verifyWZHostedWindows(epoch: epoch, completion: completion)
+            }
+        }
+    }
+
+    private func verifyWZHostedWindows(epoch: UInt64,
+                                       completion: @escaping (String?) -> Void) {
+        gameLaunchStatus = "王者双窗口已注册，正在复核"
+        publishStatus()
+        host.confirmHostedReadbackAsync { [weak self] firstObserved in
+            guard let self, self.gameLaunchCurrent(epoch) else { return }
+            guard firstObserved else {
+                self.rollbackGameLaunch(epoch: epoch,
+                    error: "王者双窗口初次读回失败", completion: completion)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1200)) { [weak self] in
+                guard let self, self.gameLaunchCurrent(epoch) else { return }
+                self.host.confirmHostedReadbackAsync { [weak self] observed in
+                    guard let self, self.gameLaunchCurrent(epoch) else { return }
+                    NSLog("Core-SET: game launch epoch=%llu stage=dual-host mode=wz-springboard observed=%d",
+                          epoch, observed ? 1 : 0)
+                    guard observed else {
+                        self.rollbackGameLaunch(epoch: epoch,
+                            error: "王者双窗口延迟读回失败", completion: completion)
                         return
                     }
-                }
-                guard self.host.installRemoteHostingAdapter(adapter) else {
-                    self.finishGameLaunch(epoch: epoch, error: "Core 1.7 SBS 适配器安装失败", completion: completion)
-                    return
-                }
-                self.remoteHostingAdapter = adapter
-                self.remoteCleanupFailed = false
-                guard self.host.startHosted(menuScene: touchScene, drawScene: drawScene,
-                    menuController: self.menu, completion: { [weak self] registered in
-                        guard let self, self.gameLaunchCurrent(epoch) else { return }
-                        guard registered else {
-                            self.rollbackGameLaunch(epoch: epoch,
-                                error: "Core 1.7 SBS context 注册失败", completion: completion)
-                            return
-                        }
-                        self.host.setApplicationActive(true)
-                        self.hostChanged()
-                        self.menu.setHostedExitAvailable(true)
-                        NSLog("Core-SET: hosting mode=core17-floating-scenes registered=1")
-                        self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
-                    }) else {
-                    self.finishGameLaunch(epoch: epoch, error: "Core 1.7 浮窗启动失败", completion: completion)
-                    return
+                    self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
                 }
             }
         }
@@ -756,9 +764,17 @@ final class CoreSetRuntimeCoordinator {
                 guard let self, self.gameLaunchCurrent(epoch) else { return }
                 switch result {
                 case .opened:
-                    self.recordHostingDiagnostic("open-url-callback-opened", epoch: epoch,
-                                                 remoteDecision: 1)
-                    self.finishGameLaunch(epoch: epoch, error: nil, completion: completion)
+                    self.host.confirmHostedReadbackAsync { [weak self] observed in
+                        guard let self, self.gameLaunchCurrent(epoch) else { return }
+                        self.recordHostingDiagnostic("open-url-callback-opened", epoch: epoch,
+                                                     remoteDecision: observed ? 1 : 0)
+                        if observed {
+                            self.finishGameLaunch(epoch: epoch, error: nil, completion: completion)
+                        } else {
+                            self.rollbackGameLaunch(epoch: epoch,
+                                error: "游戏已打开，但王者双窗口回读失效", completion: completion)
+                        }
+                    }
                 case .unavailable:
                     self.recordHostingDiagnostic("open-url-callback-unavailable", epoch: epoch)
                     self.rollbackGameLaunch(epoch: epoch, error: "未检测到可打开的和平精英，跨应用窗口已请求清理", completion: completion)
