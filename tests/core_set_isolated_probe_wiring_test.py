@@ -15,19 +15,20 @@ assert "_ownsReadSession = readSession == nil" in writer
 assert "!_ownsReadSession || readCleanup.generationAdvanced" in writer
 assert "CoreSet::SerialActionGate gate;" in probe
 assert "_submitted" not in probe
-assert "snapshot.battleInputsPresent" in probe
+assert "authority.controllerAddress" in probe
 assert "std::fabs(pitch) > 36" in probe and "std::fabs(yaw) > 36" in probe
 assert "CoreSetTargetWriteSlotRotationInput" in probe
 assert "context.lane = lane" in probe and "controller:context.controller lane:lane" in probe
 assert "restoreSnapshot:" not in probe and "absolute:YES" not in probe
-assert "self.validator(self.snapshot, self.token" in probe
+assert "self.validator(self.input, self.token" in probe
 assert "dispatch_sync(_queue, cleanup)" in probe
 aim = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
 assert "private var actionProbe: CoreSetIsolatedWriteProbe?" in aim
-assert "persistentActionWorker(snapshot:" in aim
-assert "CoreSetPlayerCollector.validateLiveIdentity(session, snapshot: captured)" in aim
+assert "persistentActionWorker(input:" in aim
+assert "CoreSetPlayerCollector.validateLiveAuthority(readSession, authority: captured)" in aim
 snapshot = (ROOT / "lara/overlay/CoreSetPlayerSnapshot.mm").read_text(encoding="utf-8")
 assert "+ (BOOL)validateLiveIdentity:" in snapshot
+assert "+ (BOOL)validateLiveAuthority:" in snapshot
 for anchor in ("session.imageBase + CSWorldSlot", "world + 0xc0", "driver + 0x88",
                "connection + 0x30", "controller == snapshot.controllerAddress",
                "local == snapshot.localActorAddress"):

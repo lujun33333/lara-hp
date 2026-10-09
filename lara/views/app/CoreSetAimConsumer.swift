@@ -7,15 +7,11 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     typealias State = CoreSetAimSettings
     let capability = CoreSetCapability.aimControl
     private weak var coordinator: CoreSetRuntimeCoordinator?
+    private let battleProducer: CoreSetBattleProducer
     private let worker = DispatchQueue(label: "coreset.basic.aim", qos: .userInitiated)
-    private let rosterWorker = DispatchQueue(label: "coreset.basic.aim.roster", qos: .utility)
-    private var session = CoreSetReadSession()
-    private var rosterSession = CoreSetReadSession()
-    private let rosterLock = NSLock()
     private let triggerState = CoreSetBasicAimTriggerState()
     private let dynamics = CoreSetV17AimDynamics()
     private let recoilDynamics = CoreSetV17RecoilDynamics()
-    private let routeDynamics = CoreSetV17ActionRouteDynamics()
     private var selectedActor: UInt64 = 0
     private var selectedGeneration: UInt64 = 0
     private var selectedStartedAt: Double = 0
@@ -60,24 +56,6 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     private var lastAimCaptureFailureLogAt: Double = 0
     private var lastRecoilCaptureFailure = ""
     private var lastRecoilCaptureFailureLogAt: Double = 0
-    private struct ActionRosterDemand: Equatable {
-        let requestID: UUID
-        let hostGeneration: UInt64
-        let revision: UInt64
-        let canvasSize: CGSize
-        let maximumDistance: Int
-        let playerBones: Bool
-        let botBones: Bool
-    }
-    private struct ActionRosterPublication {
-        let demand: ActionRosterDemand
-        let snapshot: CoreSetPlayerSnapshot
-        let publishedAt: Double
-    }
-    private var rosterDemand: ActionRosterDemand?
-    private var rosterPublication: ActionRosterPublication?
-    private var rosterCaptureInFlight = false
-    private var rosterDiagnostic = "candidate-publication-empty"
     private(set) var status = "目标只读会话未就绪"
 
     var recoilAvailability: CoreSetAvailability { availability }
@@ -86,22 +64,18 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
          .recoilVerticalStrength, .recoilHorizontalEnabled, .recoilHorizontalStrength]
     }
 
-    init(coordinator: CoreSetRuntimeCoordinator) {
+    init(coordinator: CoreSetRuntimeCoordinator, battleProducer: CoreSetBattleProducer) {
         self.coordinator = coordinator
-        session.diagnosticLabel = "aim-action"
-        rosterSession.diagnosticLabel = "aim-roster-producer"
+        self.battleProducer = battleProducer
         readinessTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
         refresh()
     }
     private func refresh() {
         guard !closed, !cleanupPending else { return }
-        worker.async { [weak self] in
-            guard let self else { return }
-            let ready = self.session.connect() && self.session.capabilities == 1
-            DispatchQueue.main.async {
-                self.readReady = ready
-                self.coordinator?.refreshPlayerAvailability()
-            }
+        battleProducer.refreshReadiness { [weak self] ready in
+            guard let self, !self.closed else { return }
+            self.readReady = ready
+            self.coordinator?.refreshPlayerAvailability()
         }
     }
     var availability: CoreSetAvailability {
@@ -159,20 +133,21 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         }
         pendingProbes = retained
     }
-    private func persistentActionWorker(snapshot: CoreSetPlayerSnapshot,
+    private func persistentActionWorker(input: CoreSetActionInputAuthority,
         primaryToken: CoreSetRequestToken, hostGeneration: UInt64,
         revision: UInt64) -> CoreSetIsolatedWriteProbe? {
         let identity = ActionWorkerIdentity(requestID: primaryToken.requestID,
             hostGeneration: hostGeneration, revision: revision,
-            processID: snapshot.processID, imageBase: snapshot.imageBase,
-            readGeneration: snapshot.sessionGeneration, controller: snapshot.controllerAddress)
+            processID: input.processID, imageBase: input.imageBase,
+            readGeneration: input.sessionGeneration, controller: input.controllerAddress)
         if actionWorkerIdentity == identity, let actionProbe { return actionProbe }
         guard retireActionWorker(), pendingProbes.isEmpty else { return nil }
-        let probe = CoreSetIsolatedWriteProbe(readSession: session,
-            liveValidator: { [weak self, weak session] captured, token, liveHost, liveRevision in
-                guard let self, let session else { return false }
+        let readSession = battleProducer.readSession
+        let probe = CoreSetIsolatedWriteProbe(readSession: readSession,
+            liveValidator: { [weak self, weak readSession] captured, token, liveHost, liveRevision in
+                guard let self, let readSession else { return false }
                 return self.actionWorkerLive(token, host: liveHost, revision: liveRevision) &&
-                    CoreSetPlayerCollector.validateLiveIdentity(session, snapshot: captured)
+                    CoreSetPlayerCollector.validateLiveAuthority(readSession, authority: captured)
             })
         actionWorkerIdentity = identity; actionProbe = probe
         return probe
@@ -324,9 +299,6 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         recoilTimer = source
         source.resume()
     }
-    private func actionSlot(snapshot: CoreSetPlayerSnapshot) -> CoreSetTargetWriteSlot {
-        routeDynamics.slot(firingSample: snapshot.localFiringRaw)
-    }
     private func configuration(_ settings: State) -> CoreSetV17AimConfiguration? {
         guard let scene = settings.scene else { return nil }
         let custom = scene == .custom
@@ -355,113 +327,6 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             customPredictionMilliseconds: prediction ?? 0,
             customLockThreshold: lockThreshold ?? 0,
             customTakeoverPauseMilliseconds: pause ?? 0)
-    }
-    private struct BattleCaptureResult {
-        let snapshot: CoreSetPlayerSnapshot?
-        let failure: String
-    }
-    private func demand(primaryToken: CoreSetRequestToken, hostGeneration: UInt64,
-                        revision: UInt64, canvas: CGSize, distance: Int,
-                        includeBones: Bool, includeBots: Bool) -> ActionRosterDemand {
-        ActionRosterDemand(requestID: primaryToken.requestID,
-            hostGeneration: hostGeneration, revision: revision, canvasSize: canvas,
-            maximumDistance: distance, playerBones: includeBones,
-            botBones: includeBones && includeBots)
-    }
-    private func requestRoster(_ demand: ActionRosterDemand, freshCandidates: Bool) {
-        rosterLock.lock()
-        rosterDemand = demand
-        let publicationReady = rosterPublication.map {
-            $0.demand == demand && (!freshCandidates ||
-                CACurrentMediaTime() - $0.publishedAt <= 1.0)
-        } == true
-        guard !publicationReady, !rosterCaptureInFlight else {
-            rosterLock.unlock(); return
-        }
-        rosterCaptureInFlight = true
-        rosterLock.unlock()
-        rosterWorker.async { [weak self] in self?.produceRoster() }
-    }
-    private func produceRoster() {
-        rosterLock.lock()
-        guard let demand = rosterDemand else {
-            rosterCaptureInFlight = false; rosterLock.unlock(); return
-        }
-        rosterLock.unlock()
-        let connected = rosterSession.connect() && rosterSession.capabilities == 1
-        let failureSequence = rosterSession.readFailureSequence
-        let snapshot = connected ? CoreSetPlayerCollector.capture(rosterSession,
-            canvasSize: demand.canvasSize, playerBones: demand.playerBones,
-            botBones: demand.botBones,
-            boneDistanceLimit: demand.playerBones || demand.botBones
-                ? Double(demand.maximumDistance) : 0,
-            includeOffscreen: false, includeRadar: false, includeBattleInputs: false,
-            playerWeaponText: false, botWeaponText: false, includeGrenadeWarning: false,
-            includeCounts: !demand.playerBones, playerInformation: false, botInformation: false,
-            includeWarningYaw: false,
-            maximumDrawDistance: Double(demand.maximumDistance)) : nil
-        let diagnostic: String
-        if !connected { diagnostic = rosterSession.lastConnectDiagnostic }
-        else if rosterSession.readFailureSequence != failureSequence {
-            diagnostic = rosterSession.lastReadDiagnostic
-        } else { diagnostic = CoreSetPlayerCollector.lastCaptureDiagnostic() }
-        let publishedAt = CACurrentMediaTime()
-        rosterLock.lock()
-        let stillCurrent = rosterDemand == demand
-        if stillCurrent, let snapshot,
-           snapshot.processID == rosterSession.processID,
-           snapshot.imageBase == rosterSession.imageBase {
-            rosterPublication = ActionRosterPublication(demand: demand,
-                snapshot: snapshot, publishedAt: publishedAt)
-            rosterDiagnostic = "ready snapshot=\(snapshot.snapshotID.uuidString)"
-        } else if stillCurrent {
-            rosterPublication = nil
-            rosterDiagnostic = diagnostic
-        }
-        rosterCaptureInFlight = false
-        let changed = rosterDemand != nil && rosterDemand != demand
-        if changed { rosterCaptureInFlight = true }
-        rosterLock.unlock()
-        if changed { rosterWorker.async { [weak self] in self?.produceRoster() } }
-    }
-    private func publishedRoster(for demand: ActionRosterDemand,
-                                 freshCandidates: Bool) -> (CoreSetPlayerSnapshot?, String) {
-        rosterLock.lock(); defer { rosterLock.unlock() }
-        guard let publication = rosterPublication, publication.demand == demand,
-              !freshCandidates || CACurrentMediaTime() - publication.publishedAt <= 1.0 else {
-            return (nil, rosterDiagnostic)
-        }
-        return (publication.snapshot, rosterDiagnostic)
-    }
-    private func invalidatePublishedRoster(_ demand: ActionRosterDemand) {
-        rosterLock.lock()
-        if rosterPublication?.demand == demand { rosterPublication = nil }
-        rosterDiagnostic = "candidate-publication-invalidated"
-        rosterLock.unlock()
-    }
-    private func captureAction(_ size: CGSize, distance: Int, includeBones: Bool,
-                               includeBots: Bool, targetActor: UInt64,
-                               primaryToken: CoreSetRequestToken, hostGeneration: UInt64,
-                               revision: UInt64) -> BattleCaptureResult {
-        let expected = demand(primaryToken: primaryToken, hostGeneration: hostGeneration,
-            revision: revision, canvas: size, distance: distance,
-            includeBones: includeBones, includeBots: includeBots)
-        let freshCandidates = targetActor == 0 && includeBones
-        requestRoster(expected, freshCandidates: freshCandidates)
-        let publication = publishedRoster(for: expected, freshCandidates: freshCandidates)
-        guard let roster = publication.0 else {
-            return BattleCaptureResult(snapshot: nil,
-                failure: "candidate-publication-waiting \(publication.1)")
-        }
-        let failureSequence = session.readFailureSequence
-        let snapshot = CoreSetPlayerCollector.refreshAction(for: roster,
-            targetActor: targetActor, session: session, canvasSize: size,
-            maximumDrawDistance: Double(distance))
-        if snapshot == nil { invalidatePublishedRoster(expected) }
-        let failure = session.readFailureSequence != failureSequence
-            ? session.lastReadDiagnostic
-            : "\(CoreSetPlayerCollector.lastCaptureDiagnostic()) transport-errors=0"
-        return BattleCaptureResult(snapshot: snapshot, failure: failure)
     }
     private func shouldAttemptBattleCapture(now: Double) -> Bool {
         now.isFinite && now >= 0 && now >= nextBattleCaptureAt
@@ -494,22 +359,20 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         else { lastRecoilCaptureFailure = "" }
     }
     private func displayPoint(target: CoreSetWorldPoint,
-                              snapshot: CoreSetPlayerSnapshot) -> CGPoint? {
-        guard let camera = snapshot.cameraWorldPosition else { return nil }
-        let width = Double(snapshot.canvasSize.width), height = Double(snapshot.canvasSize.height)
-        let fov = Double(snapshot.cameraFieldOfViewDegrees)
-        guard width.isFinite, height.isFinite, width > 0, height > 0,
-              fov.isFinite, fov > 1, fov < 170 else { return nil }
+                              candidate: CoreSetActionCandidateRecord) -> CGPoint? {
+        let raw = candidate.raw
+        let width = Double(candidate.canvasSize.width), height = Double(candidate.canvasSize.height)
+        let fov = candidate.cameraFieldOfViewDegrees
+        guard width > 0, height > 0, fov.isFinite, fov > 1, fov < 170 else { return nil }
         let degrees = Double.pi / 180
-        let pitch = Double(snapshot.cameraPitchDegrees) * degrees
-        let yaw = Double(snapshot.cameraYawDegrees) * degrees
-        let roll = Double(snapshot.cameraRollDegrees) * degrees
-        let sp = sin(pitch), cp = cos(pitch)
-        let sy = sin(yaw), cy = cos(yaw)
+        let pitch = candidate.cameraPitchDegrees * degrees
+        let yaw = candidate.cameraYawDegrees * degrees
+        let roll = candidate.cameraRollDegrees * degrees
+        let sp = sin(pitch), cp = cos(pitch), sy = sin(yaw), cy = cos(yaw)
         let sr = sin(roll), cr = cos(roll)
-        let dx = Double(target.x - camera.x)
-        let dy = Double(target.y - camera.y)
-        let dz = Double(target.z - camera.z)
+        let dx = Double(target.x - raw.camera.0)
+        let dy = Double(target.y - raw.camera.1)
+        let dz = Double(target.z - raw.camera.2)
         let depth = dx * cp * cy + dy * cp * sy + dz * sp
         guard depth.isFinite, depth > 1 else { return nil }
         let right = dx * (sr * sp * cy - cr * sy) +
@@ -517,99 +380,82 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         let up = dx * (sr * sy - cr * sp * cy) +
             dy * (sr * cy - cr * sp * sy) + dz * cr * cp
         let focal = (width / 2) / tan(fov * degrees / 2)
-        let x = width / 2 + focal * right / depth
-        let y = height / 2 - focal * up / depth
-        guard x.isFinite, y.isFinite else { return nil }
-        return CGPoint(x: CGFloat(x), y: CGFloat(y))
+        let point = CGPoint(x: width / 2 + focal * right / depth,
+            y: height / 2 - focal * up / depth)
+        return point.x.isFinite && point.y.isFinite ? point : nil
     }
-    private func publishDisplayTarget(mark: CoreSetPlayerMark, target: CoreSetWorldPoint,
+    private func publishDisplayTarget(candidate: CoreSetActionCandidateRecord,
+                                      input: CoreSetActionInputAuthority,
                                       step: CoreSetBasicAimDelta,
-                                      snapshot: CoreSetPlayerSnapshot,
                                       request: CoreSetApplyRequest<State>,
                                       hostGeneration: UInt64, revision: UInt64) {
-        guard selectedActor != 0, selectedStartedAt.isFinite, selectedStartedAt >= 0,
-              let point = displayPoint(target: target, snapshot: snapshot) else {
+        let raw = candidate.raw
+        guard raw.valid != 0, raw.candidateKey != 0,
+              selectedStartedAt.isFinite, selectedStartedAt >= 0,
+              candidate.screenPoint.x.isFinite, candidate.screenPoint.y.isFinite else {
             CoreSetAimDisplayRecordStore.shared.clear()
             return
         }
-        let identity = CoreSetAimDisplaySourceIdentity(snapshotID: snapshot.snapshotID,
-            sessionGeneration: snapshot.sessionGeneration, processID: snapshot.processID,
-            imageBase: snapshot.imageBase, hostGeneration: hostGeneration,
+        let identity = CoreSetAimDisplaySourceIdentity(snapshotID: candidate.snapshotID,
+            sessionGeneration: candidate.sessionGeneration, processID: candidate.processID,
+            imageBase: candidate.imageBase, hostGeneration: hostGeneration,
             actionRevision: revision, actionRequestID: request.token.requestID)
-        let predictedWorldPoint: CoreSetAimDisplayWorldPoint?
-        let predictedScreenPoint: CGPoint?
-        if let predicted = step.predictedWorldPoint,
-           let projected = displayPoint(target: predicted, snapshot: snapshot),
-           projected.x > 0, projected.y > 0,
-           projected.x < snapshot.canvasSize.width,
-           projected.y < snapshot.canvasSize.height {
-            predictedWorldPoint = CoreSetAimDisplayWorldPoint(
-                x: predicted.x, y: predicted.y, z: predicted.z)
-            predictedScreenPoint = projected
-        } else {
-            predictedWorldPoint = nil; predictedScreenPoint = nil
-        }
+        let predicted = step.predictedWorldPoint
+        let predictedPoint = predicted.flatMap { displayPoint(target: $0, candidate: candidate) }
         let record = CoreSetAimDisplayRecord(identity: identity,
-            actorAddress: selectedActor, candidateKey: selectedActor,
+            actorAddress: raw.candidateKey, candidateKey: raw.candidateKey,
             candidateStartedMonotonicSeconds: selectedStartedAt,
-            worldPoint: CoreSetAimDisplayWorldPoint(x: target.x, y: target.y, z: target.z),
-            screenPoint: point, predictedWorldPoint: predictedWorldPoint,
-            predictedScreenPoint: predictedScreenPoint, bot: mark.bot,
-            distanceMeters: mark.distanceUnitsDividedBy100,
-            captureStartedMonotonicSeconds: snapshot.captureStartedMonotonicSeconds,
-            captureCompletedMonotonicSeconds: snapshot.captureCompletedMonotonicSeconds)
+            worldPoint: CoreSetAimDisplayWorldPoint(x: raw.target.0,
+                y: raw.target.1, z: raw.target.2),
+            screenPoint: candidate.screenPoint,
+            predictedWorldPoint: predicted.map {
+                CoreSetAimDisplayWorldPoint(x: $0.x, y: $0.y, z: $0.z)
+            }, predictedScreenPoint: predictedPoint, bot: candidate.bot,
+            distanceMeters: candidate.distanceMeters,
+            captureStartedMonotonicSeconds: input.captureStartedMonotonicSeconds,
+            captureCompletedMonotonicSeconds: input.captureCompletedMonotonicSeconds)
         CoreSetAimDisplayRecordStore.shared.publish(record)
     }
     private func resetAimRuntime() {
         dynamics.reset(); selectedActor = 0; selectedGeneration = 0; selectedStartedAt = 0
         CoreSetAimDisplayRecordStore.shared.clear()
     }
-    private func clearRosterPublication() {
-        rosterLock.lock()
-        rosterDemand = nil; rosterPublication = nil
-        rosterDiagnostic = "candidate-publication-empty"
-        rosterLock.unlock()
-    }
-    private func drainRosterProducer() -> Bool {
-        clearRosterPublication()
-        return rosterWorker.sync {
-            let cleanup = rosterSession.disconnect()
-            let clean = cleanup.taskPortReleased && cleanup.generationAdvanced
-            if clean {
-                rosterSession = CoreSetReadSession()
-                rosterSession.diagnosticLabel = "aim-roster-producer"
-            }
-            return clean
-        }
-    }
     private enum ActionSubmitResult { case idle, committed, failed(String) }
-    private func submitMergedAction(snapshot: CoreSetPlayerSnapshot, aimStep: CoreSetBasicAimDelta?,
+    private func submitMergedAction(input: CoreSetActionInputAuthority, aimStep: CoreSetBasicAimDelta?,
         recoilRequest: CoreSetApplyRequest<CoreSetRecoilSettings>?,
         primaryToken: CoreSetRequestToken, hostGeneration: UInt64, revision: UInt64,
         requireAimTrigger: Bool) -> ActionSubmitResult {
         let recoil = recoilRequest.flatMap { recoilConfiguration($0.desired) }
-        guard let merged = recoilDynamics.plan(snapshot: snapshot,
+        guard let merged = recoilDynamics.plan(input: input,
             aimPitch: aimStep?.pitch ?? 0, aimYaw: aimStep?.yaw ?? 0,
             geometrySampleKey: aimStep?.geometrySampleKey ?? 0,
             configuration: recoil) else {
             return .failed("Core v1.7 Aim/Recoil 合并状态无效")
         }
         let pitch = merged.pitch, yaw = merged.yaw
-        let slot = actionSlot(snapshot: snapshot)
         let recoilEnabled = recoil != nil
         if pitch == 0 && yaw == 0 {
             recoilDynamics.observeAimFeedback(pitch: aimStep?.pitch ?? 0,
-                inputRoute: slot == .rotationInput, recoilEnabled: recoilEnabled,
+                inputRoute: false, recoilEnabled: recoilEnabled,
                 aimActive: aimStep != nil, acceptedFirstAxis: false, bothZeroDraft: true)
             return .idle
         }
+        guard input.routeAuthorityResolved else {
+            return .failed("Core c2e24 写槽 authority 尚未闭合，拒绝用 firing 字节猜测 +0x620/+0x828")
+        }
+        let slot: CoreSetTargetWriteSlot
+        switch input.resolvedActionSlotRaw {
+        case 1: slot = .controlRotation
+        case 2: slot = .rotationInput
+        default: return .failed("Core c2e24 写槽值无效")
+        }
         let axis: CoreSetTargetWriteAxis = pitch != 0 && yaw != 0 ? .both : (pitch != 0 ? .first : .second)
         let lane: CoreSetTargetWriteLane = aimStep == nil && recoilEnabled ? .recoil : .aim
-        guard let probe = persistentActionWorker(snapshot: snapshot,
+        guard let probe = persistentActionWorker(input: input,
             primaryToken: primaryToken, hostGeneration: hostGeneration,
             revision: revision) else { return .failed("常驻动作 worker 清理或重建失败") }
         if requireAimTrigger && !triggerState.permits(now: CACurrentMediaTime()) { return .idle }
-        let result = probe.submit(snapshot: snapshot, requestToken: primaryToken.requestID,
+        let result = probe.submit(authority: input, requestToken: primaryToken.requestID,
             hostGeneration: hostGeneration, configRevision: revision, lane: lane,
             slot: slot, axis: axis, pitchDelta: pitch, yawDelta: yaw)
         if result.pending { _ = retireActionWorker() }
@@ -644,18 +490,19 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         }
         let now = CACurrentMediaTime()
         guard shouldAttemptBattleCapture(now: now) else { return }
-        let capture = captureAction(canvas, distance: 500, includeBones: false,
-            includeBots: false, targetActor: 0, primaryToken: recoilRequest.token,
+        battleProducer.requestRecoil(recoilRequest, canvas: canvas,
+            hostGeneration: hostGeneration, revision: revision)
+        let capture = battleProducer.copyAction(requestID: recoilRequest.token.requestID,
             hostGeneration: hostGeneration, revision: revision)
         guard isLive(recoilRequest.token, host: hostGeneration) else { return }
-        guard let snapshot = capture.snapshot, snapshot.battleInputsPresent else {
+        guard let capture else {
             let failedAt = CACurrentMediaTime()
             deferBattleCapture(now: failedAt)
-            noteCaptureFailure(capture.failure, lane: "recoil", now: failedAt)
+            noteCaptureFailure("battle-publication-waiting", lane: "recoil", now: failedAt)
             return
         }
         noteCaptureSuccess(lane: "recoil")
-        switch submitMergedAction(snapshot: snapshot, aimStep: nil, recoilRequest: recoilRequest,
+        switch submitMergedAction(input: capture.input, aimStep: nil, recoilRequest: recoilRequest,
             primaryToken: recoilRequest.token,
             hostGeneration: hostGeneration, revision: revision, requireAimTrigger: false) {
         case .idle: publish("压枪状态预热或本帧无补偿")
@@ -663,12 +510,12 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         case .failed(let reason): failRecoil(recoilRequest, reason)
         }
     }
-    private func runRecoilFallback(snapshot: CoreSetPlayerSnapshot,
+    private func runRecoilFallback(input: CoreSetActionInputAuthority,
         aimRequest: CoreSetApplyRequest<State>,
         recoilRequest: CoreSetApplyRequest<CoreSetRecoilSettings>?,
         hostGeneration: UInt64, revision: UInt64, idleStatus: String) {
         guard let recoilRequest else { publish(idleStatus); return }
-        switch submitMergedAction(snapshot: snapshot, aimStep: nil, recoilRequest: recoilRequest,
+        switch submitMergedAction(input: input, aimStep: nil, recoilRequest: recoilRequest,
             primaryToken: aimRequest.token,
             hostGeneration: hostGeneration, revision: revision, requireAimTrigger: false) {
         case .idle: publish(idleStatus + "；压枪本帧预热或无补偿")
@@ -685,27 +532,38 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         }
         let now = CACurrentMediaTime()
         guard shouldAttemptBattleCapture(now: now) else { return }
-        let refreshTarget = request.desired.lockSameTarget == true ? selectedActor : 0
-        let capture = captureAction(canvas, distance: configuration.maximumDistance,
-            includeBones: true, includeBots: request.desired.includeBots == true,
-            targetActor: refreshTarget, primaryToken: request.token,
+        let radius = CoreSetBasicAimDelta.circleRadius(canvasWidth: Double(canvas.width),
+            height: Double(canvas.height), size: size)
+        guard radius > 0 else { fail(request, "Core v1.7 自瞄圈参数无效"); return }
+        guard let point = request.desired.point else { fail(request, "fallback点未配置"); return }
+        battleProducer.requestAim(request, canvas: canvas, radius: radius,
+            maximumDistance: configuration.maximumDistance, point: point.rawValue,
+            includeBots: request.desired.includeBots == true,
+            excludeKnocked: request.desired.excludeKnocked == true,
+            lockSameTarget: request.desired.lockSameTarget == true,
+            hostGeneration: hostGeneration, revision: revision)
+        if let recoilRequest = activeRecoil {
+            battleProducer.requestRecoil(recoilRequest, canvas: canvas,
+                hostGeneration: hostGeneration, revision: revision)
+        }
+        let capture = battleProducer.copyAction(requestID: request.token.requestID,
             hostGeneration: hostGeneration, revision: revision)
         guard isLive(request.token, host: hostGeneration) else { return }
-        guard let snapshot = capture.snapshot, snapshot.battleInputsPresent,
-              snapshot.cameraWorldPosition != nil else {
+        guard let capture else {
             let failedAt = CACurrentMediaTime()
             deferBattleCapture(now: failedAt)
-            noteCaptureFailure(capture.failure, lane: "aim", now: failedAt)
+            noteCaptureFailure("battle-publication-waiting", lane: "aim", now: failedAt)
             return
         }
         noteCaptureSuccess(lane: "aim")
-        if selectedGeneration != 0 && selectedGeneration != snapshot.sessionGeneration { resetAimRuntime() }
+        let input = capture.input
+        if selectedGeneration != 0 && selectedGeneration != input.sessionGeneration { resetAimRuntime() }
         let recoilRequest = activeRecoil
         let trigger = triggerState.update(mode: request.desired.trigger?.rawValue ?? -1,
-            ads: snapshot.localADS, firing: snapshot.localFiring, now: CACurrentMediaTime())
+            ads: input.localADS, firing: input.localFiring, now: CACurrentMediaTime())
         if !trigger {
             guard recoilRequest != nil else { publish("等待触发，未写入"); return }
-            switch submitMergedAction(snapshot: snapshot, aimStep: nil, recoilRequest: recoilRequest,
+            switch submitMergedAction(input: input, aimStep: nil, recoilRequest: recoilRequest,
                 primaryToken: request.token, hostGeneration: hostGeneration,
                 revision: revision, requireAimTrigger: false) {
             case .idle: publish("等待自瞄触发；压枪本帧预热或无补偿")
@@ -714,12 +572,12 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             }
             return
         }
-        let takeoverAllowed = dynamics.permitsTakeover(pitch: snapshot.rotationInputPitch,
-            yaw: snapshot.rotationInputYaw, configuration: configuration,
-            now: snapshot.captureCompletedMonotonicSeconds)
+        let takeoverAllowed = dynamics.permitsTakeover(pitch: input.rotationInputPitch,
+            yaw: input.rotationInputYaw, configuration: configuration,
+            now: input.captureCompletedMonotonicSeconds)
         if !takeoverAllowed {
             guard recoilRequest != nil else { publish("检测到接管输入，暂停写入"); return }
-            switch submitMergedAction(snapshot: snapshot, aimStep: nil, recoilRequest: recoilRequest,
+            switch submitMergedAction(input: input, aimStep: nil, recoilRequest: recoilRequest,
                 primaryToken: request.token, hostGeneration: hostGeneration,
                 revision: revision, requireAimTrigger: false) {
             case .idle: publish("检测到接管输入；压枪本帧预热或无补偿")
@@ -728,66 +586,29 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             }
             return
         }
-        let radius = CoreSetBasicAimDelta.circleRadius(canvasWidth: Double(canvas.width),
-            height: Double(canvas.height), size: size)
-        guard radius > 0 else { fail(request, "Core v1.7 自瞄圈参数无效"); return }
-        guard let point = request.desired.point else { fail(request, "fallback点未配置"); return }
-        let previousActor = selectedActor
-        let selected = CoreSetBasicAimDelta.select(snapshot: snapshot, point: point.rawValue, radius: radius,
-            maximumDistance: Double(configuration.maximumDistance), includeBots: request.desired.includeBots == true,
-            excludeKnocked: request.desired.excludeKnocked == true,
-            lockSameTarget: request.desired.lockSameTarget == true, previousActor: previousActor)
-        let actor: UInt64
-        let target: CoreSetWorldPoint
-        if let selected,
-           let fallback = CoreSetBasicAimDelta.fallbackTarget(mark: selected, point: point.rawValue) {
-            actor = selected.actorAddress; target = fallback
-            if selectedActor != actor || selectedGeneration != snapshot.sessionGeneration {
-                dynamics.reset(); selectedActor = actor; selectedGeneration = snapshot.sessionGeneration
-                selectedStartedAt = snapshot.captureCompletedMonotonicSeconds
-            }
-            guard dynamics.rememberTarget(fallback, actor: actor,
-                generation: snapshot.sessionGeneration, now: snapshot.captureCompletedMonotonicSeconds) else {
-                resetAimRuntime()
-                runRecoilFallback(snapshot: snapshot, aimRequest: request, recoilRequest: recoilRequest,
-                    hostGeneration: hostGeneration, revision: revision, idleStatus: "目标缓存发布失败")
-                return
-            }
-        } else if selectedActor != 0,
-                  let cached = dynamics.cachedTarget(generation: snapshot.sessionGeneration,
-                    now: snapshot.captureCompletedMonotonicSeconds, stateClear: true) {
-            actor = selectedActor; target = cached
-        } else {
+        guard let candidate = capture.candidate else {
             resetAimRuntime()
-            runRecoilFallback(snapshot: snapshot, aimRequest: request, recoilRequest: recoilRequest,
+            runRecoilFallback(input: input, aimRequest: request, recoilRequest: recoilRequest,
                 hostGeneration: hostGeneration, revision: revision, idleStatus: "范围内无目标，缓存已失效")
             return
         }
-        guard let freshMark = snapshot.marks.first(where: {
-            $0.actorAddress == actor && $0.actorWorldPosition != nil
-        }) else {
-            CoreSetAimDisplayRecordStore.shared.clear()
-            runRecoilFallback(snapshot: snapshot, aimRequest: request, recoilRequest: recoilRequest,
-                hostGeneration: hostGeneration, revision: revision,
-                idleStatus: "75ms目标缓存保持；fresh actor拒绝自瞄")
-            return
+        let actor = candidate.raw.candidateKey
+        if selectedActor != actor || selectedGeneration != candidate.sessionGeneration {
+            dynamics.reset(); selectedActor = actor; selectedGeneration = candidate.sessionGeneration
+            selectedStartedAt = candidate.captureCompletedMonotonicSeconds
         }
-        if selectedStartedAt == 0 { selectedStartedAt = snapshot.captureCompletedMonotonicSeconds }
-        guard let camera = snapshot.cameraWorldPosition,
-              let step = dynamics.plan(camera: camera, target: target,
-                actor: actor, publicationID: snapshot.snapshotID,
-                now: snapshot.captureCompletedMonotonicSeconds,
-                currentPitch: snapshot.controlPitchDegrees, currentYaw: snapshot.controlYawDegrees,
-                configuration: configuration) else {
+        if selectedStartedAt == 0 { selectedStartedAt = candidate.captureCompletedMonotonicSeconds }
+        guard let step = dynamics.plan(candidate: candidate, input: input,
+            configuration: configuration) else {
             CoreSetAimDisplayRecordStore.shared.clear()
-            runRecoilFallback(snapshot: snapshot, aimRequest: request, recoilRequest: recoilRequest,
+            runRecoilFallback(input: input, aimRequest: request, recoilRequest: recoilRequest,
                 hostGeneration: hostGeneration, revision: revision,
                 idleStatus: "目标状态预热或采样间隔超限")
             return
         }
-        publishDisplayTarget(mark: freshMark, target: target, step: step, snapshot: snapshot,
+        publishDisplayTarget(candidate: candidate, input: input, step: step,
             request: request, hostGeneration: hostGeneration, revision: revision)
-        switch submitMergedAction(snapshot: snapshot, aimStep: step, recoilRequest: recoilRequest,
+        switch submitMergedAction(input: input, aimStep: step, recoilRequest: recoilRequest,
             primaryToken: request.token, hostGeneration: hostGeneration,
             revision: revision, requireAimTrigger: true) {
         case .idle: publish("已对准目标，且压枪本帧无补偿")
@@ -810,8 +631,8 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         _ = retireActionWorker()
         let completion = pendingCompletion; pendingCompletion = nil
         active = nil
+        battleProducer.releaseAim(requestID: request.token.requestID)
         if let recoil = activeRecoil { failRecoil(recoil, reason) }
-        else { _ = drainRosterProducer() }
         let pending = !pendingProbes.isEmpty
         DispatchQueue.main.async { [weak self] in
             if let self {
@@ -833,8 +654,9 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         let callback = pendingRecoilCompletion
         pendingRecoilCompletion = nil
         activeRecoil = nil
+        battleProducer.releaseRecoil(requestID: request.token.requestID)
         if active == nil {
-            _ = retireActionWorker(); invalidateHost(); _ = drainRosterProducer()
+            _ = retireActionWorker(); invalidateHost()
         }
         DispatchQueue.main.async { [weak self] in
             callback?(request.token, .failed(reason: reason))
@@ -850,6 +672,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             let canceled = self.activeRecoil
             let callback = self.pendingRecoilCompletion
             self.activeRecoil = nil; self.pendingRecoilCompletion = nil
+            self.battleProducer.releaseRecoil(requestID: canceled?.token.requestID ?? token.requestID)
             if let canceled, let callback {
                 DispatchQueue.main.async { callback(canceled.token, .failed(reason: "首次压枪提交前已停止")) }
             }
@@ -866,12 +689,8 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                 return
             }
             self.invalidateHost()
-            let rosterClean = self.drainRosterProducer()
-            let readClean = self.session.disconnect()
-            let clean = rosterClean && self.pendingProbes.isEmpty &&
-                readClean.taskPortReleased && readClean.generationAdvanced
+            let clean = self.pendingProbes.isEmpty
             if clean {
-                self.session = CoreSetReadSession(); self.session.diagnosticLabel = "aim-action"
                 self.recoilWritesCommitted = false
                 self.unrestoredActionEffects = false
             }
@@ -892,6 +711,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             self.resetAimRuntime()
             let canceled = self.active, callback = self.pendingCompletion
             self.active = nil; self.pendingCompletion = nil
+            self.battleProducer.releaseAim(requestID: canceled?.token.requestID ?? token.requestID)
             if let canceled, let callback {
                 DispatchQueue.main.async { callback(canceled.token, .failed(reason: "首次提交前已停止")) }
             }
@@ -925,12 +745,8 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             }
             self.invalidateHost()
             self.recoilTimer?.cancel(); self.recoilTimer = nil
-            let rosterClean = self.drainRosterProducer()
-            let readClean = self.session.disconnect()
-            let clean = rosterClean && self.pendingProbes.isEmpty &&
-                readClean.taskPortReleased && readClean.generationAdvanced
+            let clean = self.pendingProbes.isEmpty
             if clean {
-                self.session = CoreSetReadSession(); self.session.diagnosticLabel = "aim-action"
                 self.aimWritesCommitted = false
                 self.unrestoredActionEffects = false
             }
@@ -956,12 +772,11 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             recoilDynamics.reset()
             active = nil; activeRecoil = nil
             pendingCompletion = nil; pendingRecoilCompletion = nil
+            battleProducer.releaseAim(requestID: nil)
+            battleProducer.releaseRecoil(requestID: nil)
             _ = retireActionWorker()
             drainPendingActionWorkers()
-            let rosterClean = drainRosterProducer()
-            let result = session.disconnect()
-            let clean = rosterClean && pendingProbes.isEmpty &&
-                result.taskPortReleased && result.generationAdvanced
+            let clean = pendingProbes.isEmpty
             if clean {
                 aimWritesCommitted = false; recoilWritesCommitted = false
                 unrestoredActionEffects = false

@@ -30,6 +30,8 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         cls.profile = read("lara/overlay/CoreSetKernelReadProfile.mm")
         cls.darksword = read("lara/kexploit/darksword.m")
         cls.session = read("lara/overlay/CoreSetReadSession.mm")
+        cls.xpfitems = read("lara/kexploit/xpfitems.m")
+        cls.offsets = read("lara/kexploit/offsets.m")
 
     def test_transport_exposes_read_and_cleanup_only(self) -> None:
         for exposed in ("identityValid", "findImageWithUUID", "imageAt:",
@@ -58,8 +60,8 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         self.assertNotIn("identityValidLocked", page_loop)
         self.assertNotIn("vmmapremotepagereadonly", self.source)
         translate = body(self.source, "- (uint64_t)walkPhysicalAddressForUserAddressLocked:")
-        for gate in ("coreset_arm_tt_l1_index_mask", "CSArmTTEValid",
-                     "CSArmTTETableMask", "CSArmTTEPhysicalMask",
+        for gate in ("_indexMasks[level]", "_shifts[level]", "CSArmTTEValid",
+                     "_tableMask", "CSArmTTEPhysicalMask", "_offsetMasks[level]",
                      "_targetTTEPIsPhysical", "readPhysical64Locked"):
             self.assertIn(gate, translate)
         checked = body(self.darksword, "bool ds_kreadbuf_checked(")
@@ -101,11 +103,45 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         )
         self.assertIn("ttep == 0", initialization)
         self.assertNotIn("ttep & (CSKernelReadPageSize - 1)", initialization)
-        self.assertIn(
-            "CSArmTTETableMask = 0x0000FFFFFFFFC000ULL",
-            self.source,
-        )
-        self.assertIn("nextPhysical & (CSKernelReadPageSize - 1)", self.source)
+        self.assertIn("tableMaskOut) *tableMaskOut = 0x0000FFFFFFFFC000ULL", self.source)
+        self.assertIn("tableMaskOut) *tableMaskOut = 0x0000FFFFFFFFF000ULL", self.source)
+        self.assertIn("nextPhysical & (_pageSize - 1)", self.source)
+
+    def test_core_translation_layout_supports_verified_t1sz_page_matrix(self) -> None:
+        layout = body(self.source, "static BOOL CSTranslationLayout(")
+        for exact in ("pageSize == 0x4000", "t1sz_boot == 0x19",
+                      "t1sz_boot == 0x11", "0x0000007000000000ULL",
+                      "0x00007FF000000000ULL", "pageSize == 0x1000",
+                      "t1sz_boot == 0x1A", "0x0000003FC0000000ULL"):
+            self.assertIn(exact, layout)
+        self.assertIn("shiftsOut[0] = 36", layout)
+        self.assertIn("shiftsOut[0] = 30", layout)
+        self.assertIn("offsetMasksOut[2] = 0x0000000000003FFFULL", layout)
+        self.assertIn("offsetMasksOut[2] = 0x0000000000000FFFULL", layout)
+        profile = body(self.profile, "+ (BOOL)matchesCurrentKernel")
+        self.assertIn("translationLayoutMatch", profile)
+        self.assertNotIn("t1sz_boot == 0x19 && getpagesize() == 0x4000", profile)
+
+    def test_physical_map_uses_split_direct_legacy_and_linear_sources(self) -> None:
+        initialization = body(self.source, "- (instancetype)initWithKernelProcess:")
+        for source in ('@"sptm-split-globals"', '@"ptov-direct-table"',
+                       '@"ptov-legacy-wrapper+0x10"', '@"linear-gphys"'):
+            self.assertIn(source, initialization)
+        self.assertIn("sizeof(CSPhysicalMapEntry) == 0x18", self.source)
+        self.assertIn("sizeof(CSSPTMRawPAPTEntry) == 0x18", self.source)
+        self.assertIn("CSLoadDirectPhysicalMap(directTable", initialization)
+        self.assertIn("CSLoadDirectPhysicalMap(directTable + 0x10", initialization)
+        linear = body(self.source, "- (uint64_t)kernelVirtualForPhysicalLocked:")
+        for gate in ("_linearMappingReady", "_linearPhysicalBase",
+                     "_linearPhysicalSize", "_linearVirtualBase"):
+            self.assertIn(gate, linear)
+        for symbol in ("kernelSymbol.gVirtBase", "kernelSymbol.gPhysBase",
+                       "kernelSymbol.gPhysSize", "kernelSymbol.ptov_table"):
+            self.assertIn(symbol, self.xpfitems)
+        self.assertIn("splitPAPTComplete || linearPTOVComplete", self.xpfitems)
+        for offset in ("coreset_g_virt_base_offset", "coreset_g_phys_base_offset",
+                       "coreset_g_phys_size_offset", "coreset_ptov_table_offset"):
+            self.assertIn(offset, self.offsets)
 
     def test_identity_binds_proc_pid_task_vm_map_pmap_and_ttep(self) -> None:
         identity = body(self.source, "- (BOOL)identityValidLocked")
@@ -129,9 +165,8 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         prerequisites = body(self.source, "static BOOL CSKernelMappedReadPrerequisites(")
         self.assertIn("[CoreSetKernelReadProfile matchesCurrentKernel]", prerequisites)
         for exact in ("coreset_vm_map_pmap_offset == 0x40",
-                      "coreset_arm_tt_l1_index_mask == 0x0000007000000000ULL",
-                      "coreset_libsptm_n_papt_ranges_offset != 0",
-                      "coreset_libsptm_papt_ranges_offset != 0"):
+                      "CSTranslationLayout(&pageSize, &tableMask",
+                      "hasPAPT || hasLinear || hasDirect"):
             self.assertIn(exact, prerequisites)
         for exact in ("23A341", "iPhone17,2", "xnu-12377.2.8~1",
                       "off_proc_p_pid == 0x60", "off_task_itk_space == 0x310",
@@ -251,13 +286,16 @@ class KernelMappedReadTransportContract(unittest.TestCase):
 
     def test_all_cleanup_consumers_require_complete(self) -> None:
         for relative, signature in (
-            ("lara/views/app/CoreSetPlayerConsumer.swift", "func shutdownReadSession()"),
             ("lara/views/app/CoreSetMaterialConsumer.swift", "func shutdownReadSession()"),
             ("lara/views/app/CoreSetRadarConsumer.swift", "func shutdownReadSession()"),
         ):
             shutdown = body(read(relative), signature)
             self.assertIn("cleanup.complete", shutdown, relative)
             self.assertNotIn("cleanup.taskPortReleased && cleanup.generationAdvanced", shutdown)
+        player_shutdown = body(read("lara/views/app/CoreSetPlayerConsumer.swift"),
+                               "func shutdownReadSession()")
+        self.assertIn("battleProducer.releaseDisplay(requestID: nil)", player_shutdown)
+        self.assertNotIn("session.disconnect()", player_shutdown)
         preview = read("lara/views/app/CoreSetAimPreviewConsumer.swift")
         preview_shutdown = body(preview, "func shutdown()")
         self.assertNotIn("CoreSetReadSession", preview)
@@ -267,16 +305,11 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         self.assertEqual(probe.count("cleanup.complete"), 2)
         self.assertNotIn("cleanup.taskPortReleased && cleanup.generationAdvanced", probe)
         aim = read("lara/views/app/CoreSetAimConsumer.swift")
-        roster_cleanup = body(aim, "private func drainRosterProducer()")
-        self.assertIn("rosterSession.disconnect()", roster_cleanup)
-        self.assertIn("cleanup.generationAdvanced", roster_cleanup)
-        aim_stop = body(aim, "func stop(_ token:")
-        self.assertIn("drainRosterProducer()", aim_stop)
-        self.assertIn("session.disconnect()", aim_stop)
+        self.assertNotIn("rosterSession", aim)
+        self.assertNotIn("session.disconnect()", aim)
         aim_shutdown = body(aim, "func shutdownWriteSession()")
-        self.assertIn("drainRosterProducer()", aim_shutdown)
-        self.assertIn("session.disconnect()", aim_shutdown)
-        self.assertIn("result.generationAdvanced", aim_shutdown)
+        self.assertIn("battleProducer.releaseAim(requestID: nil)", aim_shutdown)
+        self.assertIn("battleProducer.releaseRecoil(requestID: nil)", aim_shutdown)
         writer = read("lara/overlay/CoreSetTargetWriteSession.mm")
         disconnect = body(writer, "- (CoreSetTargetWriteCleanupResult *)disconnect")
         self.assertIn("readCleanup = _ownsReadSession ? [_readSession disconnect] : nil", disconnect)

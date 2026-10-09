@@ -171,16 +171,48 @@ class SPTMTransportContract(unittest.TestCase):
             '"kernelStruct.vm_map.pmap"',
             '"kernelSymbol.libsptm_n_papt_ranges"',
             '"kernelSymbol.libsptm_papt_ranges"',
+            '"kernelSymbol.gVirtBase"',
+            '"kernelSymbol.gPhysBase"',
+            '"kernelSymbol.gPhysSize"',
         ):
             self.assertIn(item, items)
         self.assertIn("gxpf_libsptm_papt_ranges - gXPF.kernelBase", offsets)
         self.assertIn("gxpf_libsptm_n_papt_ranges - gXPF.kernelBase", offsets)
-        self.assertIn("CSSPTMPAPTEntry", transport)
+        self.assertIn("CSSPTMRawPAPTEntry", transport)
+        self.assertIn("CSPhysicalMapEntry", transport)
         self.assertIn("_targetTTEPIsPhysical", transport)
         self.assertIn("physicalAddressForUserAddressLocked", transport)
         self.assertNotIn("vmmapremotepagereadonly", transport)
         self.assertIn("bool ds_kreadbuf_checked", darksword)
         self.assertIn("read_data_length == (socklen_t)size", darksword)
+
+    def test_compressed_papt_root_frame_index_is_not_selected_as_physmap(self) -> None:
+        sptm = read("vendor/XPF/src/sptm_txm.c")
+        items = read("lara/kexploit/xpfitems.m")
+        offsets_h = read("lara/kexploit/offsets.h")
+        offsets_m = read("lara/kexploit/offsets.m")
+        transport = read("lara/overlay/CoreSetKernelMappedReadTransport.mm")
+
+        for abi_marker in (
+            "uint64_t startAddr, baseAddr; uint32_t numPages, pad; } // 0x18",
+            "n_papt_ranges_compressed is a direct uint32_t",
+            "numPages << 14",
+            "SPTM frame metadata",
+            "must never be used as phystokv data",
+        ):
+            self.assertIn(abi_marker, sptm)
+
+        self.assertIn("root-page -> SPTM frame-metadata", items)
+        self.assertIn("indexes root-frame metadata", offsets_h)
+        self.assertIn("must not be normalized against gXPF.kernelBase", offsets_m)
+        self.assertIn("It is not a physical-memory", transport)
+
+        self.assertNotIn(
+            'xpc_dictionary_get_uint64(dict, "kernelSymbol.papt_ranges_compressed")',
+            items,
+        )
+        self.assertNotIn("coreset_papt_ranges_compressed_offset", offsets_h + offsets_m)
+        self.assertNotIn('@"sptm-compressed', transport)
 
 
 if __name__ == "__main__":

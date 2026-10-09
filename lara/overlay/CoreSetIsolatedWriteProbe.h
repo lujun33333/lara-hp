@@ -8,7 +8,7 @@ NS_ASSUME_NONNULL_BEGIN
 // YES merely by comparing the supplied arguments with themselves or cached data.
 // Called synchronously on the probe worker, repeatedly before/after the write.
 // Must not call probe submit/stop recursively or synchronously wait on the UI.
-typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
+typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetActionInputAuthority *captured,
     NSUUID *requestToken, uint64_t hostGeneration, uint64_t configRevision);
 
 @interface CoreSetBasicAimDelta : NSObject
@@ -74,6 +74,10 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
     now:(double)now currentPitch:(float)currentPitch currentYaw:(float)currentYaw
     configuration:(CoreSetV17AimConfiguration *)configuration
     NS_SWIFT_NAME(plan(camera:target:actor:publicationID:now:currentPitch:currentYaw:configuration:));
+- (nullable CoreSetBasicAimDelta *)planCandidate:(CoreSetActionCandidateRecord *)candidate
+    input:(CoreSetActionInputAuthority *)input
+    configuration:(CoreSetV17AimConfiguration *)configuration
+    NS_SWIFT_NAME(plan(candidate:input:configuration:));
 @end
 
 @interface CoreSetV17ActionDelta : NSObject
@@ -104,6 +108,10 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
     aimPitch:(float)aimPitch aimYaw:(float)aimYaw geometrySampleKey:(uint64_t)geometrySampleKey
     configuration:(nullable CoreSetV17RecoilConfiguration *)configuration
     NS_SWIFT_NAME(plan(snapshot:aimPitch:aimYaw:geometrySampleKey:configuration:));
+- (nullable CoreSetV17ActionDelta *)planInput:(CoreSetActionInputAuthority *)input
+    aimPitch:(float)aimPitch aimYaw:(float)aimYaw geometrySampleKey:(uint64_t)geometrySampleKey
+    configuration:(nullable CoreSetV17RecoilConfiguration *)configuration
+    NS_SWIFT_NAME(plan(input:aimPitch:aimYaw:geometrySampleKey:configuration:));
 // Core only feeds prior s13 after the input route's accepted/zero-draft path.
 - (void)observeAimFeedbackWithPitch:(float)aimPitch inputRoute:(BOOL)inputRoute
     recoilEnabled:(BOOL)recoilEnabled aimActive:(BOOL)aimActive
@@ -111,12 +119,6 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
     NS_SWIFT_NAME(observeAimFeedback(pitch:inputRoute:recoilEnabled:aimActive:acceptedFirstAxis:bothZeroDraft:));
 @end
 
-// Stateless wrapper for worker c2fbc and c2ef4..c2f24. The same-cycle raw
-// firing byte selects the exact Core v1.7 +0x620/+0x828 action slot.
-@interface CoreSetV17ActionRouteDynamics : NSObject
-- (CoreSetTargetWriteSlot)slotForFiringSample:(uint8_t)firingSample
-    NS_SWIFT_NAME(slot(firingSample:));
-@end
 @interface CoreSetBasicAimTriggerState : NSObject
 - (void)reset;
 - (BOOL)updateMode:(NSInteger)mode ads:(BOOL)ads firing:(BOOL)firing now:(double)now
@@ -146,6 +148,12 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
     axis:(CoreSetTargetWriteAxis)axis
     pitchDelta:(float)pitchDelta yawDelta:(float)yawDelta
     NS_SWIFT_NAME(submit(snapshot:requestToken:hostGeneration:configRevision:lane:slot:axis:pitchDelta:yawDelta:));
+- (CoreSetTargetWriteResult *)submitAuthority:(CoreSetActionInputAuthority *)authority
+    requestToken:(NSUUID *)requestToken hostGeneration:(uint64_t)hostGeneration
+    configRevision:(uint64_t)configRevision lane:(CoreSetTargetWriteLane)lane
+    slot:(CoreSetTargetWriteSlot)slot axis:(CoreSetTargetWriteAxis)axis
+    pitchDelta:(float)pitchDelta yawDelta:(float)yawDelta
+    NS_SWIFT_NAME(submit(authority:requestToken:hostGeneration:configRevision:lane:slot:axis:pitchDelta:yawDelta:));
 // Synchronously revoke, drain, disconnect; stopped instances never resume.
 - (CoreSetTargetWriteCleanupResult *)stop;
 @end

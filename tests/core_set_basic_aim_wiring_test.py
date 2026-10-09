@@ -16,11 +16,11 @@ coordinator = read("lara/views/app/CoreSetRuntimeCoordinator.swift")
 manifest = read("scripts/build_ipa_pe.sh")
 
 for token in (
-    "CoreSetIsolatedWriteProbe", "includeBattleInputs: false", "refreshAction(for: roster",
+    "CoreSetIsolatedWriteProbe", "battleProducer.requestAim(", "battleProducer.copyAction(",
     "triggerState.update(", "dynamics.permitsTakeover(",
-    "CoreSetBasicAimDelta.select(", "dynamics.plan(",
-    "persistentActionWorker(snapshot:", "guard result.committed, isLive(",
-    "submitMergedAction(snapshot:", "applyRecoil(", "tickRecoilOnly(",
+    "dynamics.plan(candidate:", "persistentActionWorker(input:",
+    "guard result.committed, isLive(", "submitMergedAction(input:",
+    "applyRecoil(", "tickRecoilOnly(",
 ):
     assert token in aim, token
 
@@ -41,13 +41,13 @@ for token in (
 
 assert "initWithRequestAuthority:_authority" in native
 assert "readSession:readSession" in native
-assert "CoreSetIsolatedWriteProbe(readSession: session" in aim
+assert "CoreSetIsolatedWriteProbe(readSession: readSession" in aim
 assert "writeControllerActionForPID:" in native
 assert "CoreSetTargetWriteSlotControlRotation" in native
 assert "CoreSetTargetWriteSlotRotationInput" in native
 assert "restoreSnapshot:" not in native
 assert "expectedOld:[NSData dataWithBytes:oldValues + index length:length]" in native
-assert "aimConsumer = CoreSetAimConsumer(coordinator: self)" in coordinator
+assert "aimConsumer = CoreSetAimConsumer(coordinator: self, battleProducer: battleProducer)" in coordinator
 assert "editGame(\\.aim)" in menu
 assert "apply(\\.radar); apply(\\.aimDisplay); apply(\\.aim)" in menu
 assert '"transportPolicy": "checked-control-and-input-rotation-write"' in manifest

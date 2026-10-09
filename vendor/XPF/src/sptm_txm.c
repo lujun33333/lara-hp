@@ -674,6 +674,17 @@ uint64_t xpf_find_papt_ranges_update(void)
 
 int xpf_find_papt_ranges_compressed_n_papt_ranges_compressed(uint64_t *papt_ranges_compressed, uint64_t *n_papt_ranges_compressed)
 {
+	/*
+	 * 23A341 papt_ranges_update produces an SPTM-domain root-frame index:
+	 *
+	 *   { uint64_t startAddr, baseAddr; uint32_t numPages, pad; } // 0x18
+	 *
+	 * n_papt_ranges_compressed is a direct uint32_t and
+	 * papt_ranges_compressed is a direct array (neither is a pointer slot).
+	 * The consumer covers numPages << 14 bytes and translates matching root
+	 * pages to SPTM frame metadata.  These symbols are not the kernel-domain
+	 * libsptm physical-aperture table and must never be used as phystokv data.
+	 */
 	uint64_t papt_ranges_update = xpf_item_resolve("kernelSymbol.papt_ranges_update");
 	XPF_ASSERT(papt_ranges_update);
 

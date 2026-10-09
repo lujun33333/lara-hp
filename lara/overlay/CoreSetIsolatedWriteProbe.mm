@@ -280,6 +280,52 @@ private:
     }
     return result;
 }
+- (CoreSetBasicAimDelta *)planCandidate:(CoreSetActionCandidateRecord *)candidate
+    input:(CoreSetActionInputAuthority *)input
+    configuration:(CoreSetV17AimConfiguration *)configuration {
+    if (!candidate || !input || !configuration || !candidate.raw.valid ||
+        !candidate.raw.candidateKey || !candidate.raw.publicationSerial ||
+        candidate.sessionGeneration != input.sessionGeneration ||
+        candidate.processID != input.processID || candidate.imageBase != input.imageBase ||
+        candidate.controllerAddress != input.controllerAddress ||
+        ![candidate.snapshotID isEqual:input.snapshotID]) return nil;
+    const auto raw = candidate.raw;
+    const double now = input.captureCompletedMonotonicSeconds;
+    const CoreSet::AimWorldPoint target{raw.target[0], raw.target[1], raw.target[2]};
+    const CoreSet::AimWorldPoint camera{raw.camera[0], raw.camera[1], raw.camera[2]};
+    if (!CoreSet::referenceActionCandidateMotion(_motion, raw.candidateKey,
+            raw.publicationSerial, now, target, camera)) return nil;
+    CoreSet::ActionGeometryInput geometry;
+    geometry.key = raw.candidateKey;
+    geometry.monotonicNanoseconds = (uint64_t)std::llround(now * 1000000000.0);
+    geometry.camera = {camera.x, camera.y, camera.z};
+    geometry.target = {target.x, target.y, target.z};
+    geometry.relativeVelocity = {_motion.relativeVelocity.x, _motion.relativeVelocity.y,
+                                 _motion.relativeVelocity.z};
+    geometry.velocityPresent = _motion.velocityPresent;
+    geometry.currentAngles = {input.controlYawDegrees, input.controlPitchDegrees};
+    CoreSet::ActionGeometryTuning tuning;
+    tuning.compensation = {configuration.strength, configuration.smoothingSeconds,
+        configuration.lockThreshold, {configuration.horizontalSpeed, configuration.verticalSpeed},
+        configuration.residualGain, configuration.minimumGain};
+    tuning.predictionMilliseconds = (float)configuration.predictionMilliseconds;
+    tuning.deadzoneRatio = configuration.deadzoneRatio;
+    tuning.minimumDeadzone = configuration.minimumDeadzone;
+    CoreSet::ActionGeometryObservation observed;
+    if (!CoreSet::referenceActionGeometry(_geometry, geometry, tuning, &observed) || !observed.valid) return nil;
+    uint64_t sampleKey = 0;
+    std::memcpy(&sampleKey, observed.numerical.data(), sizeof(sampleKey));
+    CoreSetBasicAimDelta *result = [CoreSetBasicAimDelta new];
+    result.pitch = observed.numerical[5]; result.yaw = observed.numerical[4];
+    result.geometrySampleKey = sampleKey;
+    if (configuration.predictionMilliseconds >= 1.0 &&
+        std::isfinite(observed.numerical[11]) && std::isfinite(observed.numerical[12]) &&
+        std::isfinite(observed.numerical[13])) {
+        result.predictedWorldPoint = [CoreSetWorldPoint pointWithX:observed.numerical[11]
+            y:observed.numerical[12] z:observed.numerical[13]];
+    }
+    return result;
+}
 @end
 
 @interface CoreSetV17ActionDelta ()
@@ -417,6 +463,63 @@ private:
     const float recoilYaw = horizontalEnabled ? post.values[5] : 0;
     return finish(recoilPitch, recoilYaw);
 }
+- (CoreSetV17ActionDelta *)planInput:(CoreSetActionInputAuthority *)input
+    aimPitch:(float)aimPitch aimYaw:(float)aimYaw geometrySampleKey:(uint64_t)geometrySampleKey
+    configuration:(CoreSetV17RecoilConfiguration *)configuration {
+    const BOOL verticalEnabled = configuration.verticalEnabled;
+    const float verticalStrength = configuration.verticalStrength;
+    const BOOL stopWhenNotFiring = configuration ? configuration.stopWhenNotFiring : YES;
+    const BOOL horizontalEnabled = configuration.horizontalEnabled;
+    const float horizontalStrength = configuration.horizontalStrength;
+    if (!input || !std::isfinite(aimPitch) || !std::isfinite(aimYaw) ||
+        !std::isfinite(verticalStrength) || verticalStrength < 0 || verticalStrength > 1 ||
+        !std::isfinite(horizontalStrength) || horizontalStrength < 0 || horizontalStrength > 1) return nil;
+    const auto finish = [&](float recoilPitch, float recoilYaw) -> CoreSetV17ActionDelta * {
+        CoreSet::AimDeltaPlan merged;
+        const bool mergedOK = CoreSet::mergeAimRecoilDeltas(aimPitch, aimYaw, recoilPitch, recoilYaw, &merged);
+        _previousGeometrySampleKey = geometrySampleKey;
+        _previousControlPitch = input.controlPitchDegrees;
+        _previousControlPresent = std::isfinite(_previousControlPitch);
+        if (!mergedOK) return nil;
+        CoreSetV17ActionDelta *result = [CoreSetV17ActionDelta new];
+        result.pitch = merged.pitch; result.yaw = merged.yaw;
+        result.aimPitch = aimPitch; result.aimYaw = aimYaw;
+        result.recoilPitch = recoilPitch; result.recoilYaw = recoilYaw;
+        return result;
+    };
+    if (!input.recoilInputsPresent || !input.recoilPostSample || !input.recoilBinding) {
+        _post = {}; _raw = {}; return finish(0, 0);
+    }
+    CoreSetRecoilPostSample *sample = input.recoilPostSample;
+    CoreSet::ActionPostRecord record{true, sample.key, sample.ownerToken, sample.active,
+        {sample.value0, sample.value1, sample.value2, sample.value3, sample.value4, sample.value5}};
+    CoreSet::RecoilConfiguration nativeConfiguration{verticalEnabled, verticalStrength,
+        static_cast<bool>(stopWhenNotFiring), horizontalEnabled, horizontalStrength};
+    CoreSet::ActionPostTuning tuning;
+    if (!CoreSet::referenceActionRecoilPostTuning(nativeConfiguration,
+            input.recoilFirstWeight, input.recoilFirstBindingScale,
+            input.recoilSecondWeight, input.recoilSecondBindingScale, &tuning)) {
+        _post = {}; _raw = {}; return nil;
+    }
+    CoreSet::ActionPostObservation post;
+    if (!CoreSet::referenceActionPostState(_post, record, tuning, input.recoilBinding, &post)) {
+        _raw = {}; return finish(0, 0);
+    }
+    float rawCombined = 0;
+    if (verticalEnabled && _previousGeometrySampleKey && _previousControlPresent) {
+        CoreSet::RecoilRawInput rawInput;
+        rawInput.firing = (input.localFiringRaw & 1) != 0; rawInput.readValid = true;
+        rawInput.sampleKey = _previousGeometrySampleKey; rawInput.binding = input.recoilBinding;
+        rawInput.currentPitch = _previousControlPitch; rawInput.priorAimPitch = _priorAimPitch;
+        rawInput.strength01 = verticalStrength;
+        CoreSet::RecoilRawResult raw;
+        if (CoreSet::stepRecoilRawState(&_raw, rawInput, &raw)) rawCombined = raw.combined;
+    } else { _raw = {}; }
+    const float recoilPitch = verticalEnabled ? CoreSet::referenceActionRecoilCallerMerge(
+        post.values[2], rawCombined, verticalStrength) : 0;
+    const float recoilYaw = horizontalEnabled ? post.values[5] : 0;
+    return finish(recoilPitch, recoilYaw);
+}
 - (void)observeAimFeedbackWithPitch:(float)aimPitch inputRoute:(BOOL)inputRoute
     recoilEnabled:(BOOL)recoilEnabled aimActive:(BOOL)aimActive
     acceptedFirstAxis:(BOOL)acceptedFirstAxis bothZeroDraft:(BOOL)bothZeroDraft {
@@ -425,13 +528,6 @@ private:
 }
 @end
 
-@implementation CoreSetV17ActionRouteDynamics
-- (CoreSetTargetWriteSlot)slotForFiringSample:(uint8_t)firingSample {
-    const auto slot = CoreSet::referenceActionSlotForFireSample(firingSample);
-    return slot == CoreSet::TargetActionSlot::rotationInput
-        ? CoreSetTargetWriteSlotRotationInput : CoreSetTargetWriteSlotControlRotation;
-}
-@end
 static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) {
     return [[CoreSetTargetWriteResult alloc] initWithCommitted:NO pending:pending
         completedBytes:0 reason:reason];
@@ -445,15 +541,15 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
     std::atomic<bool> stopping;
 }
 @property(nonatomic, copy) CoreSetProbeLiveValidator validator;
-@property(nonatomic, strong, nullable) CoreSetPlayerSnapshot *snapshot;
+@property(nonatomic, strong, nullable) CoreSetActionInputAuthority *input;
 @property(nonatomic, strong, nullable) NSUUID *token;
 @end
 
 @implementation CSProbeAuthority
 - (instancetype)init { if ((self = [super init])) stopping.store(false); return self; }
 - (BOOL)live {
-    return !stopping.load() && self.validator && self.snapshot && self.token &&
-        self.validator(self.snapshot, self.token, context.hostGeneration, context.configRevision) &&
+    return !stopping.load() && self.validator && self.input && self.token &&
+        self.validator(self.input, self.token, context.hostGeneration, context.configRevision) &&
         !stopping.load();
 }
 - (BOOL)authorizesPID:(int32_t)pid imageBase:(uint64_t)imageBase
@@ -481,6 +577,11 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
     configRevision:(uint64_t)configRevision lane:(CoreSetTargetWriteLane)lane
     slot:(CoreSetTargetWriteSlot)slot
     axis:(CoreSetTargetWriteAxis)axis pitch:(float)pitch yaw:(float)yaw;
+- (CoreSetTargetWriteResult *)submitAuthority:(CoreSetActionInputAuthority *)authority
+    requestToken:(NSUUID *)requestToken hostGeneration:(uint64_t)hostGeneration
+    configRevision:(uint64_t)configRevision lane:(CoreSetTargetWriteLane)lane
+    slot:(CoreSetTargetWriteSlot)slot axis:(CoreSetTargetWriteAxis)axis
+    pitch:(float)pitch yaw:(float)yaw;
 @end
 
 @implementation CoreSetIsolatedWriteProbe
@@ -521,6 +622,23 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
     configRevision:(uint64_t)configRevision lane:(CoreSetTargetWriteLane)lane
     slot:(CoreSetTargetWriteSlot)slot
     axis:(CoreSetTargetWriteAxis)axis pitch:(float)pitch yaw:(float)yaw {
+    CoreSetActionInputAuthority *authority = [CoreSetActionInputAuthority authorityWithSnapshot:snapshot];
+    return [self submitAuthority:authority requestToken:requestToken hostGeneration:hostGeneration
+        configRevision:configRevision lane:lane slot:slot axis:axis pitch:pitch yaw:yaw];
+}
+- (CoreSetTargetWriteResult *)submitAuthority:(CoreSetActionInputAuthority *)authority
+    requestToken:(NSUUID *)requestToken hostGeneration:(uint64_t)hostGeneration
+    configRevision:(uint64_t)configRevision lane:(CoreSetTargetWriteLane)lane
+    slot:(CoreSetTargetWriteSlot)slot axis:(CoreSetTargetWriteAxis)axis
+    pitchDelta:(float)pitchDelta yawDelta:(float)yawDelta {
+    return [self submitAuthority:authority requestToken:requestToken hostGeneration:hostGeneration
+        configRevision:configRevision lane:lane slot:slot axis:axis pitch:pitchDelta yaw:yawDelta];
+}
+- (CoreSetTargetWriteResult *)submitAuthority:(CoreSetActionInputAuthority *)authority
+    requestToken:(NSUUID *)requestToken hostGeneration:(uint64_t)hostGeneration
+    configRevision:(uint64_t)configRevision lane:(CoreSetTargetWriteLane)lane
+    slot:(CoreSetTargetWriteSlot)slot axis:(CoreSetTargetWriteAxis)axis
+    pitch:(float)pitch yaw:(float)yaw {
     if (dispatch_get_specific(&CSProbeQueueKey) == (__bridge void *)self)
         return CSProbeFailure(@"recursive probe submission rejected", _writer.pendingCleanup);
     __block CoreSetTargetWriteResult *result;
@@ -531,37 +649,37 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
         }
         const BOOL first = axis == CoreSetTargetWriteAxisFirst || axis == CoreSetTargetWriteAxisBoth;
         const BOOL second = axis == CoreSetTargetWriteAxisSecond || axis == CoreSetTargetWriteAxisBoth;
-        if (!snapshot || !requestToken || !snapshot.battleInputsPresent ||
+        if (!authority || !requestToken ||
             (lane != CoreSetTargetWriteLaneAim && lane != CoreSetTargetWriteLaneRecoil) ||
             (slot != CoreSetTargetWriteSlotControlRotation && slot != CoreSetTargetWriteSlotRotationInput) ||
             (!first && !second) || !std::isfinite(pitch) || !std::isfinite(yaw) ||
             (std::fabs(pitch) > 36 || std::fabs(yaw) > 36) ||
             (!first && pitch != 0) || (!second && yaw != 0) ||
             (pitch == 0 && yaw == 0) ||
-            !std::isfinite(snapshot.controlPitchDegrees) || !std::isfinite(snapshot.controlYawDegrees) ||
-            !std::isfinite(snapshot.rotationInputPitch) || !std::isfinite(snapshot.rotationInputYaw) ||
-            std::fabs(snapshot.controlPitchDegrees) > 360 || std::fabs(snapshot.controlYawDegrees) > 360 ||
-            std::fabs(snapshot.rotationInputPitch) > 360 || std::fabs(snapshot.rotationInputYaw) > 360) {
+            !std::isfinite(authority.controlPitchDegrees) || !std::isfinite(authority.controlYawDegrees) ||
+            !std::isfinite(authority.rotationInputPitch) || !std::isfinite(authority.rotationInputYaw) ||
+            std::fabs(authority.controlPitchDegrees) > 360 || std::fabs(authority.controlYawDegrees) > 360 ||
+            std::fabs(authority.rotationInputPitch) > 360 || std::fabs(authority.rotationInputYaw) > 360) {
             result = CSProbeFailure(@"invalid complete battle snapshot, axis or bounded nonzero delta", NO);
             return;
         }
-        self->_authority.snapshot = snapshot;
+        self->_authority.input = authority;
         self->_authority.token = requestToken;
         auto &context = self->_authority->context;
-        context.pid = snapshot.processID; context.imageBase = snapshot.imageBase;
-        context.readGeneration = snapshot.sessionGeneration; context.controller = snapshot.controllerAddress;
+        context.pid = authority.processID; context.imageBase = authority.imageBase;
+        context.readGeneration = authority.sessionGeneration; context.controller = authority.controllerAddress;
         context.hostGeneration = hostGeneration; context.configRevision = configRevision;
         context.lane = lane;
         context.slot = slot; context.axis = axis;
         [requestToken getUUIDBytes:context.requestToken.data()];
-        [snapshot.snapshotID getUUIDBytes:context.snapshotID.data()];
+        [authority.snapshotID getUUIDBytes:context.snapshotID.data()];
         if (![self->_authority live] || !self->_authority->gate.begin(context, context,
-            snapshot.captureCompletedMonotonicSeconds, CACurrentMediaTime())) {
+            authority.captureCompletedMonotonicSeconds, CACurrentMediaTime())) {
             result = CSProbeFailure(@"live request/target validation rejected, busy or snapshot expired", NO);
         } else {
             const float oldValues[2] = {
-                slot == CoreSetTargetWriteSlotControlRotation ? snapshot.controlPitchDegrees : snapshot.rotationInputPitch,
-                slot == CoreSetTargetWriteSlotControlRotation ? snapshot.controlYawDegrees : snapshot.rotationInputYaw
+                slot == CoreSetTargetWriteSlotControlRotation ? authority.controlPitchDegrees : authority.rotationInputPitch,
+                slot == CoreSetTargetWriteSlotControlRotation ? authority.controlYawDegrees : authority.rotationInputYaw
             };
             const float newValues[2] = {oldValues[0] + pitch, oldValues[1] + yaw};
             const size_t index = axis == CoreSetTargetWriteAxisSecond ? 1 : 0;
@@ -572,13 +690,13 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
                 result = [self->_writer writeControllerActionForPID:context.pid imageBase:context.imageBase
                     controller:context.controller lane:lane
                     slot:slot axis:axis generation:context.readGeneration
-                    requestToken:requestToken snapshotID:snapshot.snapshotID
+                    requestToken:requestToken snapshotID:authority.snapshotID
                     expectedOld:[NSData dataWithBytes:oldValues + index length:length]
                     newValue:[NSData dataWithBytes:newValues + index length:length]];
             }
         }
         self->_authority->gate.finish();
-        self->_authority.snapshot = nil; self->_authority.token = nil;
+        self->_authority.input = nil; self->_authority.token = nil;
     });
     return result;
 }
@@ -587,7 +705,7 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
     __block CoreSetTargetWriteCleanupResult *result;
     void (^cleanup)(void) = ^{
         self->_authority->gate.stop();
-        self->_authority.snapshot = nil; self->_authority.token = nil;
+        self->_authority.input = nil; self->_authority.token = nil;
         result = [self->_writer disconnect];
     };
     if (dispatch_get_specific(&CSProbeQueueKey) == (__bridge void *)self) {

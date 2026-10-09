@@ -32,7 +32,7 @@ def test_recoil_owner_and_scale_reads_match_core_v17_chain():
 
 def test_recoil_input_is_final_pass_optional_and_generation_bound():
     stability = SOURCE.index('CSLastCaptureDiagnostic = "stability-battle-inputs"')
-    capture = SOURCE.rindex("CSCaptureRecoilInputs(session, generation")
+    capture = SOURCE.index("CSCaptureRecoilInputs(session, generation", stability)
     completion = SOURCE.index("const double captureCompletedAt = CACurrentMediaTime()", capture)
     publish = SOURCE.index("CoreSetPlayerSnapshot *snapshot = [CoreSetPlayerSnapshot new]", capture)
     assert stability < capture < completion < publish
@@ -78,15 +78,14 @@ def test_shared_recoil_dynamics_preserves_core_order_and_constants():
     assert source.index("referenceActionRecoilCallerMerge") < source.index("return finish(recoilPitch, recoilYaw)")
 
 
-def test_recoil_and_aim_use_one_serial_worker_and_reference_fire_slot_route():
+def test_recoil_and_aim_use_one_serial_worker_without_fire_slot_route():
     aim = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
     recoil = (ROOT / "lara/views/app/CoreSetRecoilConsumer.swift").read_text(encoding="utf-8")
     coordinator = (ROOT / "lara/views/app/CoreSetRuntimeCoordinator.swift").read_text(encoding="utf-8")
     menu = (ROOT / "lara/views/app/CoreSetMenuViewController.swift").read_text(encoding="utf-8")
     for token in (
         "CoreSetV17RecoilDynamics", "submitMergedAction", "tickRecoilOnly",
-        "CoreSetV17ActionRouteDynamics", "routeDynamics.slot(firingSample:",
-        "actionSlot(snapshot:", "lane: lane",
+        "routeAuthorityResolved", "resolvedActionSlotRaw", "lane: lane",
         "pendingRecoilCompletion", "stopRecoil(",
         "merged.recoilPitch", "merged.recoilYaw", "recoilContributed",
         "aimContributed", "recoilConfiguration(", "configuration: recoil",
@@ -100,9 +99,11 @@ def test_recoil_and_aim_use_one_serial_worker_and_reference_fire_slot_route():
     assert "CoreSetRecoilConsumer(actionConsumer: aimConsumer)" in coordinator
     assert "apply(\\.recoil)" in menu
     assert "editGame(\\.recoil)" in menu
-    route = (ROOT / "lara/overlay/CoreSetIsolatedWriteProbe.mm").read_text(encoding="utf-8")
-    assert "referenceActionSlotForFireSample(firingSample)" in route
-    assert "_state.modeFlag && !_state.alternate" not in route
+    route = (ROOT / "lara/overlay/CoreSetActionRouteState.h").read_text(encoding="utf-8")
+    assert "referenceActionSlotForRouteState" in route
+    assert "!state.alternate && state.modeFlag && recoilEnabled" in route
+    assert "referenceActionSlotForFireSample" not in route
+    assert "slotForFiringSample" not in (ROOT / "lara/overlay/CoreSetIsolatedWriteProbe.h").read_text(encoding="utf-8")
     assert "private struct RecoilTuning" not in aim
     assert "Float(vertical) / 100" not in aim
     assert "Float(horizontal) / 100" not in aim

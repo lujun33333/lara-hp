@@ -174,6 +174,284 @@ private final class CoreSetFrameComposer {
     }
 }
 
+struct CoreSetBattleActionPublication {
+    let candidate: CoreSetActionCandidateRecord?
+    let input: CoreSetActionInputAuthority
+    let requestID: UUID
+    let hostGeneration: UInt64
+    let configRevision: UInt64
+}
+
+// Coordinator-owned battle reader. It is the only owner of the slow actor
+// snapshot used by action selection. Full snapshots remain on producerWorker;
+// action consumers receive only the compact candidate and typed input POD.
+final class CoreSetBattleProducer {
+    private struct AimDemand: Equatable {
+        let requestID: UUID
+        let hostGeneration: UInt64
+        let revision: UInt64
+        let canvas: CGSize
+        let point: Int
+        let radius: Double
+        let maximumDistance: Int
+        let includeBots: Bool
+        let excludeKnocked: Bool
+        let lockSameTarget: Bool
+    }
+    private struct RecoilDemand: Equatable {
+        let requestID: UUID
+        let hostGeneration: UInt64
+        let revision: UInt64
+        let canvas: CGSize
+    }
+    private struct DisplayDemand: Equatable {
+        let requestID: UUID
+        let hostGeneration: UInt64
+        let revision: UInt64
+        let canvas: CGSize
+        let playerBones: Bool
+        let botBones: Bool
+        let boneDistanceLimit: Double
+        let includeOffscreen: Bool
+        let playerWeaponText: Bool
+        let botWeaponText: Bool
+        let includeGrenadeWarning: Bool
+        let includeCounts: Bool
+        let playerInformation: Bool
+        let botInformation: Bool
+        let maximumDrawDistance: Double
+    }
+    private typealias DisplayCompletion = (CoreSetPlayerSnapshot?, String) -> Void
+    private let producerWorker = DispatchQueue(label: "coreset.battle.producer", qos: .userInitiated)
+    private let demandLock = NSLock()
+    private let publicationLock = NSLock()
+    private let session = CoreSetReadSession()
+    private let candidateStore = CoreSetActionCandidatePublicationStore()
+    private var aimDemand: AimDemand?
+    private var recoilDemand: RecoilDemand?
+    private var displayDemand: DisplayDemand?
+    private var displayCompletion: DisplayCompletion?
+    private var captureInFlight = false
+    private var captureRequested = false
+    private var lastCaptureCompletedAt: Double = 0
+    private var latestAction: CoreSetBattleActionPublication?
+    private var closed = false
+
+    init() { session.diagnosticLabel = "battle-producer" }
+    var ready: Bool { session.ready && session.capabilities == 1 }
+    var readSession: CoreSetReadSession { session }
+
+    func refreshReadiness(completion: @escaping (Bool) -> Void) {
+        producerWorker.async { [weak self] in
+            guard let self else { completion(false); return }
+            self.demandLock.lock(); let isClosed = self.closed; self.demandLock.unlock()
+            guard !isClosed else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+            let ready = self.session.connect() && self.session.capabilities == 1
+            DispatchQueue.main.async { completion(ready) }
+        }
+    }
+    func requestAim(_ request: CoreSetApplyRequest<CoreSetAimSettings>, canvas: CGSize,
+                    radius: Double, maximumDistance: Int, point: Int,
+                    includeBots: Bool, excludeKnocked: Bool, lockSameTarget: Bool,
+                    hostGeneration: UInt64, revision: UInt64) {
+        let demand = AimDemand(requestID: request.token.requestID,
+            hostGeneration: hostGeneration, revision: revision, canvas: canvas,
+            point: point, radius: radius, maximumDistance: maximumDistance,
+            includeBots: includeBots, excludeKnocked: excludeKnocked,
+            lockSameTarget: lockSameTarget)
+        demandLock.lock(); aimDemand = demand; demandLock.unlock()
+        requestCapture()
+    }
+    func requestRecoil(_ request: CoreSetApplyRequest<CoreSetRecoilSettings>, canvas: CGSize,
+                       hostGeneration: UInt64, revision: UInt64) {
+        demandLock.lock()
+        recoilDemand = RecoilDemand(requestID: request.token.requestID,
+            hostGeneration: hostGeneration, revision: revision, canvas: canvas)
+        demandLock.unlock(); requestCapture()
+    }
+    func requestDisplay(requestID: UUID, hostGeneration: UInt64, revision: UInt64,
+                        canvas: CGSize, playerBones: Bool, botBones: Bool,
+                        boneDistanceLimit: Double, includeOffscreen: Bool,
+                        playerWeaponText: Bool, botWeaponText: Bool,
+                        includeGrenadeWarning: Bool, includeCounts: Bool,
+                        playerInformation: Bool, botInformation: Bool,
+                        maximumDrawDistance: Double,
+                        completion: @escaping DisplayCompletion) {
+        let demand = DisplayDemand(requestID: requestID, hostGeneration: hostGeneration,
+            revision: revision, canvas: canvas, playerBones: playerBones,
+            botBones: botBones, boneDistanceLimit: boneDistanceLimit,
+            includeOffscreen: includeOffscreen, playerWeaponText: playerWeaponText,
+            botWeaponText: botWeaponText, includeGrenadeWarning: includeGrenadeWarning,
+            includeCounts: includeCounts, playerInformation: playerInformation,
+            botInformation: botInformation, maximumDrawDistance: maximumDrawDistance)
+        demandLock.lock(); displayDemand = demand; displayCompletion = completion; demandLock.unlock()
+        requestCapture()
+    }
+    func releaseAim(requestID: UUID?) {
+        demandLock.lock()
+        if requestID == nil || aimDemand?.requestID == requestID { aimDemand = nil }
+        demandLock.unlock()
+        candidateStore.clear()
+        publicationLock.lock(); latestAction = nil; publicationLock.unlock()
+    }
+    func releaseRecoil(requestID: UUID?) {
+        demandLock.lock()
+        if requestID == nil || recoilDemand?.requestID == requestID { recoilDemand = nil }
+        let hasAim = aimDemand != nil
+        demandLock.unlock()
+        if !hasAim {
+            publicationLock.lock(); latestAction = nil; publicationLock.unlock()
+        }
+    }
+    func releaseDisplay(requestID: UUID?) {
+        demandLock.lock()
+        if requestID == nil || displayDemand?.requestID == requestID {
+            displayDemand = nil; displayCompletion = nil
+        }
+        demandLock.unlock()
+    }
+    func copyAction(requestID: UUID, hostGeneration: UInt64,
+                    revision: UInt64) -> CoreSetBattleActionPublication? {
+        requestCapture()
+        publicationLock.lock(); defer { publicationLock.unlock() }
+        guard let value = latestAction, value.requestID == requestID,
+              value.hostGeneration == hostGeneration, value.configRevision == revision,
+              CACurrentMediaTime() >= value.input.captureCompletedMonotonicSeconds,
+              CACurrentMediaTime() - value.input.captureCompletedMonotonicSeconds <= 0.5 else { return nil }
+        return value
+    }
+    private func requestCapture() {
+        demandLock.lock()
+        if closed { demandLock.unlock(); return }
+        captureRequested = true
+        let now = CACurrentMediaTime()
+        let interval = aimDemand != nil || recoilDemand != nil ? (1.0 / 60.0) : 0.15
+        let shouldStart = !captureInFlight
+        let delay = max(0, interval - max(0, now - lastCaptureCompletedAt))
+        if shouldStart { captureInFlight = true; captureRequested = false }
+        demandLock.unlock()
+        if shouldStart {
+            producerWorker.asyncAfter(deadline: .now() + delay) { [weak self] in self?.capture() }
+        }
+    }
+    private func project(_ point: CoreSetWorldPoint, snapshot: CoreSetPlayerSnapshot) -> CGPoint? {
+        guard let camera = snapshot.cameraWorldPosition else { return nil }
+        let width = Double(snapshot.canvasSize.width), height = Double(snapshot.canvasSize.height)
+        let fov = snapshot.cameraFieldOfViewDegrees, degrees = Double.pi / 180
+        guard width > 0, height > 0, fov.isFinite, fov > 1, fov < 170 else { return nil }
+        let pitch = snapshot.cameraPitchDegrees * degrees, yaw = snapshot.cameraYawDegrees * degrees
+        let roll = snapshot.cameraRollDegrees * degrees
+        let sp = sin(pitch), cp = cos(pitch), sy = sin(yaw), cy = cos(yaw)
+        let sr = sin(roll), cr = cos(roll)
+        let dx = Double(point.x - camera.x), dy = Double(point.y - camera.y), dz = Double(point.z - camera.z)
+        let depth = dx * cp * cy + dy * cp * sy + dz * sp
+        guard depth.isFinite, depth > 1 else { return nil }
+        let right = dx * (sr * sp * cy - cr * sy) + dy * (sr * sp * sy + cr * cy) - dz * sr * cp
+        let up = dx * (sr * sy - cr * sp * cy) + dy * (sr * cy - cr * sp * sy) + dz * cr * cp
+        let focal = (width / 2) / tan(fov * degrees / 2)
+        let result = CGPoint(x: width / 2 + focal * right / depth,
+                             y: height / 2 - focal * up / depth)
+        return result.x.isFinite && result.y.isFinite ? result : nil
+    }
+    private func capture() {
+        demandLock.lock()
+        let aim = aimDemand, recoil = recoilDemand, display = displayDemand
+        let displayCallback = displayCompletion
+        let isClosed = closed
+        demandLock.unlock()
+        let actionPrimary = aim.map({ ($0.requestID, $0.hostGeneration, $0.revision, $0.canvas) }) ??
+            recoil.map({ ($0.requestID, $0.hostGeneration, $0.revision, $0.canvas) })
+        guard !isClosed, let canvas = actionPrimary?.3 ?? display?.canvas else {
+            finishCapture(); return
+        }
+        let connected = session.connect() && session.capabilities == 1
+        let failureSequence = session.readFailureSequence
+        let maximumDistance = max(max(Double(aim?.maximumDistance ?? 0),
+            display?.maximumDrawDistance ?? 0), 500)
+        let snapshot = connected ? CoreSetPlayerCollector.capture(session,
+            canvasSize: canvas,
+            playerBones: aim != nil || display?.playerBones == true,
+            botBones: aim?.includeBots == true || display?.botBones == true,
+            boneDistanceLimit: max(aim.map { Double($0.maximumDistance) } ?? 0,
+                display?.boneDistanceLimit ?? 0),
+            includeOffscreen: display?.includeOffscreen == true,
+            includeRadar: false, includeBattleInputs: actionPrimary != nil,
+            playerWeaponText: display?.playerWeaponText == true,
+            botWeaponText: display?.botWeaponText == true,
+            includeGrenadeWarning: display?.includeGrenadeWarning == true,
+            includeCounts: display?.includeCounts == true,
+            playerInformation: display?.playerInformation == true,
+            botInformation: display?.botInformation == true,
+            includeWarningYaw: false, maximumDrawDistance: maximumDistance) : nil
+        let diagnostic: String
+        if !connected { diagnostic = session.lastConnectDiagnostic }
+        else if session.readFailureSequence != failureSequence { diagnostic = session.lastReadDiagnostic }
+        else { diagnostic = "\(CoreSetPlayerCollector.lastCaptureDiagnostic()) transport-errors=0" }
+        if let display, let displayCallback {
+            demandLock.lock(); let stillCurrent = displayDemand == display; demandLock.unlock()
+            if stillCurrent {
+                DispatchQueue.main.async { displayCallback(snapshot, diagnostic) }
+            }
+        }
+        guard let actionPrimary else { candidateStore.clear(); finishCapture(); return }
+        guard let snapshot, let input = CoreSetActionInputAuthority.authority(with: snapshot) else {
+            candidateStore.clear(); publicationLock.lock(); latestAction = nil; publicationLock.unlock()
+            finishCapture(); return
+        }
+        var candidate: CoreSetActionCandidateRecord?
+        if let aim, let camera = snapshot.cameraWorldPosition,
+           let mark = CoreSetBasicAimDelta.select(snapshot: snapshot, point: aim.point,
+                radius: aim.radius, maximumDistance: Double(aim.maximumDistance),
+                includeBots: aim.includeBots, excludeKnocked: aim.excludeKnocked,
+                lockSameTarget: aim.lockSameTarget,
+                previousActor: candidateStore.copyRecord()?.raw.candidateKey ?? 0),
+           let target = CoreSetBasicAimDelta.fallbackTarget(mark: mark, point: aim.point),
+           let projected = project(target, snapshot: snapshot) {
+            let dx = Double(projected.x - snapshot.canvasSize.width / 2)
+            let dy = Double(projected.y - snapshot.canvasSize.height / 2)
+            candidate = candidateStore.publishCandidateKey(mark.actorAddress, target: target,
+                camera: camera, bestPixels: hypot(dx, dy), radius: aim.radius,
+                screenPoint: projected, canvasSize: snapshot.canvasSize,
+                cameraPitch: snapshot.cameraPitchDegrees,
+                cameraYaw: snapshot.cameraYawDegrees,
+                cameraRoll: snapshot.cameraRollDegrees,
+                cameraFOV: snapshot.cameraFieldOfViewDegrees,
+                bot: mark.bot, distanceMeters: mark.distanceUnitsDividedBy100,
+                sessionGeneration: snapshot.sessionGeneration, processID: snapshot.processID,
+                imageBase: snapshot.imageBase, controller: snapshot.controllerAddress,
+                snapshotID: snapshot.snapshotID,
+                capturedAt: snapshot.captureCompletedMonotonicSeconds)
+        } else if aim != nil {
+            candidate = candidateStore.publishMissing(forSessionGeneration: snapshot.sessionGeneration,
+                processID: snapshot.processID, imageBase: snapshot.imageBase,
+                controller: snapshot.controllerAddress, snapshotID: snapshot.snapshotID,
+                capturedAt: snapshot.captureCompletedMonotonicSeconds)
+        } else { candidateStore.clear() }
+        publicationLock.lock()
+        latestAction = CoreSetBattleActionPublication(candidate: candidate, input: input,
+            requestID: actionPrimary.0, hostGeneration: actionPrimary.1, configRevision: actionPrimary.2)
+        publicationLock.unlock(); finishCapture()
+    }
+    private func finishCapture() {
+        demandLock.lock()
+        lastCaptureCompletedAt = CACurrentMediaTime(); captureInFlight = false
+        let rerun = captureRequested && !closed
+        let interval = aimDemand != nil || recoilDemand != nil ? (1.0 / 60.0) : 0.15
+        if rerun { captureInFlight = true; captureRequested = false }
+        demandLock.unlock()
+        if rerun { producerWorker.asyncAfter(deadline: .now() + interval) { [weak self] in self?.capture() } }
+    }
+    func shutdown() -> Bool {
+        demandLock.lock(); closed = true; aimDemand = nil; recoilDemand = nil
+        displayDemand = nil; displayCompletion = nil; demandLock.unlock()
+        candidateStore.clear(); publicationLock.lock(); latestAction = nil; publicationLock.unlock()
+        return producerWorker.sync { session.disconnect().complete }
+    }
+}
+
 // One scene owns one menu and its authoritative FeatureState. Infrastructure
 // readiness never binds or enables any game feature consumer.
 final class CoreSetRuntimeCoordinator {
@@ -190,6 +468,7 @@ final class CoreSetRuntimeCoordinator {
     private let metalAdapter = CoreSetMetalRenderAdapter()
     private var remoteHostingAdapter: CoreSetRemoteHostingAdapter?
     private var consumer: CoreSetLocalHostConsumer!
+    private let battleProducer = CoreSetBattleProducer()
     private var playerConsumer: CoreSetPlayerConsumer?
     private var materialConsumer: CoreSetMaterialConsumer?
     private var radarConsumer: CoreSetRadarConsumer?
@@ -442,7 +721,7 @@ final class CoreSetRuntimeCoordinator {
         host.contentHitRegions = { [weak menu = self.menu] in menu?.localHostHitRegions ?? [] }
         consumer = CoreSetLocalHostConsumer(host: host)
         _ = menu.bindMenuHostConsumer(consumer)
-        playerConsumer = CoreSetPlayerConsumer(coordinator: self)
+        playerConsumer = CoreSetPlayerConsumer(coordinator: self, battleProducer: battleProducer)
         if let playerConsumer { _ = menu.bindGameConsumer(playerConsumer, to: \.player) }
         materialConsumer = CoreSetMaterialConsumer(coordinator: self)
         if let materialConsumer { _ = menu.bindGameConsumer(materialConsumer, to: \.materials) }
@@ -452,7 +731,7 @@ final class CoreSetRuntimeCoordinator {
         if let frameRateConsumer { _ = menu.bindGameConsumer(frameRateConsumer, to: \.frameRate) }
         radarConsumer = CoreSetRadarConsumer(coordinator: self)
         if let radarConsumer { _ = menu.bindGameConsumer(radarConsumer, to: \.radar) }
-        aimConsumer = CoreSetAimConsumer(coordinator: self)
+        aimConsumer = CoreSetAimConsumer(coordinator: self, battleProducer: battleProducer)
         if let aimConsumer { _ = menu.bindGameConsumer(aimConsumer, to: \.aim) }
         aimDisplayConsumer = CoreSetAimDisplayConsumer(coordinator: self)
         if let aimDisplayConsumer { _ = menu.bindGameConsumer(aimDisplayConsumer, to: \.aimDisplay) }
@@ -1264,13 +1543,15 @@ final class CoreSetRuntimeCoordinator {
         group.notify(queue: .main) { [weak self] in
             guard let self else { return }
             self.stopReceiptsPending = false
+            let aimWriteClean = self.aimConsumer?.shutdownWriteSession() ?? true
+            let recoilWriteClean = self.recoilConsumer?.shutdownWriteSession() ?? true
             let playerReadClean = self.playerConsumer?.shutdownReadSession() ?? true
             let materialReadClean = self.materialConsumer?.shutdownReadSession() ?? true
             let radarReadClean = self.radarConsumer?.shutdownReadSession() ?? true
             let previewReadClean = self.aimDisplayConsumer?.shutdownPreview() ?? true
-            let aimWriteClean = self.aimConsumer?.shutdownWriteSession() ?? true
-            let recoilWriteClean = self.recoilConsumer?.shutdownWriteSession() ?? true
-            channelsRestored = channelsRestored && playerReadClean && materialReadClean && radarReadClean && previewReadClean && aimWriteClean && recoilWriteClean
+            let battleReadClean = self.battleProducer.shutdown()
+            channelsRestored = channelsRestored && aimWriteClean && recoilWriteClean &&
+                playerReadClean && materialReadClean && radarReadClean && previewReadClean && battleReadClean
             self.stopChannelsConfirmed = channelsRestored
             self.menu.refreshConsumerAvailability()
             self.publishStatus()

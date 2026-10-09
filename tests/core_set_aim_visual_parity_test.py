@@ -78,10 +78,11 @@ class CoreSetAimVisualParityTest(unittest.TestCase):
         tick = self.action.split("private func tick(", 1)[1].split(
             "private func publish(", 1)[0]
         self.assertLess(tick.index("let step = dynamics.plan"),
-                        tick.index("publishDisplayTarget(mark: freshMark"))
+                        tick.index("publishDisplayTarget(candidate: candidate"))
         self.assertIn("step: CoreSetBasicAimDelta", self.action)
-        self.assertIn("predictedWorldPoint: predictedWorldPoint", self.action)
-        self.assertIn("predictedScreenPoint: predictedScreenPoint", self.action)
+        self.assertIn("let predicted = step.predictedWorldPoint", self.action)
+        self.assertIn("predictedWorldPoint: predicted.map", self.action)
+        self.assertIn("predictedScreenPoint: predictedPoint", self.action)
 
     def test_secondary_projection_preserves_identity_and_core_geometry(self) -> None:
         for token in ("let predictedWorldPoint: CoreSetAimDisplayWorldPoint?",

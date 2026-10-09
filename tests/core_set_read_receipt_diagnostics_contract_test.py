@@ -103,6 +103,18 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
     def test_capture_only_attributes_errors_from_its_own_worker_period(self) -> None:
         for name, source in self.consumers.items():
             with self.subTest(consumer=name):
+                if name == "Player":
+                    producer = read("lara/views/app/CoreSetRuntimeCoordinator.swift").split(
+                        "final class CoreSetBattleProducer", 1)[1].split(
+                        "final class CoreSetRuntimeCoordinator", 1)[0]
+                    before = producer.index("let failureSequence = session.readFailureSequence")
+                    collect = producer.index("CoreSetPlayerCollector.capture(session")
+                    after = producer.index("session.readFailureSequence != failureSequence")
+                    self.assertLess(before, collect)
+                    self.assertLess(collect, after)
+                    self.assertIn("CoreSetPlayerCollector.lastCaptureDiagnostic()", producer)
+                    self.assertIn("transport-errors=0", producer)
+                    continue
                 capture = body(source, "private func capture()")
                 before = capture.index("let failureSequence = self.session.readFailureSequence")
                 collect = capture.index("Collector.capture(")

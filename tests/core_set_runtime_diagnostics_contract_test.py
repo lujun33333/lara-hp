@@ -70,7 +70,6 @@ assert "changed || !_lastLoggedDiagnostic || now - _lastDiagnosticLogTime >= 30.
 assert "target-read lane=%@ stage=connect ready=%d" in publish
 
 labels = {
-    "lara/views/app/CoreSetPlayerConsumer.swift": "player",
     "lara/views/app/CoreSetMaterialConsumer.swift": "materials",
     "lara/views/app/CoreSetRadarConsumer.swift": "radar",
 }
@@ -79,6 +78,11 @@ for relative, label in labels.items():
     assert f'session.diagnosticLabel = "{label}"' in source
     if "var availability:" in source:
         assert "session.lastConnectDiagnostic" in body(source, "var availability:")
+coordinator = read("lara/views/app/CoreSetRuntimeCoordinator.swift")
+player = read("lara/views/app/CoreSetPlayerConsumer.swift")
+assert 'session.diagnosticLabel = "battle-producer"' in coordinator
+assert "battleProducer.readSession" in player
+assert "session.lastConnectDiagnostic" in body(player, "var availability:")
 aim_preview = read("lara/views/app/CoreSetAimPreviewConsumer.swift")
 assert "CoreSetReadSession" not in aim_preview
 assert "aim-record-missing-or-stale" in aim_preview
@@ -102,7 +106,8 @@ assert '@"observedOffsetsAudited": @NO' in profile_diagnostic
 assert '#import "overlay/CoreSetKernelWriteProfile.h"' in read("lara/lara-Bridging-Header.h")
 aim = read("lara/views/app/CoreSetAimConsumer.swift")
 assert "CoreSetIsolatedWriteProbe" in aim
-assert "includeBattleInputs: false" in aim and "refreshAction(for: roster" in aim
+assert "battleProducer.copyAction(" in aim
+assert "dynamics.plan(candidate: candidate, input: input" in aim
 assert "snapshot.battleInputsPresent = YES" in read("lara/overlay/CoreSetPlayerSnapshot.mm")
 assert "result.committed" in aim and "cleanup.complete" in aim
 recoil = read("lara/views/app/CoreSetRecoilConsumer.swift")

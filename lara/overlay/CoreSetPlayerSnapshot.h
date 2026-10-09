@@ -1,7 +1,10 @@
 #import <UIKit/UIKit.h>
 #import "CoreSetReadSession.h"
+#import "CoreSetBattlePublication.h"
 
 NS_ASSUME_NONNULL_BEGIN
+
+@class CoreSetPlayerSnapshot;
 
 @interface CoreSetWorldPoint : NSObject
 @property(nonatomic, readonly) float x;
@@ -139,6 +142,8 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 // roots, membership and observed fields immediately before publishing.
 @property(nonatomic, readonly) double captureStartedMonotonicSeconds;
 @property(nonatomic, readonly) double captureCompletedMonotonicSeconds;
+@property(nonatomic, readonly) BOOL bot;
+@property(nonatomic, readonly) double distanceMeters;
 // Counts of already-read fields, never raw names/addresses or a parity claim.
 @property(nonatomic, copy, readonly) NSString *readSemanticDiagnostic;
 @end
@@ -148,6 +153,75 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 - (void)decorateSnapshot:(CoreSetPlayerSnapshot *)snapshot canvasSize:(CGSize)canvasSize
              nativeScale:(double)nativeScale NS_SWIFT_NAME(decorate(_:canvasSize:nativeScale:));
 - (BOOL)clear;
+@end
+
+@interface CoreSetActionCandidateRecord : NSObject
+@property(nonatomic, readonly) CoreSetActionCandidateRawRecord raw;
+@property(nonatomic, readonly) uint64_t sessionGeneration;
+@property(nonatomic, readonly) int32_t processID;
+@property(nonatomic, readonly) uint64_t imageBase;
+@property(nonatomic, readonly) uint64_t controllerAddress;
+@property(nonatomic, copy, readonly) NSUUID *snapshotID;
+@property(nonatomic, readonly) double captureCompletedMonotonicSeconds;
+@property(nonatomic, readonly) BOOL bot;
+@property(nonatomic, readonly) double distanceMeters;
+@property(nonatomic, readonly) CGPoint screenPoint;
+@property(nonatomic, readonly) CGSize canvasSize;
+@property(nonatomic, readonly) double cameraPitchDegrees;
+@property(nonatomic, readonly) double cameraYawDegrees;
+@property(nonatomic, readonly) double cameraRollDegrees;
+@property(nonatomic, readonly) double cameraFieldOfViewDegrees;
+@end
+
+@interface CoreSetActionCandidatePublicationStore : NSObject
+- (nullable CoreSetActionCandidateRecord *)publishCandidateKey:(uint64_t)candidateKey
+    target:(CoreSetWorldPoint *)target camera:(CoreSetWorldPoint *)camera
+    bestPixels:(double)bestPixels radius:(double)radius screenPoint:(CGPoint)screenPoint
+    canvasSize:(CGSize)canvasSize cameraPitch:(double)cameraPitch cameraYaw:(double)cameraYaw
+    cameraRoll:(double)cameraRoll cameraFOV:(double)cameraFOV
+    bot:(BOOL)bot distanceMeters:(double)distanceMeters
+    sessionGeneration:(uint64_t)sessionGeneration processID:(int32_t)processID
+    imageBase:(uint64_t)imageBase controller:(uint64_t)controller
+    snapshotID:(NSUUID *)snapshotID capturedAt:(double)capturedAt;
+- (nullable CoreSetActionCandidateRecord *)publishMissingForSessionGeneration:(uint64_t)sessionGeneration
+    processID:(int32_t)processID imageBase:(uint64_t)imageBase controller:(uint64_t)controller
+    snapshotID:(NSUUID *)snapshotID capturedAt:(double)capturedAt;
+- (nullable CoreSetActionCandidateRecord *)copyRecord;
+- (void)clear;
+@end
+
+// Immutable action-only publication. It deliberately contains no marks,
+// screen points or full CoreSetPlayerSnapshot reference.
+@interface CoreSetActionInputAuthority : NSObject
+@property(nonatomic, readonly) CoreSetActionInputAuthorityRawRecord raw;
+@property(nonatomic, readonly) uint64_t sessionGeneration;
+@property(nonatomic, readonly) int32_t processID;
+@property(nonatomic, readonly) uint64_t imageBase;
+@property(nonatomic, copy, readonly) NSUUID *snapshotID;
+@property(nonatomic, readonly) double captureStartedMonotonicSeconds;
+@property(nonatomic, readonly) double captureCompletedMonotonicSeconds;
+@property(nonatomic, readonly) uint64_t controllerAddress;
+@property(nonatomic, readonly) uint64_t localActorAddress;
+@property(nonatomic, readonly) BOOL localADS;
+@property(nonatomic, readonly) BOOL localFiring;
+@property(nonatomic, readonly) uint8_t localFiringRaw;
+@property(nonatomic, readonly) float controlPitchDegrees;
+@property(nonatomic, readonly) float controlYawDegrees;
+@property(nonatomic, readonly) float rotationInputPitch;
+@property(nonatomic, readonly) float rotationInputYaw;
+@property(nonatomic, readonly) BOOL recoilInputsPresent;
+@property(nonatomic, readonly) uint32_t recoilBinding;
+@property(nonatomic, strong, readonly, nullable) CoreSetRecoilPostSample *recoilPostSample;
+@property(nonatomic, readonly) float recoilFirstWeight;
+@property(nonatomic, readonly) float recoilFirstBindingScale;
+@property(nonatomic, readonly) float recoilSecondWeight;
+@property(nonatomic, readonly) float recoilSecondBindingScale;
+// c2e24 predecessor authority is unresolved. Never infer the current slot
+// from localFiringRaw.
+@property(nonatomic, readonly) BOOL routeAuthorityResolved;
+// 1 = controller +0x620, 2 = controller +0x828; -1 while unresolved.
+@property(nonatomic, readonly) NSInteger resolvedActionSlotRaw;
++ (nullable instancetype)authorityWithSnapshot:(CoreSetPlayerSnapshot *)snapshot;
 @end
 
 @interface CoreSetPlayerCollector : NSObject
@@ -161,6 +235,9 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 + (BOOL)validateLiveIdentity:(CoreSetReadSession *)session
                     snapshot:(CoreSetPlayerSnapshot *)snapshot
     NS_SWIFT_NAME(validateLiveIdentity(_:snapshot:));
++ (BOOL)validateLiveAuthority:(CoreSetReadSession *)session
+                    authority:(CoreSetActionInputAuthority *)authority
+    NS_SWIFT_NAME(validateLiveAuthority(_:authority:));
 // Nil means no complete, identity-stable capture; it must never be interpreted
 // as an empty successful frame. No remote function calls or writes occur.
 + (nullable CoreSetPlayerSnapshot *)capture:(CoreSetReadSession *)session

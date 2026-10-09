@@ -5,28 +5,18 @@
 
 namespace CoreSet {
 
-// Worker c2fbc reloads the same-cycle firing byte into w19; c2ef4..c2f24
-// selects template 65 (ControlRotation) for zero and template 66
-// (RotationInput) for nonzero. This is the slot selector, unlike the local
-// c1d04/c3714 route-history bookkeeping below.
-inline TargetActionSlot referenceActionSlotForFireSample(uint8_t rawFire) {
-    return (rawFire & 1) != 0
-        ? TargetActionSlot::rotationInput : TargetActionSlot::controlRotation;
-}
-
 enum class RouteResultGate : uint8_t {
     exactOne, // Core c3150: result+1 must equal 1.
     lowBit    // Core c3698: result+1 bit 0 must be set.
 };
 
-// Only Core's c1d04/c1d98/c1f90/c3714/c3754/c3838 globals. The worker's
-// w19 selection and +620/+828 write permission are deliberately outside it.
+// Core's c1d04/c1d98/c1f90/c3714/c3754/c3838 route globals. The state must be
+// advanced from the real sink result; firing is not route authority.
 struct ActionRouteState {
     bool modeFlag = false;       // 0x100bd9750
     bool alternate = false;      // 0x100bd9778 bit 0
     bool priorConfig = false;    // 0x100bd99f0, normalized C+0x164
     uint32_t resultGateCount = 0;// 0x100bd9774; not a successful-write count.
-    static constexpr bool selectsWriteSlot = false;
 
     // c1d04..c1d10 clears alternate, flag and count.
     void resetWithCount() {
@@ -69,5 +59,14 @@ struct ActionRouteState {
         }
     }
 };
+
+// c2e14 selects slot 65 only for the established control-route state.
+// c3914/c3988 select slot 66 for every other reachable write-tail path.
+inline TargetActionSlot referenceActionSlotForRouteState(
+    const ActionRouteState &state, bool recoilEnabled) {
+    return !state.alternate && state.modeFlag && recoilEnabled
+        ? TargetActionSlot::controlRotation
+        : TargetActionSlot::rotationInput;
+}
 
 } // namespace CoreSet

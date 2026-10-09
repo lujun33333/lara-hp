@@ -1,100 +1,64 @@
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
-SNAPSHOT_H = (ROOT / "lara/overlay/CoreSetPlayerSnapshot.h").read_text(encoding="utf-8")
+AIM = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
+COORDINATOR = (ROOT / "lara/views/app/CoreSetRuntimeCoordinator.swift").read_text(encoding="utf-8")
 SNAPSHOT_MM = (ROOT / "lara/overlay/CoreSetPlayerSnapshot.mm").read_text(encoding="utf-8")
 
 
-def section(start: str, end: str) -> str:
-    begin = SOURCE.index(start)
-    finish = SOURCE.index(end, begin)
-    return SOURCE[begin:finish]
+def section(source: str, start: str, end: str) -> str:
+    begin = source.index(start)
+    return source[begin:source.index(end, begin)]
 
 
 class ActionCaptureRetryContractTest(unittest.TestCase):
-    def test_transient_aim_sample_loss_keeps_request_live(self):
-        tick = section("private func tick(_ request:", "private func publish(_ text:")
-        self.assertIn("noteCaptureFailure(capture.failure, lane: \"aim\"", tick)
-        self.assertIn("let failedAt = CACurrentMediaTime()", tick)
-        self.assertIn("deferBattleCapture(now: failedAt)", tick)
-        self.assertNotIn("战斗采样失效或请求撤销", tick)
-        self.assertNotIn("fail(request, capture.failure", tick)
+    def test_transient_action_publication_loss_keeps_request_live(self):
+        aim = section(AIM, "private func tick(_ request:", "private func publish(_ text:")
+        recoil = section(AIM, "private func tickRecoilOnly", "private func runRecoilFallback")
+        for body, lane in ((aim, "aim"), (recoil, "recoil")):
+            self.assertIn('noteCaptureFailure("battle-publication-waiting", lane: "' + lane + '"', body)
+            self.assertIn("deferBattleCapture(now: failedAt)", body)
+            self.assertNotIn("fail(request, capture", body)
 
-    def test_transient_recoil_sample_loss_keeps_request_live(self):
-        tick = section("private func tickRecoilOnly", "private func runRecoilFallback")
-        self.assertIn("noteCaptureFailure(capture.failure, lane: \"recoil\"", tick)
-        self.assertIn("let failedAt = CACurrentMediaTime()", tick)
-        self.assertIn("deferBattleCapture(now: failedAt)", tick)
-        self.assertNotIn("压枪战斗采样失效或请求已撤销", tick)
+    def test_retry_and_diagnostic_cadence_are_bounded(self):
+        self.assertIn("nextBattleCaptureAt = now + 0.15", AIM)
+        self.assertIn("now - lastAimCaptureFailureLogAt >= 3", AIM)
+        self.assertIn("now - lastRecoilCaptureFailureLogAt >= 3", AIM)
+        self.assertIn("stage=retry terminal=0", AIM)
 
-    def test_retry_is_bounded_and_diagnostics_are_throttled(self):
-        self.assertIn("nextBattleCaptureAt = now + 0.15", SOURCE)
-        self.assertIn("now - lastAimCaptureFailureLogAt >= 3", SOURCE)
-        self.assertIn("now - lastRecoilCaptureFailureLogAt >= 3", SOURCE)
-        self.assertIn("stage=retry terminal=0", SOURCE)
+    def test_one_union_producer_owns_full_capture(self):
+        producer = section(COORDINATOR, "final class CoreSetBattleProducer", "final class CoreSetRuntimeCoordinator")
+        self.assertIn('DispatchQueue(label: "coreset.battle.producer"', producer)
+        self.assertIn("private let session = CoreSetReadSession()", producer)
+        self.assertIn("CoreSetPlayerCollector.capture(session", producer)
+        self.assertIn("playerBones: aim != nil || display?.playerBones == true", producer)
+        self.assertIn("includeBattleInputs: actionPrimary != nil", producer)
+        self.assertIn("candidateStore.publishCandidateKey(", producer)
+        self.assertNotIn("CoreSetPlayerCollector.capture", AIM)
 
-    def test_recoil_does_not_request_unused_bones(self):
-        recoil = section("private func tickRecoilOnly", "private func runRecoilFallback")
-        self.assertIn("includeBones: false,", recoil)
-        self.assertIn("includeBots: false, targetActor: 0", recoil)
-        self.assertIn("includeBones && includeBots", SOURCE)
-        self.assertIn("playerBones: demand.playerBones", SOURCE)
-        self.assertIn("botBones: demand.botBones", SOURCE)
+    def test_action_consumer_gets_compact_candidate_and_input_only(self):
+        self.assertIn("battleProducer.copyAction(", AIM)
+        self.assertIn("dynamics.plan(candidate: candidate, input: input", AIM)
+        self.assertIn("recoilDynamics.plan(input: input", AIM)
+        self.assertNotIn("snapshot: CoreSetPlayerSnapshot", AIM)
 
-    def test_heavy_roster_is_followed_by_fast_action_refresh(self):
-        self.assertIn("refreshActionForSnapshot", SNAPSHOT_H)
-        self.assertIn("refreshAction(for: roster", SOURCE)
-        self.assertIn("rosterPublication = ActionRosterPublication", SOURCE)
-        self.assertIn("targetActor: refreshTarget", SOURCE)
-        self.assertIn("targetActor: 0", SOURCE)
-        self.assertIn("actorArrayScan=0", SNAPSHOT_MM)
+    def test_prior_key_is_owned_by_publication_store(self):
+        self.assertIn("publishMissing(forSessionGeneration:", COORDINATOR)
+        self.assertIn("capturedAt - _capturedAt > 0.075000001", SNAPSHOT_MM)
+        self.assertIn("previousActor: candidateStore.copyRecord()?.raw.candidateKey ?? 0", COORDINATOR)
 
-    def test_heavy_capture_is_confined_to_independent_producer(self):
-        producer = section("private func produceRoster()", "private func publishedRoster")
-        action = section("private func captureAction", "private func shouldAttemptBattleCapture")
-        self.assertIn('DispatchQueue(label: "coreset.basic.aim.roster"', SOURCE)
-        self.assertIn("private var rosterSession = CoreSetReadSession()", SOURCE)
-        self.assertIn("CoreSetPlayerCollector.capture(rosterSession", producer)
-        self.assertIn("includeBattleInputs: false", producer)
-        self.assertNotIn("CoreSetPlayerCollector.capture", action)
-        self.assertIn("rosterLock.lock()", SOURCE)
-        self.assertIn("let snapshot: CoreSetPlayerSnapshot", SOURCE)
+    def test_stop_releases_demands_without_disconnect_of_shared_session(self):
+        self.assertIn("battleProducer.releaseAim(requestID:", AIM)
+        self.assertIn("battleProducer.releaseRecoil(requestID:", AIM)
+        self.assertNotIn("session.disconnect()", AIM)
+        self.assertNotIn("rosterSession", AIM)
 
-    def test_stop_drains_both_action_and_roster_sessions(self):
-        self.assertIn("private func drainRosterProducer() -> Bool", SOURCE)
-        self.assertGreaterEqual(SOURCE.count("let rosterClean = self.drainRosterProducer()"), 2)
-        self.assertIn("let rosterClean = drainRosterProducer()", SOURCE)
-        self.assertIn("rosterClean && self.pendingProbes.isEmpty", SOURCE)
-        self.assertIn("rosterClean && pendingProbes.isEmpty", SOURCE)
-
-    def test_action_session_owns_inputs_generation_and_lock_policy(self):
-        self.assertNotIn("!source.battleInputsPresent", SNAPSHOT_MM)
-        self.assertIn("snapshot.sessionGeneration = generation", SNAPSHOT_MM)
-        self.assertIn("snapshot.battleInputsPresent = YES", SNAPSHOT_MM)
-        aim = section("private func tick(_ request:", "private func publish(_ text:")
-        self.assertIn("request.desired.lockSameTarget == true ? selectedActor : 0", aim)
-        self.assertIn("targetActor: refreshTarget", aim)
-
-    def test_fast_target_path_refreshes_current_inputs_geometry_and_identity(self):
-        for token in (
-            'CSLastCaptureDiagnostic = targetActor ? "action-refresh-target"',
-            "CSReadCorePlayerState(session, generation, oldMark.actorAddress",
-            "CSRefreshActionBone(session, generation, base",
-            'CSLastCaptureDiagnostic = "action-refresh-inputs-final"',
-            "controller + 0x620", "controller + 0x828",
-            'CSLastCaptureDiagnostic = "action-refresh-identity-final"',
-            "finalWorld != world", "finalController != controller", "finalLocal != local",
-        ):
-            self.assertIn(token, SNAPSHOT_MM)
-
-    def test_long_capture_rechecks_request_identity_before_consuming_snapshot(self):
-        aim = section("private func tick(_ request:", "private func publish(_ text:")
-        recoil = section("private func tickRecoilOnly", "private func runRecoilFallback")
-        self.assertGreaterEqual(aim.count("isLive(request.token, host: hostGeneration)"), 2)
-        self.assertGreaterEqual(recoil.count("isLive(recoilRequest.token, host: hostGeneration)"), 2)
+    def test_route_authority_is_not_inferred_from_fire(self):
+        self.assertIn("guard input.routeAuthorityResolved", AIM)
+        self.assertIn("switch input.resolvedActionSlotRaw", AIM)
+        self.assertIn("拒绝用 firing 字节猜测 +0x620/+0x828", AIM)
+        self.assertNotIn("routeDynamics.slot(firingSample:", AIM)
 
 
 if __name__ == "__main__":

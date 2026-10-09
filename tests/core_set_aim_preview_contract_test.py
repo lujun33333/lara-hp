@@ -83,12 +83,12 @@ class CoreSetAimPreviewContractTest(unittest.TestCase):
         self.assertNotIn("CoreSetPlayerCollector.capture", self.preview)
         self.assertNotIn("CoreSetReadSession", self.preview)
         self.assertIn("CoreSetAimDisplayRecordStore.shared.publish(record)", self.action)
-        self.assertIn("candidateKey: selectedActor", self.action)
+        self.assertIn("candidateKey: raw.candidateKey", self.action)
         self.assertIn("preview.capture(canvas:", self.display)
         self.assertNotRegex(self.preview, r"\b(ds_kwrite|vm_write|mach_vm_write|RemoteCall)\b")
         self.assertIn("CoreSetIsolatedWriteProbe", self.action)
-        self.assertIn("includeBattleInputs: false", self.action)
-        self.assertIn("refreshAction(for: roster", self.action)
+        self.assertIn("battleProducer.copyAction(", self.action)
+        self.assertIn("dynamics.plan(candidate: candidate, input: input", self.action)
         self.assertIn("result.committed", self.action)
 
     def test_display_link_and_record_expiry_preserve_exact_receipt_gating(self) -> None:

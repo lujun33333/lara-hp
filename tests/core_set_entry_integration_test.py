@@ -82,7 +82,7 @@ def validate_owner(text):
          "var featureState: CoreSetFeatureState { menu.featureState }", "Self.retained[identity] = self", "menu.bindMenuHostConsumer(consumer)")
     assert owner.count("CoreSetMenuViewController()") == 1
     assert owner.count("menu.bindGameConsumer(playerConsumer, to: \\.player)") == 1
-    assert "CoreSetPlayerConsumer(coordinator: self)" in owner
+    assert "CoreSetPlayerConsumer(coordinator: self, battleProducer: battleProducer)" in owner
     assert "playerConsumer?.consumed(receipt)" in owner
     need(swift(owner, "activate"), "guard !stopping, let scene", "host.startLocal(in: scene, menuController: menu)")
     need(swift(owner, "hostChanged"), "submittedGeneration != host.renderGeneration", "generation: host.renderGeneration, sequence: 1", "commands: []")
@@ -216,9 +216,9 @@ assert not re.search(r"smoba|UnityFramework|wzhud_|wzesp_", coordinator)
 launch = swift(coordinator, "launchGame")
 aim_consumer = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
 feature_state = (ROOT / "lara/views/app/CoreSetFeatureState.swift").read_text(encoding="utf-8")
-need(coordinator, "aimConsumer = CoreSetAimConsumer(coordinator: self)")
-need(aim_consumer, "CoreSetIsolatedWriteProbe", "includeBattleInputs: false", "refreshAction(for: roster",
-     "result.committed", "cleanup.complete")
+need(coordinator, "aimConsumer = CoreSetAimConsumer(coordinator: self, battleProducer: battleProducer)")
+need(aim_consumer, "CoreSetIsolatedWriteProbe", "battleProducer.copyAction(",
+     "submit(authority: input", "result.committed", "cleanup.complete")
 need(feature_state, "case basicAimScene")
 need(launch, "axDeviceSupportStatus()", "init_offsets()", "offsets_init()", "manager.run", "prepareKernelOffsets")
 for forbidden in ("foregroundInputProbeConfirmed", "foregroundProbeSourcesDetached",

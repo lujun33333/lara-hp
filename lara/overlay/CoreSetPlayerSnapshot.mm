@@ -14,6 +14,7 @@
 #import <array>
 #import <cmath>
 #import <cstring>
+#import <mutex>
 #import <string>
 #import <unordered_map>
 #import <unordered_set>
@@ -747,6 +748,228 @@ static void CSPublishAimAnchors(CoreSetPlayerMark *mark, const CSBoneState &stat
 @end
 @implementation CoreSetRecoilPostSample @end
 
+@interface CoreSetActionCandidateRecord ()
+@property(nonatomic) CoreSetActionCandidateRawRecord raw;
+@property(nonatomic) uint64_t sessionGeneration;
+@property(nonatomic) int32_t processID;
+@property(nonatomic) uint64_t imageBase;
+@property(nonatomic) uint64_t controllerAddress;
+@property(nonatomic, copy) NSUUID *snapshotID;
+@property(nonatomic) double captureCompletedMonotonicSeconds;
+@property(nonatomic) BOOL bot;
+@property(nonatomic) double distanceMeters;
+@property(nonatomic) CGPoint screenPoint;
+@property(nonatomic) CGSize canvasSize;
+@property(nonatomic) double cameraPitchDegrees;
+@property(nonatomic) double cameraYawDegrees;
+@property(nonatomic) double cameraRollDegrees;
+@property(nonatomic) double cameraFieldOfViewDegrees;
+@end
+@implementation CoreSetActionCandidateRecord @end
+
+@interface CoreSetActionCandidatePublicationStore () {
+    std::mutex _mutex;
+    CoreSetActionCandidateRawRecord _record;
+    uint64_t _serial;
+    uint64_t _generation;
+    int32_t _pid;
+    uint64_t _base;
+    uint64_t _controller;
+    NSUUID *_snapshotID;
+    double _capturedAt;
+    BOOL _bot;
+    double _distanceMeters;
+    CGPoint _screenPoint;
+    CGSize _canvasSize;
+    double _cameraPitch;
+    double _cameraYaw;
+    double _cameraRoll;
+    double _cameraFOV;
+}
+@end
+
+@implementation CoreSetActionCandidatePublicationStore
+- (BOOL)identityMatchesGeneration:(uint64_t)generation pid:(int32_t)pid
+    base:(uint64_t)base controller:(uint64_t)controller {
+    return generation && pid > 0 && base && controller && _generation == generation &&
+        _pid == pid && _base == base && _controller == controller;
+}
+- (CoreSetActionCandidateRecord *)copyLocked {
+    if (!_record.valid || !_record.publicationSerial || !_snapshotID) return nil;
+    CoreSetActionCandidateRecord *copy = [CoreSetActionCandidateRecord new];
+    copy.raw = _record; copy.sessionGeneration = _generation; copy.processID = _pid;
+    copy.imageBase = _base; copy.controllerAddress = _controller;
+    copy.snapshotID = [_snapshotID copy];
+    copy.captureCompletedMonotonicSeconds = _capturedAt;
+    copy.bot = _bot; copy.distanceMeters = _distanceMeters;
+    copy.screenPoint = _screenPoint; copy.canvasSize = _canvasSize;
+    copy.cameraPitchDegrees = _cameraPitch; copy.cameraYawDegrees = _cameraYaw;
+    copy.cameraRollDegrees = _cameraRoll; copy.cameraFieldOfViewDegrees = _cameraFOV;
+    return copy;
+}
+- (CoreSetActionCandidateRecord *)publishCandidateKey:(uint64_t)candidateKey
+    target:(CoreSetWorldPoint *)target camera:(CoreSetWorldPoint *)camera
+    bestPixels:(double)bestPixels radius:(double)radius screenPoint:(CGPoint)screenPoint
+    canvasSize:(CGSize)canvasSize cameraPitch:(double)cameraPitch cameraYaw:(double)cameraYaw
+    cameraRoll:(double)cameraRoll cameraFOV:(double)cameraFOV
+    bot:(BOOL)bot distanceMeters:(double)distanceMeters
+    sessionGeneration:(uint64_t)generation processID:(int32_t)pid
+    imageBase:(uint64_t)base controller:(uint64_t)controller
+    snapshotID:(NSUUID *)snapshotID capturedAt:(double)capturedAt {
+    std::lock_guard<std::mutex> guard(_mutex);
+    if (!candidateKey || !target || !camera || !snapshotID || !generation || pid <= 0 ||
+        !base || !controller || !std::isfinite(bestPixels) || bestPixels < 0 ||
+        !std::isfinite(distanceMeters) || distanceMeters < 0 ||
+        !std::isfinite(screenPoint.x) || !std::isfinite(screenPoint.y) ||
+        !std::isfinite(canvasSize.width) || !std::isfinite(canvasSize.height) ||
+        canvasSize.width <= 0 || canvasSize.height <= 0 ||
+        !std::isfinite(cameraPitch) || !std::isfinite(cameraYaw) ||
+        !std::isfinite(cameraRoll) || !std::isfinite(cameraFOV) ||
+        cameraFOV <= 1 || cameraFOV >= 170 ||
+        !std::isfinite(radius) || radius <= 1 || !std::isfinite(capturedAt) || capturedAt < 0 ||
+        !std::isfinite(target.x) || !std::isfinite(target.y) || !std::isfinite(target.z) ||
+        !std::isfinite(camera.x) || !std::isfinite(camera.y) || !std::isfinite(camera.z)) return nil;
+    const BOOL identity = [self identityMatchesGeneration:generation pid:pid base:base controller:controller];
+    const BOOL hadPrevious = identity && _record.valid && _record.candidateKey;
+    const BOOL same = hadPrevious && _record.candidateKey == candidateKey;
+    if (_serial == UINT64_MAX) return nil;
+    CoreSetActionCandidateRawRecord next = {};
+    next.valid = 1; next.candidateKey = candidateKey;
+    next.target[0] = target.x; next.target[1] = target.y; next.target[2] = target.z;
+    next.camera[0] = camera.x; next.camera[1] = camera.y; next.camera[2] = camera.z;
+    next.normalizedScreenError = same ? 0.0f : (float)std::clamp(bestPixels / radius, 0.0, 1.0);
+    next.publicationSerial = ++_serial;
+    next.sameAsPrevious = same ? 1 : 0; next.hadPrevious = hadPrevious ? 1 : 0;
+    _record = next; _generation = generation; _pid = pid; _base = base;
+    _controller = controller; _snapshotID = [snapshotID copy]; _capturedAt = capturedAt;
+    _bot = bot; _distanceMeters = distanceMeters;
+    _screenPoint = screenPoint; _canvasSize = canvasSize;
+    _cameraPitch = cameraPitch; _cameraYaw = cameraYaw;
+    _cameraRoll = cameraRoll; _cameraFOV = cameraFOV;
+    return [self copyLocked];
+}
+- (CoreSetActionCandidateRecord *)publishMissingForSessionGeneration:(uint64_t)generation
+    processID:(int32_t)pid imageBase:(uint64_t)base controller:(uint64_t)controller
+    snapshotID:(NSUUID *)snapshotID capturedAt:(double)capturedAt {
+    std::lock_guard<std::mutex> guard(_mutex);
+    if (!snapshotID || !std::isfinite(capturedAt) || capturedAt < 0 ||
+        ![self identityMatchesGeneration:generation pid:pid base:base controller:controller] ||
+        !_record.valid || !_record.candidateKey || !_snapshotID ||
+        capturedAt < _capturedAt || capturedAt - _capturedAt > 0.075000001 ||
+        _serial == UINT64_MAX) {
+        _record = {}; _generation = generation; _pid = pid; _base = base;
+        _controller = controller; _snapshotID = [snapshotID copy]; _capturedAt = capturedAt;
+        return nil;
+    }
+    _record.publicationSerial = ++_serial;
+    _record.sameAsPrevious = 1; _record.hadPrevious = 1;
+    _snapshotID = [snapshotID copy]; _capturedAt = capturedAt;
+    return [self copyLocked];
+}
+- (CoreSetActionCandidateRecord *)copyRecord {
+    std::lock_guard<std::mutex> guard(_mutex);
+    return [self copyLocked];
+}
+- (void)clear {
+    std::lock_guard<std::mutex> guard(_mutex);
+    _record = {}; _generation = _base = _controller = 0; _pid = -1;
+    _snapshotID = nil; _capturedAt = 0; _bot = NO; _distanceMeters = 0;
+    _screenPoint = CGPointZero; _canvasSize = CGSizeZero;
+    _cameraPitch = _cameraYaw = _cameraRoll = _cameraFOV = 0;
+}
+@end
+
+@interface CoreSetActionInputAuthority ()
+@property(nonatomic) CoreSetActionInputAuthorityRawRecord raw;
+@property(nonatomic) uint64_t sessionGeneration;
+@property(nonatomic) int32_t processID;
+@property(nonatomic) uint64_t imageBase;
+@property(nonatomic, copy) NSUUID *snapshotID;
+@property(nonatomic) double captureStartedMonotonicSeconds;
+@property(nonatomic) double captureCompletedMonotonicSeconds;
+@property(nonatomic) uint64_t controllerAddress;
+@property(nonatomic) uint64_t localActorAddress;
+@property(nonatomic) BOOL localADS;
+@property(nonatomic) BOOL localFiring;
+@property(nonatomic) uint8_t localFiringRaw;
+@property(nonatomic) float controlPitchDegrees;
+@property(nonatomic) float controlYawDegrees;
+@property(nonatomic) float rotationInputPitch;
+@property(nonatomic) float rotationInputYaw;
+@property(nonatomic) BOOL recoilInputsPresent;
+@property(nonatomic) uint32_t recoilBinding;
+@property(nonatomic, strong, nullable) CoreSetRecoilPostSample *recoilPostSample;
+@property(nonatomic) float recoilFirstWeight;
+@property(nonatomic) float recoilFirstBindingScale;
+@property(nonatomic) float recoilSecondWeight;
+@property(nonatomic) float recoilSecondBindingScale;
+@property(nonatomic) BOOL routeAuthorityResolved;
+@property(nonatomic) NSInteger resolvedActionSlotRaw;
+@end
+
+@implementation CoreSetActionInputAuthority
++ (instancetype)authorityWithSnapshot:(CoreSetPlayerSnapshot *)snapshot {
+    if (!snapshot || !snapshot.battleInputsPresent || !snapshot.snapshotID ||
+        !snapshot.sessionGeneration || snapshot.processID <= 0 || !snapshot.imageBase ||
+        !snapshot.controllerAddress || !snapshot.localActorAddress ||
+        !std::isfinite(snapshot.captureStartedMonotonicSeconds) ||
+        !std::isfinite(snapshot.captureCompletedMonotonicSeconds) ||
+        snapshot.captureCompletedMonotonicSeconds < snapshot.captureStartedMonotonicSeconds ||
+        !std::isfinite(snapshot.controlPitchDegrees) || !std::isfinite(snapshot.controlYawDegrees) ||
+        !std::isfinite(snapshot.rotationInputPitch) || !std::isfinite(snapshot.rotationInputYaw)) return nil;
+    CoreSetActionInputAuthority *value = [CoreSetActionInputAuthority new];
+    value.sessionGeneration = snapshot.sessionGeneration; value.processID = snapshot.processID;
+    value.imageBase = snapshot.imageBase; value.snapshotID = [snapshot.snapshotID copy];
+    value.captureStartedMonotonicSeconds = snapshot.captureStartedMonotonicSeconds;
+    value.captureCompletedMonotonicSeconds = snapshot.captureCompletedMonotonicSeconds;
+    value.controllerAddress = snapshot.controllerAddress; value.localActorAddress = snapshot.localActorAddress;
+    value.localADS = snapshot.localADS; value.localFiring = snapshot.localFiring;
+    value.localFiringRaw = snapshot.localFiringRaw;
+    value.controlPitchDegrees = snapshot.controlPitchDegrees; value.controlYawDegrees = snapshot.controlYawDegrees;
+    value.rotationInputPitch = snapshot.rotationInputPitch; value.rotationInputYaw = snapshot.rotationInputYaw;
+    value.recoilInputsPresent = snapshot.recoilInputsPresent; value.recoilBinding = snapshot.recoilBinding;
+    value.recoilPostSample = snapshot.recoilPostSample;
+    value.recoilFirstWeight = snapshot.recoilFirstWeight;
+    value.recoilFirstBindingScale = snapshot.recoilFirstBindingScale;
+    value.recoilSecondWeight = snapshot.recoilSecondWeight;
+    value.recoilSecondBindingScale = snapshot.recoilSecondBindingScale;
+    value.routeAuthorityResolved = NO;
+    value.resolvedActionSlotRaw = -1;
+    CoreSetActionInputAuthorityRawRecord raw = {};
+    raw.processID = snapshot.processID; raw.imageBase = snapshot.imageBase;
+    raw.sessionGeneration = snapshot.sessionGeneration;
+    raw.controllerAddress = snapshot.controllerAddress; raw.localActorAddress = snapshot.localActorAddress;
+    [snapshot.snapshotID getUUIDBytes:raw.snapshotID];
+    raw.captureStartedMonotonicSeconds = snapshot.captureStartedMonotonicSeconds;
+    raw.captureCompletedMonotonicSeconds = snapshot.captureCompletedMonotonicSeconds;
+    raw.localADS = snapshot.localADS ? 1 : 0; raw.localFiring = snapshot.localFiring ? 1 : 0;
+    raw.localFiringRaw = snapshot.localFiringRaw;
+    raw.recoilInputsPresent = snapshot.recoilInputsPresent ? 1 : 0;
+    raw.routeAuthorityResolved = 0;
+    raw.resolvedActionSlot = -1;
+    raw.controlPitchDegrees = snapshot.controlPitchDegrees; raw.controlYawDegrees = snapshot.controlYawDegrees;
+    raw.rotationInputPitch = snapshot.rotationInputPitch; raw.rotationInputYaw = snapshot.rotationInputYaw;
+    raw.recoilBinding = snapshot.recoilBinding;
+    if (snapshot.recoilPostSample) {
+        raw.recoilKey = snapshot.recoilPostSample.key;
+        raw.recoilOwnerToken = snapshot.recoilPostSample.ownerToken;
+        raw.recoilActive = snapshot.recoilPostSample.active;
+        raw.recoilValues[0] = snapshot.recoilPostSample.value0;
+        raw.recoilValues[1] = snapshot.recoilPostSample.value1;
+        raw.recoilValues[2] = snapshot.recoilPostSample.value2;
+        raw.recoilValues[3] = snapshot.recoilPostSample.value3;
+        raw.recoilValues[4] = snapshot.recoilPostSample.value4;
+        raw.recoilValues[5] = snapshot.recoilPostSample.value5;
+        raw.recoilScales[0] = snapshot.recoilFirstWeight;
+        raw.recoilScales[1] = snapshot.recoilFirstBindingScale;
+        raw.recoilScales[2] = snapshot.recoilSecondWeight;
+        raw.recoilScales[3] = snapshot.recoilSecondBindingScale;
+    }
+    value.raw = raw;
+    return value;
+}
+@end
+
 @interface CoreSetPlayerSnapshot ()
 @property(nonatomic) CSCamera motionCamera;
 @property(nonatomic) uint64_t rosterWorldAddress;
@@ -1043,6 +1266,24 @@ static bool CSRefreshActionBone(CoreSetReadSession *session, uint64_t generation
         controller == snapshot.controllerAddress && controller <= UINT64_MAX - 0x3540 &&
         CSReadValue(session, generation, controller + 0x3540, &local) &&
         local == snapshot.localActorAddress;
+}
++ (BOOL)validateLiveAuthority:(CoreSetReadSession *)session authority:(CoreSetActionInputAuthority *)authority {
+    if (!session || !authority || !authority.controllerAddress || !authority.localActorAddress ||
+        ![session connect] || session.processID != authority.processID ||
+        session.imageBase != authority.imageBase || session.generation != authority.sessionGeneration ||
+        session.imageBase > UINT64_MAX - CSWorldSlot) return NO;
+    const uint64_t generation = authority.sessionGeneration;
+    uint64_t world = 0, driver = 0, connection = 0, controller = 0, local = 0;
+    return CSReadValue(session, generation, session.imageBase + CSWorldSlot, &world) &&
+        CSUserPointerValid(world) && world <= UINT64_MAX - 0xc0 &&
+        CSReadValue(session, generation, world + 0xc0, &driver) &&
+        CSUserPointerValid(driver) && driver <= UINT64_MAX - 0x88 &&
+        CSReadValue(session, generation, driver + 0x88, &connection) &&
+        CSUserPointerValid(connection) && connection <= UINT64_MAX - 0x30 &&
+        CSReadValue(session, generation, connection + 0x30, &controller) &&
+        controller == authority.controllerAddress && controller <= UINT64_MAX - 0x3540 &&
+        CSReadValue(session, generation, controller + 0x3540, &local) &&
+        local == authority.localActorAddress;
 }
 + (CoreSetPlayerSnapshot *)capture:(CoreSetReadSession *)session canvasSize:(CGSize)size {
     return [self capture:session canvasSize:size playerBones:NO botBones:NO

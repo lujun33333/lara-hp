@@ -6,7 +6,8 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     typealias State = CoreSetPlayerSettings
     let capability = CoreSetCapability.playerRendering
     private weak var coordinator: CoreSetRuntimeCoordinator?
-    private let session = CoreSetReadSession()
+    private let battleProducer: CoreSetBattleProducer
+    private var session: CoreSetReadSession { battleProducer.readSession }
     private let geometrySession = CoreSetReadSession()
     private let presentationSession = CoreSetReadSession()
     private let grenadeMotion = CoreSetGrenadeMotionTracker()
@@ -55,9 +56,9 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private var pendingInvalidation: (token: CoreSetRequestToken, snapshot: UUID,
         generation: UInt64, revision: UInt64, reason: String)?
 
-    init(coordinator: CoreSetRuntimeCoordinator) {
+    init(coordinator: CoreSetRuntimeCoordinator, battleProducer: CoreSetBattleProducer) {
         self.coordinator = coordinator
-        session.diagnosticLabel = "player"
+        self.battleProducer = battleProducer
         geometrySession.diagnosticLabel = "player-geometry"
         presentationSession.diagnosticLabel = "player-presentation"
         NSLog("Core-SET: player-loop contract=latest-snapshot-v10 interval=0.15 presentationInterval=0.016 presentationClock=dispatch-source rosterRetry=0.15 rosterRefresh=1.0 firstFrame=current-camera-reprojection geometry=independent-camera-root-reprojection presentation=current-camera-cached-world-reprojection configurationApply=immediate renderEvidence=separate")
@@ -66,7 +67,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     }
 
     var availability: CoreSetAvailability {
-        guard session.ready && session.capabilities == 1 else {
+        guard battleProducer.ready else {
             return .unavailable(reason: session.lastConnectDiagnostic)
         }
         return coordinator?.playerCanvas != nil ? .ready :
@@ -92,9 +93,12 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
 
     private func probeTarget() {
         guard !stopped, !session.ready || !geometrySession.ready || !presentationSession.ready else { return }
+        battleProducer.refreshReadiness { [weak self] _ in
+            guard let self, !self.stopped else { return }
+            self.coordinator?.refreshPlayerAvailability()
+        }
         worker.async { [weak self] in
             guard let self else { return }
-            if !self.session.ready { _ = self.session.connect() }
             if !self.geometrySession.ready { _ = self.geometrySession.connect() }
             if !self.presentationSession.ready { _ = self.presentationSession.connect() }
             DispatchQueue.main.async { [weak self] in
@@ -338,7 +342,6 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                                         canvas: currentCanvas)
                 }
             }
-        }
     }
 
     private func refreshPresentation() {
@@ -429,21 +432,14 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         let includeCounts = settings.player.count.enabled == true || settings.bot.count.enabled == true
         let playerInformation = settings.player.information.enabled == true
         let botInformation = settings.bot.information.enabled == true && settings.hideBots != true
-        worker.async { [weak self] in
-            guard let self else { return }
-            let failureSequence = self.session.readFailureSequence
-            let snapshot = CoreSetPlayerCollector.capture(self.session, canvasSize: canvas.size,
-                playerBones: playerBones, botBones: botBones, boneDistanceLimit: boneDistanceLimit,
-                includeOffscreen: includeOffscreen, includeRadar: false,
-                includeBattleInputs: false, playerWeaponText: playerWeaponText,
-                botWeaponText: botWeaponText,
-                includeGrenadeWarning: includeGrenadeWarning, includeCounts: includeCounts,
-                playerInformation: playerInformation, botInformation: botInformation,
-                includeWarningYaw: false, maximumDrawDistance: maximumDrawDistance)
-            let captureFailure = self.session.readFailureSequence != failureSequence
-                ? self.session.lastReadDiagnostic
-                : "\(CoreSetPlayerCollector.lastCaptureDiagnostic()) transport-errors=0"
-            DispatchQueue.main.async { [weak self] in
+        battleProducer.requestDisplay(requestID: token.requestID,
+            hostGeneration: canvas.generation, revision: expectedRevision,
+            canvas: canvas.size, playerBones: playerBones, botBones: botBones,
+            boneDistanceLimit: boneDistanceLimit, includeOffscreen: includeOffscreen,
+            playerWeaponText: playerWeaponText, botWeaponText: botWeaponText,
+            includeGrenadeWarning: includeGrenadeWarning, includeCounts: includeCounts,
+            playerInformation: playerInformation, botInformation: botInformation,
+            maximumDrawDistance: maximumDrawDistance) { [weak self] snapshot, captureFailure in
                 guard let self else { return }
                 self.inFlight = false
                 // Cadence begins after the expensive attempt finishes. Using
@@ -1024,6 +1020,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         refresh?.invalidate(); refresh = nil
         presentationTimer?.cancel(); presentationTimer = nil
         activeToken = nil; pendingApply = nil
+        battleProducer.releaseDisplay(requestID: nil)
         currentRoster = nil; currentGeometry = nil
         geometryInFlight = false; presentationInFlight = false; geometryExpired = false
         lastGeometrySubmittedAt = nil; lastGeometryReceiptAt = nil
@@ -1036,9 +1033,9 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         presentationReceiptWindowStartedAt = nil; presentationReceiptCount = 0
         let motionClean = grenadeMotion.clear()
         CoreSetWeaponImageCatalog.stop()
-        let cleanup = worker.sync { session.disconnect() } // Drain queued connects/captures first.
+        worker.sync {} // Drain queued secondary-session connects first.
         let geometryCleanup = geometryWorker.sync { geometrySession.disconnect() }
         let presentationCleanup = presentationWorker.sync { presentationSession.disconnect() }
-        return motionClean && cleanup.complete && geometryCleanup.complete && presentationCleanup.complete
+        return motionClean && geometryCleanup.complete && presentationCleanup.complete
     }
 }

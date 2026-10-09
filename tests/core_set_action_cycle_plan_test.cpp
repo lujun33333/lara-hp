@@ -49,9 +49,13 @@ static void negativeAndTransactionCases() {
     assert(compensation.residualGain == 0.56f && compensation.minimumGain == 0.06f);
     assert(compensation.deadzoneRatio == 0.25f && compensation.minimumDeadzone == 0.10f);
     assert(!aimSceneCompensationValues(4, &compensation));
-    assert(referenceActionSlotForFireSample(0) == TargetActionSlot::controlRotation);
-    assert(referenceActionSlotForFireSample(1) == TargetActionSlot::rotationInput);
-    assert(referenceActionSlotForFireSample(3) == TargetActionSlot::rotationInput);
+    ActionRouteState route;
+    assert(referenceActionSlotForRouteState(route, false) == TargetActionSlot::rotationInput);
+    assert(referenceActionSlotForRouteState(route, true) == TargetActionSlot::rotationInput);
+    route.modeFlag = true;
+    assert(referenceActionSlotForRouteState(route, true) == TargetActionSlot::controlRotation);
+    route.alternate = true;
+    assert(referenceActionSlotForRouteState(route, true) == TargetActionSlot::rotationInput);
     AimDeltaPlan delta;
     ActionWriteDraft draft;
     assert(mergeAimRecoilDeltas(0, 0, 0, 0, &delta));

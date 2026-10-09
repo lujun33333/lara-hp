@@ -30,6 +30,12 @@ assert decode_role(0x8A3B58, 0x22) == "darkswordOverlayDrawHostController"
 assert decode_role(0x8A3B7B, 0x22) == "darkswordOverlayIconHostController"
 assert decode_role(0x8A3B9E, 0x22) == "darkswordOverlayMenuHostController"
 assert decode_role(0x8A3BC1, 0x1E) == "unregisterWindowWithContextID:"
+assert decode_role(0x8A3CAF, 0x22) == "darkswordOverlayDrawLockInvocation"
+assert decode_role(0x8A3CD2, 0x22) == "darkswordOverlayIconLockInvocation"
+assert decode_role(0x8A3CF5, 0x22) == "darkswordOverlayMenuLockInvocation"
+assert decode_role(0x8A3D18, 0x24) == "darkswordOverlayDrawUnlockInvocation"
+assert decode_role(0x8A3D3D, 0x24) == "darkswordOverlayIconUnlockInvocation"
+assert decode_role(0x8A3D62, 0x24) == "darkswordOverlayMenuUnlockInvocation"
 assert [struct.unpack_from("<I", reference_image, offset)[0]
         for offset in (0x564B8, 0x564C8, 0x564D8)] == [0x52800020, 0x52800040, 0x52800060]
 assert [struct.unpack_from("<I", reference_image, offset)[0]
@@ -105,6 +111,16 @@ for token in (
     '@"darkswordOverlayDrawHostController"',
     '@"darkswordOverlayIconHostController"',
     '@"darkswordOverlayMenuHostController"',
+    '@"darkswordOverlayDrawLockInvocation"',
+    '@"darkswordOverlayIconLockInvocation"',
+    '@"darkswordOverlayMenuLockInvocation"',
+    '@"darkswordOverlayDrawUnlockInvocation"',
+    '@"darkswordOverlayIconUnlockInvocation"',
+    '@"darkswordOverlayMenuUnlockInvocation"',
+    "UIApplicationProtectedDataWillBecomeUnavailable",
+    "UIApplicationProtectedDataDidBecomeAvailable",
+    "NSInvocation", "retainArguments", "addObserver:invocation",
+    "removeObserver:invocation", "installCoreLifecycleForDraw",
     "RemoteCall *_process",
     "remote_getClass(process, name)",
     "doRemoteCallCheckedWithTimeout:10000",
@@ -136,9 +152,18 @@ assert "!NSThread.isMainThread" in register_three
 assert register_three.index("createSide:draw level:kCoreSetCoreDrawLevel") < \
        register_three.index("createSide:icon level:kCoreSetCoreIconLevel") < \
        register_three.index("createSide:menu level:kCoreSetCoreMenuLevel")
+assert register_three.index("createSide:menu level:kCoreSetCoreMenuLevel") < \
+       register_three.index("installCoreLifecycleForDraw:draw icon:icon menu:menu")
+lifecycle = adapter[adapter.index("- (BOOL)installCoreLifecycleForDraw:"):
+                    adapter.index("- (void)observeBothSurfacesAsync:")]
+assert lifecycle.index("UIApplicationProtectedDataWillBecomeUnavailable") < \
+       lifecycle.index("UIApplicationProtectedDataDidBecomeAvailable")
+assert "const double levels[] = {kCoreSetCoreDrawLevel, kCoreSetCoreIconLevel," in lifecycle
 unregister_three = adapter[adapter.index("- (void)unregisterThreeSurfacesAsync:"):
                            adapter.index("@end", adapter.index("- (void)unregisterThreeSurfacesAsync:"))]
 assert "!NSThread.isMainThread" in unregister_three
+assert unregister_three.index("removeCoreLifecycleForSides:sides") < \
+       unregister_three.index("removeSide:draw")
 assert unregister_three.index("removeSide:draw") < unregister_three.index("removeSide:icon") < \
        unregister_three.index("removeSide:menu")
 for role in ("Draw", "Icon", "Menu"):

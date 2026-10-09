@@ -57,6 +57,15 @@ static BOOL sReadProfileValidated = NO;
 + (BOOL)matchesCurrentKernel {
     @synchronized (self) {
         if (!ds_is_ready()) { sReadProfileFailure = @"kernel-transport-not-ready"; return NO; }
+        const size_t pageSize = (size_t)getpagesize();
+        const BOOL translationLayoutMatch =
+            (pageSize == 0x4000 &&
+             ((t1sz_boot == 0x19 &&
+               coreset_arm_tt_l1_index_mask == 0x0000007000000000ULL) ||
+              (t1sz_boot == 0x11 &&
+               coreset_arm_tt_l1_index_mask == 0x00007FF000000000ULL))) ||
+            (pageSize == 0x1000 && t1sz_boot == 0x1A &&
+             coreset_arm_tt_l1_index_mask == 0x0000003FC0000000ULL);
         const BOOL offsetsMatch =
             off_proc_p_pid == 0x60 && off_proc_p_proc_ro == 0x18 &&
             off_proc_ro_pr_task == 0x8 && off_task_map == 0x28 &&
@@ -70,7 +79,7 @@ static BOOL sReadProfileValidated = NO;
             off_vm_object_vo_un1_vou_size == 0x18 &&
             off_vm_object_ref_count == 0x28 &&
             off_vm_named_entry_backing_copy == 0x10 && off_vm_named_entry_size == 0x20 &&
-            smr_base == 2 && t1sz_boot == 0x19 && getpagesize() == 0x4000 &&
+            smr_base == 2 && translationLayoutMatch &&
             VM_MIN_KERNEL_ADDRESS == 0xFFFFFFDC00000000ULL &&
             VM_MAX_KERNEL_ADDRESS == 0xFFFFFFFBFFFFFFFFULL;
         if (!offsetsMatch) {

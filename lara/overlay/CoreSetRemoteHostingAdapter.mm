@@ -47,6 +47,21 @@ static Class CSAccessibilityHostingClass(void) {
     return NSClassFromString(@"SBSAccessibilityWindowHostingController");
 }
 
+static NSInvocation *CSCoreHostingInvocation(id target, SEL selector, uint32_t context,
+                                             const double *level) {
+    if (!target || !selector || ![target respondsToSelector:selector]) return nil;
+    NSMethodSignature *signature = [target methodSignatureForSelector:selector];
+    const NSUInteger requiredArguments = level ? 4 : 3;
+    if (!signature || signature.numberOfArguments < requiredArguments) return nil;
+    NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
+    invocation.target = target;
+    invocation.selector = selector;
+    [invocation setArgument:&context atIndex:2];
+    if (level) [invocation setArgument:(void *)level atIndex:3];
+    [invocation retainArguments];
+    return invocation;
+}
+
 static BOOL CSChecked(RemoteCall *process, const char *label, void *function,
                       const uint64_t *arguments, NSUInteger count, uint64_t *value) {
     if (!process || !function || !label || count > 8 || (count && !arguments)) return NO;
@@ -125,6 +140,8 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 @property(nonatomic) BOOL observed;
 @property(nonatomic, strong) id coreHostingController;
 @property(nonatomic) SEL associationKey;
+@property(nonatomic) SEL lockInvocationKey;
+@property(nonatomic) SEL unlockInvocationKey;
 @property(nonatomic, copy) NSString *role;
 @property(nonatomic, copy) NSString *lastReadbackStep;
 @end
@@ -133,6 +150,10 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
 @interface CoreSetRemoteHostingAdapter ()
 - (BOOL)localSideObserved:(CoreSetRemoteHostSide *)side;
 - (BOOL)remoteSideObserved:(CoreSetRemoteHostSide *)side;
+- (BOOL)removeCoreLifecycleForSides:(NSArray<CoreSetRemoteHostSide *> *)sides;
+- (BOOL)installCoreLifecycleForDraw:(CoreSetRemoteHostSide *)draw
+                               icon:(CoreSetRemoteHostSide *)icon
+                               menu:(CoreSetRemoteHostSide *)menu;
 @end
 
 @implementation CoreSetRemoteHostingAdapter {
@@ -324,6 +345,82 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     if ((hidden & 0xff) != 0) { side.lastReadbackStep = @"remote-hidden"; return NO; }
     side.lastReadbackStep = @"ok";
     return YES;
+}
+- (BOOL)removeCoreLifecycleForSides:(NSArray<CoreSetRemoteHostSide *> *)sides {
+    if (!_coreHosting) return YES;
+    UIApplication *application = UIApplication.sharedApplication;
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    @try {
+        // Core 1.7 removes draw/icon/menu lock observers first, followed by
+        // draw/icon/menu unlock observers.
+        for (NSUInteger phase = 0; phase < 2; phase++) {
+            for (CoreSetRemoteHostSide *side in sides) {
+                SEL key = phase == 0 ? side.lockInvocationKey : side.unlockInvocationKey;
+                if (!key) continue;
+                id invocation = objc_getAssociatedObject(application, key);
+                if (invocation) [center removeObserver:invocation];
+                objc_setAssociatedObject(application, key, nil,
+                                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                if (objc_getAssociatedObject(application, key)) return NO;
+            }
+        }
+    } @catch (__unused NSException *exception) {
+        return NO;
+    }
+    return YES;
+}
+- (BOOL)installCoreLifecycleForDraw:(CoreSetRemoteHostSide *)draw
+                               icon:(CoreSetRemoteHostSide *)icon
+                               menu:(CoreSetRemoteHostSide *)menu {
+    if (!_coreHosting || !draw || !icon || !menu) return NO;
+    NSArray<CoreSetRemoteHostSide *> *sides = @[draw, icon, menu];
+    const double levels[] = {kCoreSetCoreDrawLevel, kCoreSetCoreIconLevel,
+                             kCoreSetCoreMenuLevel};
+    SEL unregisterSelector = NSSelectorFromString(@"unregisterWindowWithContextID:");
+    SEL registerSelector = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
+    SEL invokeSelector = NSSelectorFromString(@"invoke");
+    UIApplication *application = UIApplication.sharedApplication;
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    NSMutableArray<NSInvocation *> *locks = [NSMutableArray arrayWithCapacity:3];
+    NSMutableArray<NSInvocation *> *unlocks = [NSMutableArray arrayWithCapacity:3];
+    if (![self removeCoreLifecycleForSides:sides]) return NO;
+    BOOL ready = YES;
+    @try {
+        for (NSUInteger index = 0; index < sides.count; index++) {
+            CoreSetRemoteHostSide *side = sides[index];
+            if (!side.context || !side.coreHostingController || !side.lockInvocationKey ||
+                !side.unlockInvocationKey) { ready = NO; break; }
+            NSInvocation *lock = CSCoreHostingInvocation(side.coreHostingController,
+                unregisterSelector, side.context, nullptr);
+            NSInvocation *unlock = CSCoreHostingInvocation(side.coreHostingController,
+                registerSelector, side.context, &levels[index]);
+            if (!lock || !unlock) { ready = NO; break; }
+            objc_setAssociatedObject(application, side.lockInvocationKey, lock,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(application, side.unlockInvocationKey, unlock,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (objc_getAssociatedObject(application, side.lockInvocationKey) != lock ||
+                objc_getAssociatedObject(application, side.unlockInvocationKey) != unlock) {
+                ready = NO; break;
+            }
+            [locks addObject:lock];
+            [unlocks addObject:unlock];
+        }
+        if (ready) {
+            for (NSInvocation *invocation in locks) {
+                [center addObserver:invocation selector:invokeSelector
+                               name:UIApplicationProtectedDataWillBecomeUnavailable object:nil];
+            }
+            for (NSInvocation *invocation in unlocks) {
+                [center addObserver:invocation selector:invokeSelector
+                               name:UIApplicationProtectedDataDidBecomeAvailable object:nil];
+            }
+        }
+    } @catch (__unused NSException *exception) {
+        ready = NO;
+    }
+    if (!ready) (void)[self removeCoreLifecycleForSides:sides];
+    return ready;
 }
 - (void)observeBothSurfacesAsync:(void (^)(BOOL, uint64_t))completion {
     if (!completion) return;
@@ -648,14 +745,20 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     menu.source = menuWindow; menu.context = menuContext; menu.sourceFrame = menuFrame;
     menu.sourceScene = scene;
     menu.associationKey = NSSelectorFromString(@"darkswordOverlayMenuHostController");
+    menu.lockInvocationKey = NSSelectorFromString(@"darkswordOverlayMenuLockInvocation");
+    menu.unlockInvocationKey = NSSelectorFromString(@"darkswordOverlayMenuUnlockInvocation");
     menu.role = @"darkswordOverlayMenuHostController";
     icon.source = iconWindow; icon.context = iconContext; icon.sourceFrame = iconFrame;
     icon.sourceScene = scene;
     icon.associationKey = NSSelectorFromString(@"darkswordOverlayIconHostController");
+    icon.lockInvocationKey = NSSelectorFromString(@"darkswordOverlayIconLockInvocation");
+    icon.unlockInvocationKey = NSSelectorFromString(@"darkswordOverlayIconUnlockInvocation");
     icon.role = @"darkswordOverlayIconHostController";
     draw.source = drawWindow; draw.context = drawContext; draw.sourceFrame = drawFrame;
     draw.sourceScene = scene;
     draw.associationKey = NSSelectorFromString(@"darkswordOverlayDrawHostController");
+    draw.lockInvocationKey = NSSelectorFromString(@"darkswordOverlayDrawLockInvocation");
+    draw.unlockInvocationKey = NSSelectorFromString(@"darkswordOverlayDrawUnlockInvocation");
     draw.role = @"darkswordOverlayDrawHostController";
     _menu = menu; _icon = icon; _draw = draw; _busy = YES; _registrationInFlight = YES;
     _lastBothObserved = NO; _registerCancelled.store(false);
@@ -663,9 +766,14 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     const BOOL drawReady = [self createSide:draw level:kCoreSetCoreDrawLevel];
     const BOOL iconReady = drawReady && [self createSide:icon level:kCoreSetCoreIconLevel];
     const BOOL menuReady = iconReady && [self createSide:menu level:kCoreSetCoreMenuLevel];
-    const BOOL current = drawReady && iconReady && menuReady &&
+    const BOOL lifecycleReady = drawReady && iconReady && menuReady &&
+        [self installCoreLifecycleForDraw:draw icon:icon menu:menu];
+    const BOOL current = lifecycleReady &&
         [self localSideObserved:draw] && [self localSideObserved:icon] &&
         [self localSideObserved:menu] && !_registerCancelled.load();
+    if (!current && lifecycleReady) {
+        (void)[self removeCoreLifecycleForSides:@[draw, icon, menu]];
+    }
     _busy = NO; _registrationInFlight = NO; _lastBothObserved = current;
     draw.observed = current; icon.observed = current; menu.observed = current;
     dispatch_async(dispatch_get_main_queue(), ^{ completion(current, generation); });
@@ -738,9 +846,14 @@ static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t sele
     CoreSetRemoteHostSide *draw = _draw;
     _lastBothObserved = NO;
     // Core 1.7 teardown follows draw, icon, then menu and clears each owner.
-    const BOOL drawRemoved = !draw || [self removeSide:draw];
-    const BOOL iconRemoved = !icon || [self removeSide:icon];
-    const BOOL menuRemoved = !menu || [self removeSide:menu];
+    NSMutableArray<CoreSetRemoteHostSide *> *sides = [NSMutableArray arrayWithCapacity:3];
+    if (draw) [sides addObject:draw];
+    if (icon) [sides addObject:icon];
+    if (menu) [sides addObject:menu];
+    const BOOL lifecycleRemoved = [self removeCoreLifecycleForSides:sides];
+    const BOOL drawRemoved = lifecycleRemoved && (!draw || [self removeSide:draw]);
+    const BOOL iconRemoved = lifecycleRemoved && (!icon || [self removeSide:icon]);
+    const BOOL menuRemoved = lifecycleRemoved && (!menu || [self removeSide:menu]);
     if (drawRemoved) _draw = nil;
     if (iconRemoved) _icon = nil;
     if (menuRemoved) _menu = nil;

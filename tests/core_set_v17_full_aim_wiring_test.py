@@ -11,6 +11,7 @@ snapshot_mm = read("lara/overlay/CoreSetPlayerSnapshot.mm")
 geometry = read("lara/overlay/CoreSetBasicAimGeometry.h")
 probe_h = read("lara/overlay/CoreSetIsolatedWriteProbe.h")
 probe_mm = read("lara/overlay/CoreSetIsolatedWriteProbe.mm")
+route_state = read("lara/overlay/CoreSetActionRouteState.h")
 
 for token in (
     "referenceAnchor1e0WorldPosition", "referenceAnchor1ecWorldPosition",
@@ -34,11 +35,11 @@ for token in ("CSReferenceFlag14", "status == 1 ? 1", "(stateFlags >> 19) & 1",
     assert token in snapshot_mm, token
 
 for token in (
-    "playerBones: demand.playerBones", "botBones: demand.botBones", "includeBones: true",
+    "battleProducer.requestAim(", "battleProducer.copyAction(",
     "excludeKnocked:",
-    "publicationID: snapshot.snapshotID", "CoreSetV17AimConfiguration",
-    "configuration: configuration", "CoreSetBasicAimDelta.circleRadius", "actionSlot(snapshot:",
-    "routeDynamics.slot(firingSample:", "snapshot.localFiringRaw",
+    "dynamics.plan(candidate: candidate, input: input", "CoreSetV17AimConfiguration",
+    "configuration: configuration", "CoreSetBasicAimDelta.circleRadius",
+    "guard input.routeAuthorityResolved", "switch input.resolvedActionSlotRaw",
     "slot == .rotationInput", "CoreSetV17RecoilDynamics",
 ):
     assert token in aim, token
@@ -46,11 +47,14 @@ for token in (
 for token in (
     "referenceActionActorEligible", "referenceActionWorldPoint", "referenceActionScreenRank",
     "referenceActionCandidateMotion", "referenceActionGeometry", "referenceActionTakeover",
-    "planActionScene", "aimSceneCompensationValues", "referenceActionSlotForFireSample",
+    "planActionScene", "aimSceneCompensationValues",
     "@property(nonatomic) float aimPitch;", "@property(nonatomic) float aimYaw;",
     "@property(nonatomic) float recoilPitch;", "@property(nonatomic) float recoilYaw;",
 ):
     assert token in probe_mm, token
+
+assert "referenceActionSlotForRouteState" in route_state
+assert "referenceActionSlotForFireSample" not in route_state
 
 assert "basicAimLineOfSight" not in state
 assert "var lineOfSight: Bool?" not in state
