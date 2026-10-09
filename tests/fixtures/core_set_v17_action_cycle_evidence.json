@@ -6,6 +6,14 @@
   "scope": "static bytes + offline pure-CFG parity contracts; no target writer authority or original device action receipt",
   "point_count": 31,
   "one_to_one_complete_count": 0,
+  "closure_counts": {
+    "mapped_points": 31,
+    "original_effect_points": 0,
+    "shared_reference_component_classes": 20,
+    "per_point_unresolved_requirement_entries": 113,
+    "unique_unresolved_requirements": 6,
+    "scope": "shared reference component keys, NOT point-specific original effect or runtime receipt closure"
+  },
   "reference_windows": [
     {
       "address": "0x1000c1a78",
@@ -3352,6 +3360,24 @@
         "descriptor": "0x1103e7118",
         "nameVA": "0x10b81a230",
         "relativeOffset": 4
+      },
+      {
+        "name": "PawnStateRepSyncData",
+        "descriptor": "0x10f8421b8",
+        "nameVA": "0x10b9bd259",
+        "relativeOffset": 5888
+      },
+      {
+        "name": "CurrentStatesMask",
+        "descriptor": "0x10f62fa28",
+        "nameVA": "0x10b9716c8",
+        "relativeOffset": 0
+      },
+      {
+        "name": "DisabledStatesMask",
+        "descriptor": "0x10f62f9e8",
+        "nameVA": "0x10b9716b5",
+        "relativeOffset": 16
       }
     ],
     "stextra_vtable": "0x10e7bbc38",
@@ -4191,1433 +4217,352 @@
             "instruction": "cbz x0, #0x1039b84a0"
           }
         ]
+      },
+      {
+        "address": "0x1053a9488",
+        "file_offset": "0x53a9488",
+        "instructions": [
+          {
+            "address": "0x1053a9488",
+            "bytes": "08814bf9",
+            "instruction": "ldr x8, [x8, #0x1700]"
+          },
+          {
+            "address": "0x1053a948c",
+            "bytes": "080140f9",
+            "instruction": "ldr x8, [x8]"
+          },
+          {
+            "address": "0x1053a9490",
+            "bytes": "686a00b9",
+            "instruction": "str w8, [x19, #0x68]"
+          },
+          {
+            "address": "0x1053a9494",
+            "bytes": "080040f9",
+            "instruction": "ldr x8, [x0]"
+          },
+          {
+            "address": "0x1053a9498",
+            "bytes": "086d42f9",
+            "instruction": "ldr x8, [x8, #0x4d8]"
+          },
+          {
+            "address": "0x1053a949c",
+            "bytes": "00013fd6",
+            "instruction": "blr x8"
+          },
+          {
+            "address": "0x1053a94a0",
+            "bytes": "60060e2d",
+            "instruction": "stp s0, s1, [x19, #0x70]"
+          },
+          {
+            "address": "0x1053a94a4",
+            "bytes": "627a00bd",
+            "instruction": "str s2, [x19, #0x78]"
+          }
+        ]
+      },
+      {
+        "address": "0x10a3c4124",
+        "file_offset": "0xa3c4124",
+        "instructions": [
+          {
+            "address": "0x10a3c4124",
+            "bytes": "08804339",
+            "instruction": "ldrb w8, [x0, #0xe0]"
+          },
+          {
+            "address": "0x10a3c4128",
+            "bytes": "08011037",
+            "instruction": "tbnz w8, #2, #0x10a3c4148"
+          },
+          {
+            "address": "0x10a3c412c",
+            "bytes": "e86a0390",
+            "instruction": "adrp x8, #0x111120000"
+          },
+          {
+            "address": "0x10a3c4130",
+            "bytes": "08413b91",
+            "instruction": "add x8, x8, #0xed0"
+          },
+          {
+            "address": "0x10a3c4134",
+            "bytes": "000540ad",
+            "instruction": "ldp q0, q1, [x8]"
+          },
+          {
+            "address": "0x10a3c4138",
+            "bytes": "600600ad",
+            "instruction": "stp q0, q1, [x19]"
+          },
+          {
+            "address": "0x10a3c413c",
+            "bytes": "0009c03d",
+            "instruction": "ldr q0, [x8, #0x20]"
+          },
+          {
+            "address": "0x10a3c4140",
+            "bytes": "600a803d",
+            "instruction": "str q0, [x19, #0x20]"
+          }
+        ]
+      },
+      {
+        "address": "0x10a3c4150",
+        "file_offset": "0xa3c4150",
+        "instructions": [
+          {
+            "address": "0x10a3c4150",
+            "bytes": "095c42b9",
+            "instruction": "ldr w9, [x0, #0x25c]"
+          },
+          {
+            "address": "0x10a3c4154",
+            "bytes": "c900a037",
+            "instruction": "tbnz w9, #0x14, #0x10a3c416c"
+          },
+          {
+            "address": "0x10a3c4158",
+            "bytes": "a0864fad",
+            "instruction": "ldp q0, q1, [x21, #0x1f0]"
+          },
+          {
+            "address": "0x10a3c415c",
+            "bytes": "e00700ad",
+            "instruction": "stp q0, q1, [sp]"
+          },
+          {
+            "address": "0x10a3c4160",
+            "bytes": "a086c03d",
+            "instruction": "ldr q0, [x21, #0x210]"
+          },
+          {
+            "address": "0x10a3c4164",
+            "bytes": "e00b803d",
+            "instruction": "str q0, [sp, #0x20]"
+          },
+          {
+            "address": "0x10a3c4168",
+            "bytes": "0f000014",
+            "instruction": "b #0x10a3c41a4"
+          },
+          {
+            "address": "0x10a3c416c",
+            "bytes": "288503f0",
+            "instruction": "adrp x8, #0x11146b000"
+          }
+        ]
+      },
+      {
+        "address": "0x10a95ec68",
+        "file_offset": "0xa95ec68",
+        "instructions": [
+          {
+            "address": "0x10a95ec68",
+            "bytes": "094048b9",
+            "instruction": "ldr w9, [x0, #0x840]"
+          },
+          {
+            "address": "0x10a95ec6c",
+            "bytes": "3f01016b",
+            "instruction": "cmp w9, w1"
+          },
+          {
+            "address": "0x10a95ec70",
+            "bytes": "ad000054",
+            "instruction": "b.le #0x10a95ec84"
+          },
+          {
+            "address": "0x10a95ec74",
+            "bytes": "091c44f9",
+            "instruction": "ldr x9, [x0, #0x838]"
+          },
+          {
+            "address": "0x10a95ec78",
+            "bytes": "0a068052",
+            "instruction": "mov w10, #0x30"
+          },
+          {
+            "address": "0x10a95ec7c",
+            "bytes": "2924aa9b",
+            "instruction": "umaddl x9, w1, w10, x9"
+          },
+          {
+            "address": "0x10a95ec80",
+            "bytes": "03000014",
+            "instruction": "b #0x10a95ec8c"
+          },
+          {
+            "address": "0x10a95ec84",
+            "bytes": "093e03d0",
+            "instruction": "adrp x9, #0x111120000"
+          }
+        ]
       }
     ],
     "zero_reset_source": "0x111120f20",
+    "pawn_state_storage": {
+      "actor_property": "PawnStateRepSyncData+0x1700",
+      "current_mask": "CurrentStatesMask+0x0",
+      "container": "BitMaskContainer",
+      "size": 16,
+      "alignment": 8,
+      "read_shape": "actor+0x1700 qword -> Array data -> leading uint32"
+    },
+    "health_status_enum": {
+      "HealthyAlive": 0,
+      "HasLastBreath": 1,
+      "ZombieState": 2,
+      "WaitingForRevival": 3,
+      "FinishedLastBreath": 4,
+      "MAX": 5
+    },
     "boundary": "specific STExtra ctor/vtable + two-axis additive input/UpdateRotation/conditional reset static chain; not atomic against game threads and not an external restore contract"
   },
-  "function_edges": [
-    {
-      "caller": "0x1000c1a04",
-      "slice": "0x1000c22a0..0x1000c2318",
-      "sink": "Core-self BSS 0x100c519b8",
-      "semantics": "valid-input mode 1=ADS/2=fire/0=either/3=both; match sets deadline=now+0.25; active iff enabled and now<deadline"
+  "aim_anchor_producer_evidence": {
+    "sites": {
+      "candidate_anchor_1e0_pointer": {
+        "address": "0x1000d7f04",
+        "file_offset": "0xd7f04",
+        "instruction": "add x10, x8, #0x1e0"
+      },
+      "candidate_anchor_1ec_pointer": {
+        "address": "0x1000d7f08",
+        "file_offset": "0xd7f08",
+        "instruction": "add x8, x8, #0x1ec"
+      },
+      "profile_first_index": {
+        "address": "0x1000d8ba8",
+        "file_offset": "0xd8ba8",
+        "instruction": "ldr w27, [x8]"
+      },
+      "first_index_transform": {
+        "address": "0x1000d8f00",
+        "file_offset": "0xd8f00",
+        "instruction": "umaddl x8, w27, w9, x8"
+      },
+      "anchor_1e0_destination": {
+        "address": "0x1000d94a8",
+        "file_offset": "0xd94a8",
+        "instruction": "ldr x12, [sp, #0x80]"
+      },
+      "anchor_1e0_xy": {
+        "address": "0x1000d94b0",
+        "file_offset": "0xd94b0",
+        "instruction": "str x8, [x12]"
+      },
+      "anchor_1ec_destination": {
+        "address": "0x1000d94bc",
+        "file_offset": "0xd94bc",
+        "instruction": "ldr x8, [sp, #0x50]"
+      },
+      "anchor_1ec_xy": {
+        "address": "0x1000d94c4",
+        "file_offset": "0xd94c4",
+        "instruction": "str x10, [x8]"
+      }
     },
-    {
-      "caller": "0x1000c1378",
-      "callee": "0x1000c1664",
-      "call_site": "0x1000c139c",
-      "separate_lock_helper": "0x1000c4854",
-      "semantics": "six named scene parameters + three lock values; remaining table columns not given invented semantics"
+    "profiles": [
+      {
+        "address": "0x100ac8698",
+        "first_index": 6,
+        "second_index": 5
+      },
+      {
+        "address": "0x100ac8708",
+        "first_index": 6,
+        "second_index": 5
+      },
+      {
+        "address": "0x100ac8778",
+        "first_index": 6,
+        "second_index": 5
+      },
+      {
+        "address": "0x100ac87e8",
+        "first_index": 6,
+        "second_index": 5
+      },
+      {
+        "address": "0x100ac8858",
+        "first_index": 28,
+        "second_index": 5
+      },
+      {
+        "address": "0x100ac88c8",
+        "first_index": 6,
+        "second_index": 5
+      },
+      {
+        "address": "0x100ac8938",
+        "first_index": 6,
+        "second_index": 5
+      },
+      {
+        "address": "0x100ac89a8",
+        "first_index": 6,
+        "second_index": 5
+      },
+      {
+        "address": "0x100ac8a18",
+        "first_index": 6,
+        "second_index": 5
+      }
+    ],
+    "semantics": "Core selects profile[0], transforms it, then copies the same first-bone world point into candidate +0x1e0 and +0x1ec",
+    "target_owner": "build15915 mesh ComponentSpaceTransforms (+0x838, fallback +0x848), 0x30-byte transforms, component transform +0x1f0"
+  },
+  "knocked_flag_producer_evidence": {
+    "sites": {
+      "state_word": {
+        "address": "0x1000d8210",
+        "file_offset": "0xd8210",
+        "instruction": "ldr w9, [sp, #0x4c]"
+      },
+      "bit20_reject": {
+        "address": "0x1000d8214",
+        "file_offset": "0xd8214",
+        "instruction": "tbnz w9, #0x14, #0x1000d8128"
+      },
+      "finished_last_breath_reject": {
+        "address": "0x1000d8218",
+        "file_offset": "0xd8218",
+        "instruction": "cmp w8, #4"
+      },
+      "state_bit19": {
+        "address": "0x1000d8224",
+        "file_offset": "0xd8224",
+        "instruction": "ubfx w9, w9, #0x13, #1"
+      },
+      "has_last_breath": {
+        "address": "0x1000d8228",
+        "file_offset": "0xd8228",
+        "instruction": "cmp w8, #1"
+      },
+      "composite_flag": {
+        "address": "0x1000d822c",
+        "file_offset": "0xd822c",
+        "instruction": "csinc w8, w9, wzr, ne"
+      },
+      "candidate_flag14": {
+        "address": "0x1000d874c",
+        "file_offset": "0xd874c",
+        "instruction": "strb w8, [sp, #0x3ac]"
+      }
     },
-    {
-      "caller": "0x1000c1a04",
-      "definition": "0x1000c1a80",
-      "slice": "0x1000c3278..0x1000c32b0",
-      "sink": "0x1000c416c input sp+0x6c",
-      "semantics": "(verticalEnabled w28 & 1) & storedContinue C18d; not raw fire or target-stop restoration"
-    },
-    {
-      "caller": "0x1000c5ad8",
-      "callee": "0x1000620b8",
-      "single_axis_helper": "0x1000c6730",
-      "semantics": "explicit caller-provided slot; old+delta; expected-old/new 4/8 bytes; both-zero=no-write not restored"
+    "semantics": "candidate flag14 = 1 for HasLastBreath status, otherwise CurrentStatesMask bit19; bit20 and FinishedLastBreath reject before publication",
+    "target_owner": {
+      "actor_property": "PawnStateRepSyncData+0x1700",
+      "current_mask": "CurrentStatesMask+0x0",
+      "container": "BitMaskContainer",
+      "size": 16,
+      "alignment": 8,
+      "read_shape": "actor+0x1700 qword -> Array data -> leading uint32"
     }
-  ],
-  "offline_parity_case_counts": {
-    "trigger": 24,
-    "scene": 12,
-    "post_flag": 16,
-    "draft": 8
   },
-  "direct_call_sites": {
-    "0x1000c1664": [
-      "0x1000c139c",
-      "0x1000c1c90",
-      "0x1000c2910",
-      "0x1000c5fac"
-    ],
-    "0x1000c4854": [
-      "0x1000c1c98",
-      "0x1000c26a4"
-    ],
-    "0x1000c416c": [
-      "0x1000c32e0"
-    ],
-    "0x1000c5ad8": [
-      "0x1000c2f4c"
-    ],
-    "0x1000c6730": [
-      "0x1000c5bac",
-      "0x1000c5c20"
-    ]
-  },
-  "cleanup_contract": {
-    "no_write_resources_clean": true,
-    "any_mapped_write_attempt_without_restore": false,
-    "explicit_synthetic_verified_receipt": true,
-    "production_restoration_verifier_installed": false,
-    "automatic_writeback_or_rotation_input_clear": false
-  },
-  "next_probe_log_schema": [
-    "lane/pointID/pid/imageBase/UUID/read generation/capture cycle/snapshotID",
-    "raw ADS/fire/capture completion monotonic time/age/transport diagnostic",
-    "candidate key/bone producer/scene/predecessor/slot/axis/expected-old-new hashes only",
-    "request token/effect epoch/readback cycle/producer drain/restoration verifier result"
-  ],
-  "current_probe_scope": "existing audited read session only; 30s bounded ADS/fire + typed controller two-pair observation; diagnostic fingerprints only; synthetic-unit canvas; no selector/write/canvas receipt",
-  "reproduce": "python -B tests/core_set_action_cycle_contract_test.py --reference-ipa <exact-v1.7-ipa> --target-ipa <exact-1.38.12-ipa> --planner-exe tests/.action-cycle-build/core_set_action_cycle_plan_test.exe",
-  "points": [
-    {
-      "id": "v17-106",
-      "title": "自瞄总开关",
-      "evidence_key": "action-cycle/v17-106",
-      "prior_native_evidence_key": "native-v17/v17-106",
-      "local_configuration": "aim.desired.enabled",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x168",
-          "type": "bool",
-          "width": 1,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf008"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "trigger-latch-valid-input-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-107",
-      "title": "瞄准部位  头部 / 胸部 / 屁股",
-      "evidence_key": "action-cycle/v17-107",
-      "prior_native_evidence_key": "native-v17/v17-107",
-      "local_configuration": "aim.desired.point",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x150",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf144"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "world_point",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "bone58 validity + anchor1e0/1ec actual producers → build15915 world bone owner/lifetime",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-108",
-      "title": "预瞄标记圈",
-      "evidence_key": "action-cycle/v17-108",
-      "prior_native_evidence_key": "native-v17/v17-108",
-      "local_configuration": "aim.desired.preaimCircle",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x16b",
-          "type": "bool",
-          "width": 1,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf020"
-      ],
-      "current_alternative_preview": true,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "screen_rank",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-109",
-      "title": "触发模式  仅开镜 / 仅开火 / 开镜或开火 / 开镜且开火",
-      "evidence_key": "action-cycle/v17-109",
-      "prior_native_evidence_key": "native-v17/v17-109",
-      "local_configuration": "aim.desired.trigger",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x14c",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf1c8"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "trigger-latch-valid-input-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-110",
-      "title": "动态自瞄圈",
-      "evidence_key": "action-cycle/v17-110",
-      "prior_native_evidence_key": "native-v17/v17-110",
-      "local_configuration": "aim.desired.dynamicCircle.enabled",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x1c0",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf048"
-      ],
-      "current_alternative_preview": true,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "screen_rank",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-111",
-      "title": "显示自瞄圈",
-      "evidence_key": "action-cycle/v17-111",
-      "prior_native_evidence_key": "native-v17/v17-111",
-      "local_configuration": "aim.desired.showCircle",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x16c",
-          "type": "bool",
-          "width": 1,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf220"
-      ],
-      "current_alternative_preview": true,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "screen_rank",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-112",
-      "title": "自瞄连接线",
-      "evidence_key": "action-cycle/v17-112",
-      "prior_native_evidence_key": "native-v17/v17-112",
-      "local_configuration": "aim.desired.connectionLine",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x1c4",
-          "type": "bool",
-          "width": 1,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf07c"
-      ],
-      "current_alternative_preview": true,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "screen_rank",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-113",
-      "title": "自瞄圈大小",
-      "evidence_key": "action-cycle/v17-113",
-      "prior_native_evidence_key": "native-v17/v17-113",
-      "local_configuration": "aim.desired.circleSize",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x154",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf268"
-      ],
-      "current_alternative_preview": true,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "screen_rank",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-114",
-      "title": "倒地不瞄",
-      "evidence_key": "action-cycle/v17-114",
-      "prior_native_evidence_key": "native-v17/v17-114",
-      "local_configuration": "aim.desired.excludeKnocked",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x169",
-          "type": "bool",
-          "width": 1,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf2f4"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "raw_actor_gate",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "Core pawn-state bit19 producer/owner → build15915 PawnStateRepSyncData+1700 storage/knocked semantics",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-115",
-      "title": "瞄准人机",
-      "evidence_key": "action-cycle/v17-115",
-      "prior_native_evidence_key": "native-v17/v17-115",
-      "local_configuration": "aim.desired.includeBots",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x16a",
-          "type": "bool",
-          "width": 1,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf30c"
-      ],
-      "current_alternative_preview": true,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "raw_actor_gate",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-116",
-      "title": "锁定同目标",
-      "evidence_key": "action-cycle/v17-116",
-      "prior_native_evidence_key": "native-v17/v17-116",
-      "local_configuration": "aim.desired.lockSameTarget",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x18e",
-          "type": "bool",
-          "width": 1,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf328"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "screen_rank",
-        "candidate_motion",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "sticky rank/publish → source record invalidation, target identity lease and live selector observable",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-117",
-      "title": "最大距离",
-      "evidence_key": "action-cycle/v17-117",
-      "prior_native_evidence_key": "native-v17/v17-117",
-      "local_configuration": "aim.desired.custom.maximumDistance",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x198",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf3b0"
-      ],
-      "current_alternative_preview": true,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "raw_actor_gate",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-118",
-      "title": "自瞄强度",
-      "evidence_key": "action-cycle/v17-118",
-      "prior_native_evidence_key": "native-v17/v17-118",
-      "local_configuration": "aim.desired.custom.strength",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x190",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf40c"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-119",
-      "title": "转动平滑",
-      "evidence_key": "action-cycle/v17-119",
-      "prior_native_evidence_key": "native-v17/v17-119",
-      "local_configuration": "aim.desired.custom.smoothing",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x194",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf464"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-120",
-      "title": "接管确认帧数",
-      "evidence_key": "action-cycle/v17-120",
-      "prior_native_evidence_key": "native-v17/v17-120",
-      "local_configuration": "aim.desired.custom.confirmationFrames",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x1b4",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf4bc"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "takeover",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "same-cycle input lease and independent observation of user-input arbitration",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-121",
-      "title": "远距",
-      "evidence_key": "action-cycle/v17-121",
-      "prior_native_evidence_key": "native-v17/v17-121",
-      "local_configuration": "aim.desired.scene=far(0)",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x180",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf5b8",
-        "0x1000cf5c8",
-        "0x1000cf5cc"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-122",
-      "title": "近战",
-      "evidence_key": "action-cycle/v17-122",
-      "prior_native_evidence_key": "native-v17/v17-122",
-      "local_configuration": "aim.desired.scene=close(2)",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x180",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf5b8",
-        "0x1000cf5c8",
-        "0x1000cf5cc"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-123",
-      "title": "通用",
-      "evidence_key": "action-cycle/v17-123",
-      "prior_native_evidence_key": "native-v17/v17-123",
-      "local_configuration": "aim.desired.scene=general(1)",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x180",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf5b8",
-        "0x1000cf5c8",
-        "0x1000cf5cc"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-124",
-      "title": "自定义",
-      "evidence_key": "action-cycle/v17-124",
-      "prior_native_evidence_key": "native-v17/v17-124",
-      "local_configuration": "aim.desired.scene=custom(3)",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x180",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf5b8",
-        "0x1000cf5c8",
-        "0x1000cf5cc"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-125",
-      "title": "锁定强度  强锁定 / 中锁定 / 轻锁定",
-      "evidence_key": "action-cycle/v17-125",
-      "prior_native_evidence_key": "native-v17/v17-125",
-      "local_configuration": "aim.desired.lockStrength",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x184",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf85c"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-126",
-      "title": "水平速度",
-      "evidence_key": "action-cycle/v17-126",
-      "prior_native_evidence_key": "native-v17/v17-126",
-      "local_configuration": "aim.desired.custom.horizontalSpeed",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x19c",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf658"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "candidate_motion",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-127",
-      "title": "垂直速度",
-      "evidence_key": "action-cycle/v17-127",
-      "prior_native_evidence_key": "native-v17/v17-127",
-      "local_configuration": "aim.desired.custom.verticalSpeed",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x1a0",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf6a8"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "candidate_motion",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-128",
-      "title": "预判提前",
-      "evidence_key": "action-cycle/v17-128",
-      "prior_native_evidence_key": "native-v17/v17-128",
-      "local_configuration": "aim.desired.custom.predictionMilliseconds",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x1a8",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf700"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "candidate_motion",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-129",
-      "title": "锁定门槛",
-      "evidence_key": "action-cycle/v17-129",
-      "prior_native_evidence_key": "native-v17/v17-129",
-      "local_configuration": "aim.desired.custom.lockThreshold",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x1a4",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf75c"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "takeover",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-130",
-      "title": "接管暂停",
-      "evidence_key": "action-cycle/v17-130",
-      "prior_native_evidence_key": "native-v17/v17-130",
-      "local_configuration": "aim.desired.custom.takeoverPauseMilliseconds",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x1b8",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cf7b8"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "six-scene-three-lock-parameter-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "takeover",
-        "single_worker_sink",
-        "geometry_full",
-        "prediction_distance_gain",
-        "angular_motion_projection",
-        "residual_filter",
-        "compensation_curve"
-      ],
-      "next_exact_edges": [
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-131",
-      "title": "启用压枪",
-      "evidence_key": "action-cycle/v17-131",
-      "prior_native_evidence_key": "native-v17/v17-131",
-      "local_configuration": "recoil.desired.enabled",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x18c",
-          "type": "bool",
-          "width": 1,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cfe78"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "recoil_raw_state",
-        "single_worker_sink",
-        "post_state_two_axis",
-        "recoil_caller_merge",
-        "prior_aim_feedback",
-        "stop_post_state_local"
-      ],
-      "next_exact_edges": [
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-132",
-      "title": "停火不压",
-      "evidence_key": "action-cycle/v17-132",
-      "prior_native_evidence_key": "native-v17/v17-132",
-      "local_configuration": "recoil.desired.stopWhenNotFiring.enabled",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x18d",
-          "type": "bool",
-          "width": 1,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cfe9c"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "post-state-w28-policy-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "post_state_two_axis",
-        "recoil_caller_merge",
-        "prior_aim_feedback",
-        "stop_post_state_local"
-      ],
-      "next_exact_edges": [
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-133",
-      "title": "垂直补偿",
-      "evidence_key": "action-cycle/v17-133",
-      "prior_native_evidence_key": "native-v17/v17-133",
-      "local_configuration": "recoil.desired.verticalEnabled",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x1bc",
-          "type": "bool",
-          "width": 1,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cfee0"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [
-        "post-state-w28-policy-parity"
-      ],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "recoil_raw_state",
-        "single_worker_sink",
-        "post_state_two_axis",
-        "recoil_caller_merge",
-        "prior_aim_feedback",
-        "stop_post_state_local"
-      ],
-      "next_exact_edges": [
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-134",
-      "title": "垂直补偿强度",
-      "evidence_key": "action-cycle/v17-134",
-      "prior_native_evidence_key": "native-v17/v17-134",
-      "local_configuration": "recoil.desired.verticalStrength",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x188",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cff3c"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "recoil_raw_state",
-        "single_worker_sink",
-        "post_state_two_axis",
-        "recoil_caller_merge",
-        "prior_aim_feedback",
-        "stop_post_state_local"
-      ],
-      "next_exact_edges": [
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-135",
-      "title": "水平补偿",
-      "evidence_key": "action-cycle/v17-135",
-      "prior_native_evidence_key": "native-v17/v17-135",
-      "local_configuration": "recoil.desired.horizontalEnabled",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x1b0",
-          "type": "bool",
-          "width": 1,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cff6c"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "post_state_two_axis",
-        "recoil_caller_merge",
-        "prior_aim_feedback",
-        "stop_post_state_local"
-      ],
-      "next_exact_edges": [
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    },
-    {
-      "id": "v17-136",
-      "title": "水平补偿强度",
-      "evidence_key": "action-cycle/v17-136",
-      "prior_native_evidence_key": "native-v17/v17-136",
-      "local_configuration": "recoil.desired.horizontalStrength",
-      "core_self_storage": [
-        {
-          "owner": "Core-self-configuration",
-          "base": "0x100c58270",
-          "offset": "0x1ac",
-          "type": "int32",
-          "width": 4,
-          "role": "value"
-        }
-      ],
-      "control_sites": [
-        "0x1000cffbc"
-      ],
-      "current_alternative_preview": false,
-      "component_parity_contracts": [],
-      "closed_reference_edges": [
-        "merge_slot",
-        "geometry_clock",
-        "candidate_publish",
-        "stop_local_only",
-        "single_worker_sink",
-        "post_state_two_axis",
-        "recoil_caller_merge",
-        "prior_aim_feedback",
-        "stop_post_state_local"
-      ],
-      "next_exact_edges": [
-        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
-        "checked-write result → current independent readback under game-thread concurrency",
-        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
-      ],
-      "original_runtime_receipt_verified": false,
-      "one_to_one_complete": false
-    }
-  ],
   "selection_route_history_evidence": {
     "worker_range": {
       "start": "0x1000c1a04",
@@ -13000,33 +11945,6 @@
     "write_ready": false,
     "original_device_effect_verified": false
   },
-  "read_only_controller_observation": {
-    "fields": {
-      "ControlRotation": [
-        "0x620",
-        "0x624"
-      ],
-      "RotationInput": [
-        "0x828",
-        "0x82c"
-      ]
-    },
-    "type": "two exact f32 pairs, eight bytes each",
-    "profile": "1.38.12/build15915/34b785b20dab3992985d359e6bf45585 via existing audited ReadSession",
-    "gates": [
-      "same snapshotID/read generation/pid/imageBase/controller lease",
-      "identity before/between/after reads",
-      "exact completed length",
-      "finite values",
-      "capture completion local monotonic age 0..0.5s",
-      "non-regressing local monotonic observation",
-      "byte-exact ControlRotation vs snapshot"
-    ],
-    "logs": "diagnostic FNV1a64 input/before/after summaries only; no raw target memory",
-    "object_lifetime_atomic": false,
-    "selects_slot_or_authorizes_writer": false
-  },
-  "reproduce_selection_state": "python -B tests/core_set_action_selection_contract_test.py --reference-ipa <exact-v1.7-ipa> --planner-exe tests/.action-cycle-build/core_set_action_selection_state_test.exe --read-contract-exe tests/.action-cycle-build/core_set_action_input_read_contract_test.exe",
   "compensation_evidence": {
     "reference_windows": [
       {
@@ -25167,13 +24085,1489 @@
     "target_effect_restored": false,
     "boundary": "exact finite-input reference components; local clear never authorizes a target restore"
   },
+  "function_edges": [
+    {
+      "caller": "0x1000c1a04",
+      "slice": "0x1000c22a0..0x1000c2318",
+      "sink": "Core-self BSS 0x100c519b8",
+      "semantics": "valid-input mode 1=ADS/2=fire/0=either/3=both; match sets deadline=now+0.25; active iff enabled and now<deadline"
+    },
+    {
+      "caller": "0x1000c1378",
+      "callee": "0x1000c1664",
+      "call_site": "0x1000c139c",
+      "separate_lock_helper": "0x1000c4854",
+      "semantics": "six named scene parameters + three lock values; remaining table columns not given invented semantics"
+    },
+    {
+      "caller": "0x1000c1a04",
+      "definition": "0x1000c1a80",
+      "slice": "0x1000c3278..0x1000c32b0",
+      "sink": "0x1000c416c input sp+0x6c",
+      "semantics": "(verticalEnabled w28 & 1) & storedContinue C18d; not raw fire or target-stop restoration"
+    },
+    {
+      "caller": "0x1000c5ad8",
+      "callee": "0x1000620b8",
+      "single_axis_helper": "0x1000c6730",
+      "semantics": "explicit caller-provided slot; old+delta; expected-old/new 4/8 bytes; both-zero=no-write not restored"
+    }
+  ],
+  "offline_parity_case_counts": {
+    "trigger": 24,
+    "scene": 12,
+    "post_flag": 16,
+    "draft": 8
+  },
+  "direct_call_sites": {
+    "0x1000c1664": [
+      "0x1000c139c",
+      "0x1000c1c90",
+      "0x1000c2910",
+      "0x1000c5fac"
+    ],
+    "0x1000c4854": [
+      "0x1000c1c98",
+      "0x1000c26a4"
+    ],
+    "0x1000c416c": [
+      "0x1000c32e0"
+    ],
+    "0x1000c5ad8": [
+      "0x1000c2f4c"
+    ],
+    "0x1000c6730": [
+      "0x1000c5bac",
+      "0x1000c5c20"
+    ]
+  },
+  "cleanup_contract": {
+    "no_write_resources_clean": true,
+    "any_mapped_write_attempt_without_restore": false,
+    "explicit_synthetic_verified_receipt": true,
+    "production_restoration_verifier_installed": false,
+    "automatic_writeback_or_rotation_input_clear": false
+  },
+  "next_probe_log_schema": [
+    "lane/pointID/pid/imageBase/UUID/read generation/capture cycle/snapshotID",
+    "raw ADS/fire/capture completion monotonic time/age/transport diagnostic",
+    "candidate key/bone producer/scene/predecessor/slot/axis/expected-old-new hashes only",
+    "request token/effect epoch/readback cycle/producer drain/restoration verifier result"
+  ],
+  "current_probe_scope": "existing audited read session only; 30s bounded ADS/fire + typed controller two-pair observation; diagnostic fingerprints only; synthetic-unit canvas; no selector/write/canvas receipt",
+  "read_only_controller_observation": {
+    "fields": {
+      "ControlRotation": [
+        "0x620",
+        "0x624"
+      ],
+      "RotationInput": [
+        "0x828",
+        "0x82c"
+      ]
+    },
+    "type": "two exact f32 pairs, eight bytes each",
+    "profile": "1.38.12/build15915/34b785b20dab3992985d359e6bf45585 via existing audited ReadSession",
+    "gates": [
+      "same snapshotID/read generation/pid/imageBase/controller lease",
+      "identity before/between/after reads",
+      "exact completed length",
+      "finite values",
+      "capture completion local monotonic age 0..0.5s",
+      "non-regressing local monotonic observation",
+      "byte-exact ControlRotation vs snapshot"
+    ],
+    "logs": "diagnostic FNV1a64 input/before/after summaries only; no raw target memory",
+    "object_lifetime_atomic": false,
+    "selects_slot_or_authorizes_writer": false
+  },
+  "reproduce": "python -B tests/core_set_action_cycle_contract_test.py --reference-ipa <exact-v1.7-ipa> --target-ipa <exact-1.38.12-ipa> --planner-exe tests/.action-cycle-build/core_set_action_cycle_plan_test.exe",
+  "reproduce_selection_state": "python -B tests/core_set_action_selection_contract_test.py --reference-ipa <exact-v1.7-ipa> --planner-exe tests/.action-cycle-build/core_set_action_selection_state_test.exe --read-contract-exe tests/.action-cycle-build/core_set_action_input_read_contract_test.exe",
   "reproduce_compensation_state": "python -B tests/core_set_action_compensation_contract_test.py --reference-ipa <exact-v1.7-ipa> --planner-exe tests/.action-cycle-build/core_set_action_compensation_state_test.exe",
-  "closure_counts": {
-    "mapped_points": 31,
-    "original_effect_points": 0,
-    "shared_reference_component_classes": 20,
-    "per_point_unresolved_requirement_entries": 113,
-    "unique_unresolved_requirements": 8,
-    "scope": "shared reference component keys, NOT point-specific original effect or runtime receipt closure"
-  }
+  "points": [
+    {
+      "id": "v17-106",
+      "title": "自瞄总开关",
+      "evidence_key": "action-cycle/v17-106",
+      "prior_native_evidence_key": "native-v17/v17-106",
+      "local_configuration": "aim.desired.enabled",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x168",
+          "type": "bool",
+          "width": 1,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf008"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "trigger-latch-valid-input-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-107",
+      "title": "瞄准部位  头部 / 胸部 / 屁股",
+      "evidence_key": "action-cycle/v17-107",
+      "prior_native_evidence_key": "native-v17/v17-107",
+      "local_configuration": "aim.desired.point",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x150",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf144"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [
+        "profile-first-bone-to-candidate-1e0-and-1ec"
+      ],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "world_point",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-108",
+      "title": "预瞄标记圈",
+      "evidence_key": "action-cycle/v17-108",
+      "prior_native_evidence_key": "native-v17/v17-108",
+      "local_configuration": "aim.desired.preaimCircle",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x16b",
+          "type": "bool",
+          "width": 1,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf020"
+      ],
+      "current_alternative_preview": true,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-109",
+      "title": "触发模式  仅开镜 / 仅开火 / 开镜或开火 / 开镜且开火",
+      "evidence_key": "action-cycle/v17-109",
+      "prior_native_evidence_key": "native-v17/v17-109",
+      "local_configuration": "aim.desired.trigger",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x14c",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf1c8"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "trigger-latch-valid-input-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-110",
+      "title": "动态自瞄圈",
+      "evidence_key": "action-cycle/v17-110",
+      "prior_native_evidence_key": "native-v17/v17-110",
+      "local_configuration": "aim.desired.dynamicCircle.enabled",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x1c0",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf048"
+      ],
+      "current_alternative_preview": true,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-111",
+      "title": "显示自瞄圈",
+      "evidence_key": "action-cycle/v17-111",
+      "prior_native_evidence_key": "native-v17/v17-111",
+      "local_configuration": "aim.desired.showCircle",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x16c",
+          "type": "bool",
+          "width": 1,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf220"
+      ],
+      "current_alternative_preview": true,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-112",
+      "title": "自瞄连接线",
+      "evidence_key": "action-cycle/v17-112",
+      "prior_native_evidence_key": "native-v17/v17-112",
+      "local_configuration": "aim.desired.connectionLine",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x1c4",
+          "type": "bool",
+          "width": 1,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf07c"
+      ],
+      "current_alternative_preview": true,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-113",
+      "title": "自瞄圈大小",
+      "evidence_key": "action-cycle/v17-113",
+      "prior_native_evidence_key": "native-v17/v17-113",
+      "local_configuration": "aim.desired.circleSize",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x154",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf268"
+      ],
+      "current_alternative_preview": true,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-114",
+      "title": "倒地不瞄",
+      "evidence_key": "action-cycle/v17-114",
+      "prior_native_evidence_key": "native-v17/v17-114",
+      "local_configuration": "aim.desired.excludeKnocked",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x169",
+          "type": "bool",
+          "width": 1,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf2f4"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [
+        "has-last-breath-or-state-bit19-to-candidate-flag14"
+      ],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "raw_actor_gate",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-115",
+      "title": "瞄准人机",
+      "evidence_key": "action-cycle/v17-115",
+      "prior_native_evidence_key": "native-v17/v17-115",
+      "local_configuration": "aim.desired.includeBots",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x16a",
+          "type": "bool",
+          "width": 1,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf30c"
+      ],
+      "current_alternative_preview": true,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "raw_actor_gate",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-116",
+      "title": "锁定同目标",
+      "evidence_key": "action-cycle/v17-116",
+      "prior_native_evidence_key": "native-v17/v17-116",
+      "local_configuration": "aim.desired.lockSameTarget",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x18e",
+          "type": "bool",
+          "width": 1,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf328"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "screen_rank",
+        "candidate_motion",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "sticky rank/publish → source record invalidation, target identity lease and live selector observable",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-117",
+      "title": "最大距离",
+      "evidence_key": "action-cycle/v17-117",
+      "prior_native_evidence_key": "native-v17/v17-117",
+      "local_configuration": "aim.desired.custom.maximumDistance",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x198",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf3b0"
+      ],
+      "current_alternative_preview": true,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "raw_actor_gate",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-118",
+      "title": "自瞄强度",
+      "evidence_key": "action-cycle/v17-118",
+      "prior_native_evidence_key": "native-v17/v17-118",
+      "local_configuration": "aim.desired.custom.strength",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x190",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf40c"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-119",
+      "title": "转动平滑",
+      "evidence_key": "action-cycle/v17-119",
+      "prior_native_evidence_key": "native-v17/v17-119",
+      "local_configuration": "aim.desired.custom.smoothing",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x194",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf464"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-120",
+      "title": "接管确认帧数",
+      "evidence_key": "action-cycle/v17-120",
+      "prior_native_evidence_key": "native-v17/v17-120",
+      "local_configuration": "aim.desired.custom.confirmationFrames",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x1b4",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf4bc"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "takeover",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "same-cycle input lease and independent observation of user-input arbitration",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-121",
+      "title": "远距",
+      "evidence_key": "action-cycle/v17-121",
+      "prior_native_evidence_key": "native-v17/v17-121",
+      "local_configuration": "aim.desired.scene=far(0)",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x180",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf5b8",
+        "0x1000cf5c8",
+        "0x1000cf5cc"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-122",
+      "title": "近战",
+      "evidence_key": "action-cycle/v17-122",
+      "prior_native_evidence_key": "native-v17/v17-122",
+      "local_configuration": "aim.desired.scene=close(2)",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x180",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf5b8",
+        "0x1000cf5c8",
+        "0x1000cf5cc"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-123",
+      "title": "通用",
+      "evidence_key": "action-cycle/v17-123",
+      "prior_native_evidence_key": "native-v17/v17-123",
+      "local_configuration": "aim.desired.scene=general(1)",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x180",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf5b8",
+        "0x1000cf5c8",
+        "0x1000cf5cc"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-124",
+      "title": "自定义",
+      "evidence_key": "action-cycle/v17-124",
+      "prior_native_evidence_key": "native-v17/v17-124",
+      "local_configuration": "aim.desired.scene=custom(3)",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x180",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf5b8",
+        "0x1000cf5c8",
+        "0x1000cf5cc"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-125",
+      "title": "锁定强度  强锁定 / 中锁定 / 轻锁定",
+      "evidence_key": "action-cycle/v17-125",
+      "prior_native_evidence_key": "native-v17/v17-125",
+      "local_configuration": "aim.desired.lockStrength",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x184",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf85c"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "current eligible-candidate evidence and selector observable, distinct from closed reference component parity",
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-126",
+      "title": "水平速度",
+      "evidence_key": "action-cycle/v17-126",
+      "prior_native_evidence_key": "native-v17/v17-126",
+      "local_configuration": "aim.desired.custom.horizontalSpeed",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x19c",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf658"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "candidate_motion",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-127",
+      "title": "垂直速度",
+      "evidence_key": "action-cycle/v17-127",
+      "prior_native_evidence_key": "native-v17/v17-127",
+      "local_configuration": "aim.desired.custom.verticalSpeed",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x1a0",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf6a8"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "candidate_motion",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-128",
+      "title": "预判提前",
+      "evidence_key": "action-cycle/v17-128",
+      "prior_native_evidence_key": "native-v17/v17-128",
+      "local_configuration": "aim.desired.custom.predictionMilliseconds",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x1a8",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf700"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "candidate_motion",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-129",
+      "title": "锁定门槛",
+      "evidence_key": "action-cycle/v17-129",
+      "prior_native_evidence_key": "native-v17/v17-129",
+      "local_configuration": "aim.desired.custom.lockThreshold",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x1a4",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf75c"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "takeover",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-130",
+      "title": "接管暂停",
+      "evidence_key": "action-cycle/v17-130",
+      "prior_native_evidence_key": "native-v17/v17-130",
+      "local_configuration": "aim.desired.custom.takeoverPauseMilliseconds",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x1b8",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cf7b8"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "six-scene-three-lock-parameter-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "takeover",
+        "single_worker_sink",
+        "geometry_full",
+        "prediction_distance_gain",
+        "angular_motion_projection",
+        "residual_filter",
+        "compensation_curve"
+      ],
+      "next_exact_edges": [
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-131",
+      "title": "启用压枪",
+      "evidence_key": "action-cycle/v17-131",
+      "prior_native_evidence_key": "native-v17/v17-131",
+      "local_configuration": "recoil.desired.enabled",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x18c",
+          "type": "bool",
+          "width": 1,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cfe78"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "recoil_raw_state",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ],
+      "next_exact_edges": [
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-132",
+      "title": "停火不压",
+      "evidence_key": "action-cycle/v17-132",
+      "prior_native_evidence_key": "native-v17/v17-132",
+      "local_configuration": "recoil.desired.stopWhenNotFiring.enabled",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x18d",
+          "type": "bool",
+          "width": 1,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cfe9c"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "post-state-w28-policy-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ],
+      "next_exact_edges": [
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-133",
+      "title": "垂直补偿",
+      "evidence_key": "action-cycle/v17-133",
+      "prior_native_evidence_key": "native-v17/v17-133",
+      "local_configuration": "recoil.desired.verticalEnabled",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x1bc",
+          "type": "bool",
+          "width": 1,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cfee0"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [
+        "post-state-w28-policy-parity"
+      ],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "recoil_raw_state",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ],
+      "next_exact_edges": [
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-134",
+      "title": "垂直补偿强度",
+      "evidence_key": "action-cycle/v17-134",
+      "prior_native_evidence_key": "native-v17/v17-134",
+      "local_configuration": "recoil.desired.verticalStrength",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x188",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cff3c"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "recoil_raw_state",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ],
+      "next_exact_edges": [
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-135",
+      "title": "水平补偿",
+      "evidence_key": "action-cycle/v17-135",
+      "prior_native_evidence_key": "native-v17/v17-135",
+      "local_configuration": "recoil.desired.horizontalEnabled",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x1b0",
+          "type": "bool",
+          "width": 1,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cff6c"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ],
+      "next_exact_edges": [
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    },
+    {
+      "id": "v17-136",
+      "title": "水平补偿强度",
+      "evidence_key": "action-cycle/v17-136",
+      "prior_native_evidence_key": "native-v17/v17-136",
+      "local_configuration": "recoil.desired.horizontalStrength",
+      "core_self_storage": [
+        {
+          "owner": "Core-self-configuration",
+          "base": "0x100c58270",
+          "offset": "0x1ac",
+          "type": "int32",
+          "width": 4,
+          "role": "value"
+        }
+      ],
+      "control_sites": [
+        "0x1000cffbc"
+      ],
+      "current_alternative_preview": false,
+      "component_parity_contracts": [],
+      "closed_producer_edges": [],
+      "closed_reference_edges": [
+        "merge_slot",
+        "geometry_clock",
+        "candidate_publish",
+        "stop_local_only",
+        "single_worker_sink",
+        "post_state_two_axis",
+        "recoil_caller_merge",
+        "prior_aim_feedback",
+        "stop_post_state_local"
+      ],
+      "next_exact_edges": [
+        "candidate/publishedKey/controller generation + local ownerToken/binding/prior-feedback lifetime + upstream route predicates → trusted current request/snapshot authority",
+        "checked-write result → current independent readback under game-thread concurrency",
+        "disable/target-loss/scene-change → stopped producers/drained writer/all owned effects restored"
+      ],
+      "original_runtime_receipt_verified": false,
+      "one_to_one_complete": false
+    }
+  ]
 }

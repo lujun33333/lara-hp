@@ -19,16 +19,25 @@ for token in (
     assert token in snapshot_h and token in snapshot_mm, token
 
 for token in (
-    "CSPublishAimAnchors", "CSBoneWorldPoint(state, 0)", "state.edges[0]",
-    "CSBoneSample rootSample = {0, {}}",
+    "CSPublishAimAnchors", "CoreSetWorldPoint *anchor = CSBoneWorldPoint(state, state.edges[0])",
+    "mark.referenceAnchor1e0WorldPosition = anchor",
+    "mark.referenceAnchor1ecWorldPosition = anchor",
+    "PawnStateRepSyncData.CurrentStatesMask.Array data pointer",
 ):
+    assert token in snapshot_mm, token
+
+for stale in ("CSBoneWorldPoint(state, 0)", "CSBoneSample rootSample = {0, {}}", "stateOwner"):
+    assert stale not in snapshot_mm, stale
+
+for token in ("CSReferenceFlag14", "status == 1 ? 1", "(stateFlags >> 19) & 1",
+              "HasLastBreath", "CurrentStatesMask bit19"):
     assert token in snapshot_mm, token
 
 for token in (
     "playerBones: true", "botBones: true", "excludeKnocked:",
-    "publicationID: snapshot.snapshotID", "predictionMilliseconds:",
-    "curveSelector:", "residualGain:", "minimumDeadzone:",
-    "actionSlot(recoilEnabled:", "routeDynamics.useControlRotation", "routeDynamics.observeCommitted",
+    "publicationID: snapshot.snapshotID", "CoreSetV17AimConfiguration",
+    "configuration: configuration", "CoreSetBasicAimDelta.circleRadius", "actionSlot(snapshot:",
+    "routeDynamics.slot(firingSample:", "snapshot.localFiringRaw",
     "slot == .rotationInput", "CoreSetV17RecoilDynamics",
 ):
     assert token in aim, token
@@ -36,6 +45,7 @@ for token in (
 for token in (
     "referenceActionActorEligible", "referenceActionWorldPoint", "referenceActionScreenRank",
     "referenceActionCandidateMotion", "referenceActionGeometry", "referenceActionTakeover",
+    "planActionScene", "aimSceneCompensationValues", "referenceActionSlotForFireSample",
     "@property(nonatomic) float aimPitch;", "@property(nonatomic) float aimYaw;",
     "@property(nonatomic) float recoilPitch;", "@property(nonatomic) float recoilYaw;",
 ):
@@ -49,6 +59,9 @@ assert "rootComponent + 0x250" not in snapshot_mm
 assert "basicAimDynamicStep(" not in probe_mm
 assert "verified.localFiring ?" not in aim
 assert "restoreActiveState" not in aim
+for handwritten in ("residualGain: 0.90", "minimumGain: 0.38", "deadzoneRatio: 0.25",
+                    "case .strong: lockValues", "short * CGFloat(size) / 1170"):
+    assert handwritten not in aim
 assert "CoreSetTargetWriteSlotRotationInput" in probe_mm
 assert "restoreSnapshot:" not in probe_h and "restoreSnapshot:" not in probe_mm
 print("PASS: Core v1.7 selection, point, relative-motion geometry, Aim route and stop wiring")

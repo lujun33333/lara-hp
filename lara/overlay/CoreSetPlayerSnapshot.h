@@ -35,8 +35,8 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) uint8_t referenceFlag14;
 @property(nonatomic, readonly) BOOL downedKnown;
 @property(nonatomic, readonly) BOOL downed;
-// Core-local candidate record +0x1e0/+0x1ec producers: bone 0 and the
-// selected profile's first bone respectively. These are not actor offsets.
+// Core-local candidate record +0x1e0/+0x1ec producers both copy the selected
+// profile's first bone. These are candidate-record fields, not actor offsets.
 @property(nonatomic, readonly, nullable) CoreSetWorldPoint *referenceAnchor1e0WorldPosition;
 @property(nonatomic, readonly, nullable) CoreSetWorldPoint *referenceAnchor1ecWorldPosition;
 @property(nonatomic, copy, readonly, nullable) NSString *weaponName;
@@ -115,6 +115,7 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) uint64_t localActorAddress;
 @property(nonatomic, readonly) BOOL localADS;
 @property(nonatomic, readonly) BOOL localFiring;
+@property(nonatomic, readonly) uint8_t localFiringRaw;
 @property(nonatomic, readonly) float controlPitchDegrees;
 @property(nonatomic, readonly) float controlYawDegrees;
 @property(nonatomic, readonly) float rotationInputPitch;
@@ -150,6 +151,12 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 // value contains no target addresses or field contents and is intended only
 // for distinguishing semantic/local validation from transport failures.
 + (NSString *)lastCaptureDiagnostic;
+// Freshly re-reads the exact world -> net driver -> connection -> controller
+// and controller -> local actor chain. This is a bounded identity check for a
+// captured battle snapshot; it neither publishes a frame nor writes target data.
++ (BOOL)validateLiveIdentity:(CoreSetReadSession *)session
+                    snapshot:(CoreSetPlayerSnapshot *)snapshot
+    NS_SWIFT_NAME(validateLiveIdentity(_:snapshot:));
 // Nil means no complete, identity-stable capture; it must never be interpreted
 // as an empty successful frame. No remote function calls or writes occur.
 + (nullable CoreSetPlayerSnapshot *)capture:(CoreSetReadSession *)session

@@ -171,7 +171,9 @@ class KernelMappedReadTransportContract(unittest.TestCase):
         self.assertNotIn("cleanup.taskPortReleased && cleanup.generationAdvanced", probe)
         writer = read("lara/overlay/CoreSetTargetWriteSession.mm")
         disconnect = body(writer, "- (CoreSetTargetWriteCleanupResult *)disconnect")
-        self.assertIn("!readCleanup.complete", disconnect)
+        self.assertIn("readCleanup = _ownsReadSession ? [_readSession disconnect] : nil", disconnect)
+        self.assertIn("!_ownsReadSession || readCleanup.generationAdvanced", disconnect)
+        self.assertIn("!_ownsReadSession ||", disconnect)
         self.assertNotIn("!readCleanup.taskPortReleased ||", disconnect)
 
 

@@ -17,6 +17,8 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
 // Low eight bytes of c4af8 result+0x8, staged by c3318 as c571c's next
 // sample key. This is a float bit-pattern key, not an actor address.
 @property(nonatomic, readonly) uint64_t geometrySampleKey;
++ (double)circleRadiusForCanvasWidth:(double)width height:(double)height size:(NSInteger)size
+    NS_SWIFT_NAME(circleRadius(canvasWidth:height:size:));
 + (nullable CoreSetPlayerMark *)selectFromSnapshot:(CoreSetPlayerSnapshot *)snapshot
     radius:(double)radius maximumDistance:(double)maximumDistance includeBots:(BOOL)includeBots
     NS_SWIFT_NAME(select(snapshot:radius:maximumDistance:includeBots:));
@@ -32,6 +34,27 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
 + (nullable CoreSetWorldPoint *)fallbackTargetForMark:(CoreSetPlayerMark *)mark point:(NSInteger)point
     NS_SWIFT_NAME(fallbackTarget(mark:point:));
 @end
+
+@interface CoreSetV17AimConfiguration : NSObject
+@property(nonatomic, readonly) NSInteger maximumDistance;
+@property(nonatomic, readonly) float lockThreshold;
+@property(nonatomic, readonly) NSInteger confirmationFrames;
+@property(nonatomic, readonly) double takeoverPauseSeconds;
+- (nullable instancetype)initWithStoredScene:(NSInteger)storedScene
+                          storedLockStrength:(NSInteger)storedLockStrength
+                         customValuesPresent:(BOOL)customValuesPresent
+                       customMaximumDistance:(NSInteger)customMaximumDistance
+                              customStrength:(NSInteger)customStrength
+                             customSmoothing:(NSInteger)customSmoothing
+                    customConfirmationFrames:(NSInteger)customConfirmationFrames
+                       customHorizontalSpeed:(NSInteger)customHorizontalSpeed
+                         customVerticalSpeed:(NSInteger)customVerticalSpeed
+                customPredictionMilliseconds:(NSInteger)customPredictionMilliseconds
+                         customLockThreshold:(NSInteger)customLockThreshold
+           customTakeoverPauseMilliseconds:(NSInteger)customTakeoverPauseMilliseconds
+    NS_SWIFT_NAME(init(storedScene:storedLockStrength:customValuesPresent:customMaximumDistance:customStrength:customSmoothing:customConfirmationFrames:customHorizontalSpeed:customVerticalSpeed:customPredictionMilliseconds:customLockThreshold:customTakeoverPauseMilliseconds:));
+@end
+
 @interface CoreSetV17AimDynamics : NSObject
 - (void)reset;
 - (BOOL)rememberTarget:(CoreSetWorldPoint *)target actor:(uint64_t)actor
@@ -39,18 +62,14 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
 - (nullable CoreSetWorldPoint *)cachedTargetForGeneration:(uint64_t)generation
     now:(double)now stateClear:(BOOL)stateClear
     NS_SWIFT_NAME(cachedTarget(generation:now:stateClear:));
-- (BOOL)permitsTakeoverPitch:(float)pitch yaw:(float)yaw threshold:(float)threshold
-    confirmationFrames:(NSInteger)confirmationFrames pauseSeconds:(double)pauseSeconds now:(double)now
-    NS_SWIFT_NAME(permitsTakeover(pitch:yaw:threshold:confirmationFrames:pauseSeconds:now:));
+- (BOOL)permitsTakeoverPitch:(float)pitch yaw:(float)yaw
+    configuration:(CoreSetV17AimConfiguration *)configuration now:(double)now
+    NS_SWIFT_NAME(permitsTakeover(pitch:yaw:configuration:now:));
 - (nullable CoreSetBasicAimDelta *)planFromCamera:(CoreSetWorldPoint *)camera
     target:(CoreSetWorldPoint *)target actor:(uint64_t)actor publicationID:(NSUUID *)publicationID
     now:(double)now currentPitch:(float)currentPitch currentYaw:(float)currentYaw
-    strength:(float)strength smoothingSeconds:(float)smoothingSeconds
-    curveSelector:(float)curveSelector horizontalSpeed:(float)horizontalSpeed
-    verticalSpeed:(float)verticalSpeed predictionMilliseconds:(double)predictionMilliseconds
-    residualGain:(float)residualGain minimumGain:(float)minimumGain
-    deadzoneRatio:(float)deadzoneRatio minimumDeadzone:(float)minimumDeadzone
-    NS_SWIFT_NAME(plan(camera:target:actor:publicationID:now:currentPitch:currentYaw:strength:smoothingSeconds:curveSelector:horizontalSpeed:verticalSpeed:predictionMilliseconds:residualGain:minimumGain:deadzoneRatio:minimumDeadzone:));
+    configuration:(CoreSetV17AimConfiguration *)configuration
+    NS_SWIFT_NAME(plan(camera:target:actor:publicationID:now:currentPitch:currentYaw:configuration:));
 @end
 
 @interface CoreSetV17ActionDelta : NSObject
@@ -62,6 +81,16 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
 @property(nonatomic, readonly) float recoilYaw;
 @end
 
+@interface CoreSetV17RecoilConfiguration : NSObject
+- (nullable instancetype)initWithEnabled:(BOOL)enabled
+                         verticalEnabled:(BOOL)verticalEnabled
+                  verticalStrengthPercent:(NSInteger)verticalStrengthPercent
+                       stopWhenNotFiring:(BOOL)stopWhenNotFiring
+                       horizontalEnabled:(BOOL)horizontalEnabled
+                horizontalStrengthPercent:(NSInteger)horizontalStrengthPercent
+    NS_SWIFT_NAME(init(enabled:verticalEnabled:verticalStrengthPercent:stopWhenNotFiring:horizontalEnabled:horizontalStrengthPercent:));
+@end
+
 // One serial-worker instance mirrors c416c -> c571c -> c2d34 -> c2e24/c2e28.
 // It produces a local merged delta only; it neither chooses +0x620/+0x828 nor
 // owns a target write transaction.
@@ -69,26 +98,20 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
 - (void)reset;
 - (nullable CoreSetV17ActionDelta *)planSnapshot:(CoreSetPlayerSnapshot *)snapshot
     aimPitch:(float)aimPitch aimYaw:(float)aimYaw geometrySampleKey:(uint64_t)geometrySampleKey
-    verticalEnabled:(BOOL)verticalEnabled verticalStrength:(float)verticalStrength
-    stopWhenNotFiring:(BOOL)stopWhenNotFiring horizontalEnabled:(BOOL)horizontalEnabled
-    horizontalStrength:(float)horizontalStrength
-    NS_SWIFT_NAME(plan(snapshot:aimPitch:aimYaw:geometrySampleKey:verticalEnabled:verticalStrength:stopWhenNotFiring:horizontalEnabled:horizontalStrength:));
+    configuration:(nullable CoreSetV17RecoilConfiguration *)configuration
+    NS_SWIFT_NAME(plan(snapshot:aimPitch:aimYaw:geometrySampleKey:configuration:));
 // Core only feeds prior s13 after the input route's accepted/zero-draft path.
-- (void)observeCommittedAimPitch:(float)aimPitch inputRoute:(BOOL)inputRoute
+- (void)observeAimFeedbackWithPitch:(float)aimPitch inputRoute:(BOOL)inputRoute
     recoilEnabled:(BOOL)recoilEnabled aimActive:(BOOL)aimActive
     acceptedFirstAxis:(BOOL)acceptedFirstAxis bothZeroDraft:(BOOL)bothZeroDraft
-    NS_SWIFT_NAME(observeCommitted(aimPitch:inputRoute:recoilEnabled:aimActive:acceptedFirstAxis:bothZeroDraft:));
+    NS_SWIFT_NAME(observeAimFeedback(pitch:inputRoute:recoilEnabled:aimActive:acceptedFirstAxis:bothZeroDraft:));
 @end
 
-// Production wrapper for c1f90/c3714/c3754/c3838 plus the closed merge
-// predecessor rule. A committed checked-write maps to the sink result low bit;
-// inputPaused supplies the observed w20=0 predecessor.
+// Stateless wrapper for worker c2fbc and c2ef4..c2f24. The same-cycle raw
+// firing byte selects the exact Core v1.7 +0x620/+0x828 action slot.
 @interface CoreSetV17ActionRouteDynamics : NSObject
-- (void)reset;
-- (BOOL)useControlRotationWithRecoilEnabled:(BOOL)recoilEnabled
-    inputPaused:(BOOL)inputPaused
-    NS_SWIFT_NAME(useControlRotation(recoilEnabled:inputPaused:));
-- (void)observeCommittedWithW20:(BOOL)w20 NS_SWIFT_NAME(observeCommitted(w20:));
+- (CoreSetTargetWriteSlot)slotForFiringSample:(uint8_t)firingSample
+    NS_SWIFT_NAME(slot(firingSample:));
 @end
 @interface CoreSetBasicAimTriggerState : NSObject
 - (void)reset;
@@ -97,17 +120,21 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
 - (BOOL)permitsAt:(double)now NS_SWIFT_NAME(permits(now:));
 @end
 
-// Single-transaction component reused by the v1.7 aim path.
-// Each instance permits one explicit submission. Default kernel profile gates
-// stay intact: this API does not install a profile or grant write capability.
+// Persistent serial action worker reused by the v1.7 aim/recoil path. Each
+// submission gets a fresh snapshot authority lease; the mapped write session
+// remains alive until stop. This API does not install a kernel profile.
 @interface CoreSetIsolatedWriteProbe : NSObject
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;
 - (instancetype)initWithLiveValidator:(CoreSetProbeLiveValidator)validator;
+- (instancetype)initWithReadSession:(CoreSetReadSession *)readSession
+                       liveValidator:(CoreSetProbeLiveValidator)validator
+    NS_SWIFT_NAME(init(readSession:liveValidator:));
 // ControlRotation and RotationInput slots; First/Second/Both select pitch/yaw.
 // Deltas must be finite, within Core's 720 deg/s * 50 ms maximum step, and zero for an unselected axis. Old bytes
 // come from the immutable complete battle snapshot, not a caller-supplied buffer.
-// Any submission failure also consumes this instance's single attempt.
+// A failed submission revokes only that snapshot lease; later fresh snapshots
+// may submit again while the worker identity remains current.
 - (CoreSetTargetWriteResult *)submitSnapshot:(CoreSetPlayerSnapshot *)snapshot
     requestToken:(NSUUID *)requestToken hostGeneration:(uint64_t)hostGeneration
     configRevision:(uint64_t)configRevision lane:(CoreSetTargetWriteLane)lane
@@ -120,4 +147,3 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetPlayerSnapshot *captured,
 @end
 
 NS_ASSUME_NONNULL_END
-

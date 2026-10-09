@@ -76,9 +76,9 @@ struct ActionScenePlan {
     static constexpr bool writeReady = false;
 };
 
-// c1664 table/custom bounds + c4854 lock table/custom bounds. Only the
-// established six scene values and three lock values are named here. The
-// remaining four native table columns retain opaque semantics in the probe.
+// c1664 table/custom bounds + c4854 lock table/custom bounds. This resolves
+// the six scene values and three lock values; c4af8's four normalized
+// compensation/deadzone columns are resolved by aimSceneCompensationValues.
 inline bool planActionScene(int storedScene, int storedLockStrength,
                             const ActionCustomSceneInput &custom,
                             ActionScenePlan *out) {
@@ -119,10 +119,6 @@ inline bool actionPostStateContinueFlag(uint32_t verticalEnabledW28,
     return ((verticalEnabledW28 & 1) & storedContinueWhenNotFiring) != 0;
 }
 
-inline float actionRecoilStrength01(int rawPercent) {
-    return std::clamp(static_cast<float>(rawPercent) / 100.0f, 0.0f, 1.0f);
-}
-
 struct ActionWriteDraft {
     TargetActionSlot resolvedSlot = TargetActionSlot::controlRotation;
     TargetActionAxis axis = TargetActionAxis::both;
@@ -136,9 +132,9 @@ struct ActionWriteDraft {
     static constexpr bool restoresTargetState = false;
 };
 
-// c5ad8/c6730 payload preparation only. The caller must independently resolve
-// the full c2e24 predecessor and supply the actual slot; fire=false does NOT
-// select ControlRotation. Every draft still needs fresh expected-old, trusted
+// c5ad8/c6730 payload preparation only. The caller must supply the slot selected
+// from c2fbc's same-cycle fire byte; this draft helper never infers that state.
+// Every draft still needs fresh expected-old, trusted
 // request/snapshot authority, exact profile, checked write and independent
 // same-cycle readback. A two-zero draft means no write, never target restored.
 inline bool planActionWriteDraft(TargetActionSlot resolvedSlot,

@@ -105,7 +105,7 @@ class CoreSetAimPreviewContractTest(unittest.TestCase):
             "private func aimControls(", 1)[0]
         after_receipt = stop.split("receiveStop(token, outcome: outcome)", 1)[1]
         self.assertIn("updateDesired { $0.enabled = false }", after_receipt)
-        self.assertIn("restoration == .confirmed", after_receipt)
+        self.assertIn("restoration.stopComplete", after_receipt)
 
 
 if __name__ == "__main__":

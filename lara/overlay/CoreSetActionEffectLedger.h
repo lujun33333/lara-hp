@@ -36,7 +36,19 @@ public:
         return true;
     }
 
+    // Core's continuous view-action worker has no baseline restoration step.
+    // When the product policy explicitly chooses the same behavior, resolve
+    // the cleanup obligation as an abandonment, never as verified restoration.
+    // Callers must surface the disposition separately from resource cleanup.
+    bool abandonWithoutRestoration() {
+        if (exhausted_) return false;
+        unresolved_ = false;
+        abandoned_ = attemptEpoch_ != 0;
+        return true;
+    }
+
     bool targetEffectsResolved() const { return !unresolved_; }
+    bool targetEffectsAbandoned() const { return abandoned_; }
     uint64_t attemptEpoch() const { return attemptEpoch_; }
     bool cleanupComplete(bool readReleased, bool aliasesReleased,
                          bool generationAdvanced, bool noInFlight) const {
@@ -47,6 +59,7 @@ private:
     uint64_t attemptEpoch_ = 0;
     bool unresolved_ = false;
     bool exhausted_ = false;
+    bool abandoned_ = false;
 };
 
 } // namespace CoreSet

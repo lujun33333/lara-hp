@@ -58,36 +58,52 @@ class ActionCycleContractTests(unittest.TestCase):
         self.assertIn("stopped = true", probe)
         self.assertIn("self.session.disconnect()", probe)
         aim = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
-        for marker in ("CoreSetIsolatedWriteProbe", "cleanup.complete", "pendingProbes",
-                       "clean ? .restored", ".applied(observed:"):
+        for marker in ("CoreSetIsolatedWriteProbe", "persistentActionWorker", "pendingProbes",
+                       "cleanup.targetEffectsAbandoned", "unrestoredActionEffects",
+                       ".stoppedWithoutRestoration", ".appliedWithoutRestoration(observed:",
+                       ".applied(observed:"):
             self.assertIn(marker, aim)
+        state = (ROOT / "lara/views/app/CoreSetFeatureState.swift").read_text(encoding="utf-8")
+        self.assertIn("case .appliedWithoutRestoration(let observed):", state)
+        self.assertIn("restoration = .abandoned", state)
         recoil = (ROOT / "lara/views/app/CoreSetRecoilConsumer.swift").read_text(encoding="utf-8")
         for marker in ("CoreSetAimConsumer", "actionConsumer.applyRecoil",
                        "actionConsumer.stopRecoil", "shutdownWriteSession() -> Bool { true }"):
             self.assertIn(marker, recoil)
         for marker in ("tickRecoilOnly", "submitMergedAction", "recoilDynamics.reset()",
-                       "pendingProbes = self.pendingProbes.filter"):
+                       "retireActionWorker()",
+                       "drainPendingActionWorkers()"):
             self.assertIn(marker, aim)
 
-    def test_writer_attempt_is_closed_after_checked_write_and_drain(self):
+    def test_writer_attempt_uses_explicit_no_restore_disposition(self):
         header = (ROOT / "lara/overlay/CoreSetTargetWriteSession.h").read_text(encoding="utf-8")
         source = (ROOT / "lara/overlay/CoreSetTargetWriteSession.mm").read_text(encoding="utf-8")
         ledger = (ROOT / "lara/overlay/CoreSetActionEffectLedger.h").read_text(encoding="utf-8")
         self.assertIn("BOOL targetEffectsResolved", header)
+        self.assertIn("BOOL targetEffectsAbandoned", header)
         self.assertIn("noInFlight && targetEffectsResolved", source)
-        self.assertIn("targetEffectsResolved:NO", source)  # Legacy receipt is not upgraded.
+        self.assertIn("targetEffectsResolved:NO targetEffectsAbandoned:NO", source)
         self.assertLess(source.index("_effects.markWriteAttempt()"),
                         source.index("return [_backend writeControllerSlot:"))
-        for marker in ("const BOOL effectsResolved = YES",
-                       "generationAdvanced:advanced && readCleanup.generationAdvanced",
+        for marker in ("_effects.abandonWithoutRestoration()",
+                       "_effects.targetEffectsAbandoned()",
+                       "generationAdvanced:advanced && readAdvanced",
                        "noInFlight:drained && backendClean"):
             self.assertIn(marker, source)
-        self.assertNotIn("acknowledgeVerifiedRestoration", source)
+        self.assertIn("readCleanup = _ownsReadSession ? [_readSession disconnect] : nil", source)
         for marker in ("receipt.attemptEpoch != attemptEpoch_", "receipt.producerStopped",
                        "receipt.writerDrained", "receipt.identityStable",
                        "receipt.independentReadback", "receipt.allOwnedRangesMatchBaseline",
-                       "independentVerifier(receipt)", "&& !unresolved_"):
+                       "independentVerifier(receipt)", "&& !unresolved_",
+                       "bool abandonWithoutRestoration()", "bool targetEffectsAbandoned() const"):
             self.assertIn(marker, ledger)
+
+    def test_aim_token_handoff_is_serialized_with_recoil_timer(self):
+        aim = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
+        apply = aim.split("func apply(_ request: CoreSetApplyRequest<State>,", 1)[1].split(
+            "private func recoilConfiguration", 1)[0]
+        self.assertLess(apply.index("worker.async"), apply.index("self.invalidateHost()"))
+        self.assertLess(apply.index("self.invalidateHost()"), apply.index("self.liveToken = request.token"))
 
     def test_31_point_fixture_never_promotes_component_parity_to_original_effect(self):
         evidence = json.loads((ROOT / "tests/fixtures/core_set_v17_action_cycle_evidence.json").read_text(encoding="utf-8"))

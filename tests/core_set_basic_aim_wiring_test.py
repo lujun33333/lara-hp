@@ -19,7 +19,7 @@ for token in (
     "CoreSetIsolatedWriteProbe", "includeBattleInputs: true",
     "triggerState.update(", "dynamics.permitsTakeover(",
     "CoreSetBasicAimDelta.select(", "dynamics.plan(",
-    "guard result.committed, cleanup.complete,",
+    "persistentActionWorker(snapshot:", "guard result.committed, isLive(",
     "submitMergedAction(snapshot:", "applyRecoil(", "tickRecoilOnly(",
 ):
     assert token in aim, token
@@ -38,6 +38,8 @@ for token in (
     assert token in snapshot_mm, token
 
 assert "initWithRequestAuthority:_authority" in native
+assert "readSession:readSession" in native
+assert "CoreSetIsolatedWriteProbe(readSession: session" in aim
 assert "writeControllerActionForPID:" in native
 assert "CoreSetTargetWriteSlotControlRotation" in native
 assert "CoreSetTargetWriteSlotRotationInput" in native

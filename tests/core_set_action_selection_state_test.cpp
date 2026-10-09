@@ -17,6 +17,14 @@ int main() {
     assert(!referenceActionWorldPoint(1, 1, {}, {INFINITY, 0, 0}, {}, &point));
     assert(referenceActionWorldPoint(0, 1, {}, {INFINITY, 0, 0}, {1, 2, 3}, &point));
     assert(!referenceActionScreenRank(NAN, 10, 100, 100, 20, 999, true, 1, 1).ordinaryUpdated);
+    RecoilConfiguration recoilConfiguration;
+    assert(!planRecoilConfiguration(false, true, 80, true, true, 60, &recoilConfiguration));
+    assert(!planRecoilConfiguration(true, true, -1, true, true, 60, &recoilConfiguration));
+    assert(!planRecoilConfiguration(true, true, 80, true, true, 101, &recoilConfiguration));
+    assert(planRecoilConfiguration(true, true, 80, false, true, 60, &recoilConfiguration));
+    assert(recoilConfiguration.verticalEnabled && recoilConfiguration.verticalStrength == 0.8f);
+    assert(!recoilConfiguration.stopWhenNotFiring && recoilConfiguration.horizontalEnabled);
+    assert(recoilConfiguration.horizontalStrength == 0.6f);
     std::cout << std::setprecision(17) << "{\"actor_gate\":[";
     bool comma = false;
     for (unsigned state = 0; state < 2; ++state) for (uint8_t flag = 0; flag < 2; ++flag)

@@ -6,6 +6,28 @@
 
 namespace CoreSet {
 
+struct RecoilConfiguration {
+    bool verticalEnabled = false;
+    float verticalStrength = 0;
+    bool stopWhenNotFiring = true;
+    bool horizontalEnabled = false;
+    float horizontalStrength = 0;
+};
+
+// Core configuration C+188/C+18d/C+1ac/C+1b0/C+1bc. The two integer
+// strengths are normalized only here, matching the worker's percentage input.
+inline bool planRecoilConfiguration(bool enabled,
+                                    bool verticalEnabled, int verticalStrengthPercent,
+                                    bool stopWhenNotFiring,
+                                    bool horizontalEnabled, int horizontalStrengthPercent,
+                                    RecoilConfiguration *out) {
+    if (!out || !enabled || verticalStrengthPercent < 0 || verticalStrengthPercent > 100 ||
+        horizontalStrengthPercent < 0 || horizontalStrengthPercent > 100) return false;
+    *out = {verticalEnabled, verticalStrengthPercent / 100.0f, stopWhenNotFiring,
+            horizontalEnabled, horizontalStrengthPercent / 100.0f};
+    return true;
+}
+
 // Core c571c's local state fields only. This is not a target-game object.
 struct RecoilRawState {
     uint16_t mode = 0;          // local +0: 0, 1, or paused 0x100

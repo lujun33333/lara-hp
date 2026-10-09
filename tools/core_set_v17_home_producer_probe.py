@@ -62,6 +62,7 @@ CURRENT_SOURCES = {
     "state": "lara/views/app/CoreSetFeatureState.swift",
     "menu": "lara/views/app/CoreSetMenuViewController.swift",
     "telemetry": "lara/views/app/CoreSetHomeTelemetrySource.swift",
+    "home_runtime": "lara/views/app/CoreSetHomeRuntimeProducer.swift",
     "manager": "lara/classes/laramgr.swift",
     "dark_sword_api": "lara/kexploit/darksword.h",
     "local_copy": "lara/funcs/fetchkcache.swift",
@@ -102,7 +103,7 @@ def current_source_evidence(sources: dict[str, str], swift_sources: dict[str, st
         # declaration itself is excluded, not merely its entire source file.
         for match in re.finditer(r"\bclass\s+(\w+)\s*:[^{]*\bCoreSetHomeReferenceObservationProvider\b", source):
             conformers.append({"source": path, "class": match[1], "line": source.count("\n", 0, match.start()) + 1})
-        for match in re.finditer(r"\bbindHomeReferenceObservationProvider\s*\(", source):
+        for match in re.finditer(r"(?:\bbindHomeReferenceObservationProvider|homeTelemetry\.bindReferenceObservationProvider)\s*\(", source):
             prefix = source[source.rfind("\n", 0, match.start()) + 1:match.start()]
             if re.search(r"\bfunc\s*$", prefix):
                 continue
@@ -111,7 +112,9 @@ def current_source_evidence(sources: dict[str, str], swift_sources: dict[str, st
             home_bindings.append({"source": path, "line": source.count("\n", 0, match.start()) + 1})
     evidence = {
         "home_state": [site("state", "var runMode: CoreSetRunMode?"), site("state", "var coverMode: CoreSetCoverMode?")],
-        "home_refusal": [site("menu", "home.runMode：未提供同义"), site("menu", "home.coverMode：未提供")],
+        "home_run_reference_config": [site("state", "No separate native runtime"),
+                                      site("menu", "reference-config-only-no-native-consumer")],
+        "home_cover_refusal": [site("menu", "home.coverMode：未提供")],
         "home_action_binding": [site("menu", "var onHomeAction:"), site("menu", "startHomeKernelAction"),
                                 site("menu", "startHomeInformationAction"), site("coordinator", "menu.onHomeAction ="),
                                 site("coordinator", "recordHomeAction(.kernelAction"),
@@ -136,26 +139,32 @@ def current_source_evidence(sources: dict[str, str], swift_sources: dict[str, st
                                  site("coordinator", "func bindHomeReferenceObservationProvider("),
                                  site("telemetry", "completedPages: nil, totalPages: nil"),
                                  site("telemetry", "downloadedBytes: nil, totalBytes: nil")],
+        "live_home_producer": [site("home_runtime", "final class CoreSetHomeRuntimeProducer: CoreSetHomeReferenceObservationProvider"),
+                               site("home_runtime", "CoreSetKernelCacheTransferOwner.shared.snapshot()"),
+                               site("home_runtime", "manager.dsStageObservation"),
+                               site("home_runtime", "manager.dsPageObservation"),
+                               site("coordinator", "let homeProducer = CoreSetHomeRuntimeProducer(manager: .shared)"),
+                               site("coordinator", "homeTelemetry.bindReferenceObservationProvider(homeProducer)")],
     }
     common = "real owner/request identity, producer epoch, monotone sequence, actual host generation, fresh observation, start/update/failure/cancel/stop receipt; submission != completion"
     points = {
-        "v17-000": ("configuration + refused menu", ["home_state", "home_refusal"],
-                    "C+12c int32 0/1 real non-menu resource/scheduler consumer and switch/restore observation"),
-        "v17-001": ("configuration + refused menu", ["home_state", "home_refusal"],
+        "v17-000": ("reference 0/1 normalized configuration; native image has no separate consumer", ["home_state", "home_run_reference_config"],
+                    "configuration storage closed; no native runtime effect to invent"),
+        "v17-001": ("configuration + refused menu", ["home_state", "home_cover_refusal"],
                     "C+2f bool + C+130 int32; global/in-game/off occlusion owner, off preserves prior mode, actual reset/stop result"),
         "v17-002": ("bound local action: menu -> coordinator request lifecycle -> laramgr.run -> ds_run", ["home_action_binding", "kernel_call"],
                     "4f00 gates and native token; 63a4 workflow; 6938 matching-token watchdog 240s timeout/20s stagnant counter; completed/failure cleanup parity"),
         "v17-003": ("bound local action: menu -> coordinator request lifecycle -> current-device kernelcache/offset parsing", ["home_action_binding", "kernel_cache_call"],
                     "538c host gate; nonempty named input -> 609a8 tuple -> 6cc8 0x288 information -> 60358 validation -> 648ac publish; info status1/2/3 and rollback"),
-        "v17-005": ("native-ready + Partial final Bool; not original environment", ["kernel_call", "range_fetch", "observation_boundary"],
+        "v17-005": ("bound live local environment producer; not original environment owner", ["kernel_call", "range_fetch", "observation_boundary", "live_home_producer"],
                     "5f14 same support classification + QXA107 phase/inFlight/ready composite environment, UTF8<=63 bytes"),
-        "v17-006": ("hasOffsets Bool; not original named-information lifecycle", ["kernel_cache_call", "observation_boundary"],
+        "v17-006": ("bound live local information producer; not original named-information owner", ["kernel_cache_call", "observation_boundary", "live_home_producer"],
                     "4e00/538c status1/2/3 + optional message, validated named-information owner, UTF8<=191 bytes"),
-        "v17-008": ("dsrunning/free-form log; no original typed stage publisher", ["kernel_call", "observation_boundary"],
+        "v17-008": ("bound typed DarkSword stage callback producer; not original publisher", ["kernel_call", "observation_boundary", "live_home_producer"],
                     "5c6a8 lock-protected 0x168 snapshot stage buffer+0x78, UTF8<=127 bytes; running is not stage"),
-        "v17-009": ("DarkSword double fraction; no same-request page pair", ["kernel_call", "observation_boundary"],
+        "v17-009": ("bound typed DarkSword page callback producer", ["kernel_call", "observation_boundary", "live_home_producer"],
                     "2fd1c independent acquire fields executing/cancel/phase and UInt64 completed/total PAGE counters; coherent request/phase/completion/stop proof"),
-        "v17-010": ("Partial final decompressed length / local-copy bytes / system OTA switch", ["range_fetch", "kernel_cache_call", "local_copy", "ota_switch", "observation_boundary"],
+        "v17-010": ("bound kernelcache transfer byte producer / system OTA switch", ["range_fetch", "kernel_cache_call", "local_copy", "ota_switch", "observation_boundary", "live_home_producer"],
                     "qm571 transferred-byte callback and asset total in same units -> qm543 snapshot, native generation/sentinel; cancel increments generation; URL/path/client presence or digest only"),
     }
     return {"evidence_grade": "current source lexical/caller contract; no external archive, runtime or native effect proof",
@@ -173,7 +182,7 @@ def current_source_evidence(sources: dict[str, str], swift_sources: dict[str, st
             "points": [{"id": point, "reference_evidence_key": "native-v17/" + point,
                         "current_candidate": candidate, "caller_evidence_keys": keys,
                         "missing_same_meaning_interface": requirement, "receipt_constraints": common,
-                        "producer_bound": point in {"v17-002", "v17-003"},
+                        "producer_bound": point in {"v17-000", "v17-002", "v17-003", "v17-005", "v17-006", "v17-008", "v17-009", "v17-010"},
                         "original_runtime_receipt_verified": False}
                        for point, (candidate, keys, requirement) in points.items()]}
 

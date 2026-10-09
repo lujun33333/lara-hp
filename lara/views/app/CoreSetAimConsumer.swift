@@ -22,6 +22,20 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     private var pendingCompletion: ((CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void)?
     private var activeRecoil: CoreSetApplyRequest<CoreSetRecoilSettings>?
     private var pendingRecoilCompletion: ((CoreSetRequestToken, CoreSetApplyOutcome<CoreSetRecoilSettings>) -> Void)?
+    private struct ActionWorkerIdentity: Equatable {
+        let requestID: UUID
+        let hostGeneration: UInt64
+        let revision: UInt64
+        let processID: Int32
+        let imageBase: UInt64
+        let readGeneration: UInt64
+        let controller: UInt64
+    }
+    private var actionProbe: CoreSetIsolatedWriteProbe?
+    private var actionWorkerIdentity: ActionWorkerIdentity?
+    private var aimWritesCommitted = false
+    private var recoilWritesCommitted = false
+    private var unrestoredActionEffects = false
     private var pendingProbes: [CoreSetIsolatedWriteProbe] = []
     private var readReady = false
     private var cleanupPending = false
@@ -90,6 +104,47 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         cancellation.lock(); defer { cancellation.unlock() }
         return liveToken != nil && liveToken != token
     }
+    private func actionWorkerLive(_ requestToken: NSUUID, host: UInt64, revision: UInt64) -> Bool {
+        cancellation.lock(); defer { cancellation.unlock() }
+        return liveToken?.requestID == (requestToken as UUID) &&
+            liveHostGeneration == host && liveRevision == revision
+    }
+    @discardableResult
+    private func retireActionWorker() -> Bool {
+        guard let probe = actionProbe else { actionWorkerIdentity = nil; return true }
+        actionProbe = nil; actionWorkerIdentity = nil
+        let cleanup = probe.stop()
+        if cleanup.targetEffectsAbandoned { unrestoredActionEffects = true }
+        if !cleanup.complete { pendingProbes.append(probe) }
+        return cleanup.complete
+    }
+    private func drainPendingActionWorkers() {
+        var retained: [CoreSetIsolatedWriteProbe] = []
+        for probe in pendingProbes {
+            let cleanup = probe.stop()
+            if cleanup.targetEffectsAbandoned { unrestoredActionEffects = true }
+            if !cleanup.complete { retained.append(probe) }
+        }
+        pendingProbes = retained
+    }
+    private func persistentActionWorker(snapshot: CoreSetPlayerSnapshot,
+        primaryToken: CoreSetRequestToken, hostGeneration: UInt64,
+        revision: UInt64) -> CoreSetIsolatedWriteProbe? {
+        let identity = ActionWorkerIdentity(requestID: primaryToken.requestID,
+            hostGeneration: hostGeneration, revision: revision,
+            processID: snapshot.processID, imageBase: snapshot.imageBase,
+            readGeneration: snapshot.sessionGeneration, controller: snapshot.controllerAddress)
+        if actionWorkerIdentity == identity, let actionProbe { return actionProbe }
+        guard retireActionWorker(), pendingProbes.isEmpty else { return nil }
+        let probe = CoreSetIsolatedWriteProbe(readSession: session,
+            liveValidator: { [weak self, weak session] captured, token, liveHost, liveRevision in
+                guard let self, let session else { return false }
+                return self.actionWorkerLive(token, host: liveHost, revision: liveRevision) &&
+                    CoreSetPlayerCollector.validateLiveIdentity(session, snapshot: captured)
+            })
+        actionWorkerIdentity = identity; actionProbe = probe
+        return probe
+    }
     func invalidateHost() {
         cancellation.lock(); liveToken = nil; liveHostGeneration = 0; cancellation.unlock()
     }
@@ -100,6 +155,8 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             stop(request.token) { token, outcome in
                 switch outcome {
                 case .restored: completion(token, .applied(observed: request.desired))
+                case .stoppedWithoutRestoration:
+                    completion(token, .appliedWithoutRestoration(observed: request.desired))
                 case .failed(let reason): completion(token, .failed(reason: reason))
                 }
             }
@@ -108,22 +165,29 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         guard availability == .ready, let canvas = coordinator?.playerCanvas,
               request.desired.enabled == true, request.desired.trigger != nil,
               request.desired.includeBots != nil, request.desired.circleSize.value != nil,
-              tuning(request.desired) != nil,
+              configuration(request.desired) != nil,
               request.desired.point != nil else {
             completion(request.token, .unavailable(reason: "基础自瞄参数未配置完整")); return
         }
-        invalidateHost()
-        cancellation.lock()
-        liveRevision &+= 1
-        let revision = liveRevision
-        liveToken = request.token; liveHostGeneration = canvas.generation
-        cancellation.unlock()
         worker.async { [weak self] in
-            guard let self, self.isLive(request.token, host: canvas.generation) else {
+            guard let self, !self.closed else {
                 DispatchQueue.main.async { completion(request.token, .failed(reason: "开始前请求已撤销")) }
                 return
             }
             self.timer?.cancel(); self.timer = nil
+            // Move the live-token handoff onto the same serial queue as the
+            // recoil timer. Main-thread invalidation used to leave a window in
+            // which an already queued recoil tick observed the new Aim token
+            // and incorrectly failed the still-active recoil request.
+            self.invalidateHost()
+            guard self.retireActionWorker() else {
+                DispatchQueue.main.async {
+                    self.cleanupPending = true
+                    completion(request.token, .failed(reason: "旧动作 worker 清理待确认，拒绝新请求"))
+                    self.coordinator?.refreshPlayerAvailability()
+                }
+                return
+            }
             guard self.pendingProbes.isEmpty else {
                 self.invalidateHost()
                 DispatchQueue.main.async {
@@ -133,6 +197,13 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                 }
                 return
             }
+            self.cancellation.lock()
+            self.liveRevision &+= 1
+            let revision = self.liveRevision
+            self.liveToken = request.token
+            self.liveHostGeneration = canvas.generation
+            self.cancellation.unlock()
+            if self.active == nil { self.aimWritesCommitted = false }
             if let previous = self.active, let previousCompletion = self.pendingCompletion {
                 DispatchQueue.main.async { previousCompletion(previous.token, .failed(reason: "请求已替换")) }
             }
@@ -148,23 +219,17 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             self.timer = timer; timer.resume()
         }
     }
-    private struct RecoilTuning {
-        let verticalEnabled: Bool
-        let verticalStrength: Float
-        let stopWhenNotFiring: Bool
-        let horizontalEnabled: Bool
-        let horizontalStrength: Float
-    }
-    private func recoilTuning(_ settings: CoreSetRecoilSettings) -> RecoilTuning? {
+    private func recoilConfiguration(_ settings: CoreSetRecoilSettings) -> CoreSetV17RecoilConfiguration? {
         guard settings.enabled == true,
               let verticalEnabled = settings.verticalEnabled,
               let vertical = settings.verticalStrength.value,
               let stop = settings.stopWhenNotFiring.enabled,
               let horizontalEnabled = settings.horizontalEnabled,
               let horizontal = settings.horizontalStrength.value else { return nil }
-        return RecoilTuning(verticalEnabled: verticalEnabled,
-            verticalStrength: Float(vertical) / 100, stopWhenNotFiring: stop,
-            horizontalEnabled: horizontalEnabled, horizontalStrength: Float(horizontal) / 100)
+        return CoreSetV17RecoilConfiguration(enabled: true,
+            verticalEnabled: verticalEnabled, verticalStrengthPercent: vertical,
+            stopWhenNotFiring: stop, horizontalEnabled: horizontalEnabled,
+            horizontalStrengthPercent: horizontal)
     }
     func applyRecoil(_ request: CoreSetApplyRequest<CoreSetRecoilSettings>,
         completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<CoreSetRecoilSettings>) -> Void) {
@@ -173,12 +238,14 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             stopRecoil(request.token) { token, outcome in
                 switch outcome {
                 case .restored: completion(token, .applied(observed: request.desired))
+                case .stoppedWithoutRestoration:
+                    completion(token, .appliedWithoutRestoration(observed: request.desired))
                 case .failed(let reason): completion(token, .failed(reason: reason))
                 }
             }
             return
         }
-        guard recoilAvailability == .ready, recoilTuning(request.desired) != nil,
+        guard recoilAvailability == .ready, recoilConfiguration(request.desired) != nil,
               let canvas = coordinator?.playerCanvas else {
             completion(request.token, .unavailable(reason: "压枪参数或共享动作会话未就绪")); return
         }
@@ -187,11 +254,11 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             if let previous = self.activeRecoil, let callback = self.pendingRecoilCompletion {
                 DispatchQueue.main.async { callback(previous.token, .failed(reason: "压枪请求已替换")) }
             }
+            if self.activeRecoil == nil { self.recoilWritesCommitted = false }
             self.activeRecoil = request
             self.pendingRecoilCompletion = completion
             self.activeCanvasSize = canvas.size
             self.recoilDynamics.reset()
-            self.resetRouteRuntime()
             if self.active == nil {
                 self.invalidateHost()
                 self.cancellation.lock()
@@ -219,72 +286,37 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         recoilTimer = source
         source.resume()
     }
-    private func resetRouteRuntime() {
-        routeDynamics.reset()
+    private func actionSlot(snapshot: CoreSetPlayerSnapshot) -> CoreSetTargetWriteSlot {
+        routeDynamics.slot(firingSample: snapshot.localFiringRaw)
     }
-    private func actionSlot(recoilEnabled: Bool, inputPaused: Bool) -> CoreSetTargetWriteSlot {
-        routeDynamics.useControlRotation(recoilEnabled: recoilEnabled, inputPaused: inputPaused)
-            ? .controlRotation : .rotationInput
-    }
-    private func observeCommittedRoute(w20: Bool) {
-        routeDynamics.observeCommitted(w20: w20)
-    }
-    private struct Tuning {
-        let distance: Int, strength: Float, smoothing: Float, pitchSpeed: Float, yawSpeed: Float
-        let predictionMilliseconds: Double
-        let curveSelector: Float, residualGain: Float, minimumGain: Float
-        let deadzoneRatio: Float, minimumDeadzone: Float
-        let lockThreshold: Float, confirmationFrames: Int, pauseSeconds: Double
-    }
-    private func tuning(_ settings: State) -> Tuning? {
+    private func configuration(_ settings: State) -> CoreSetV17AimConfiguration? {
         guard let scene = settings.scene else { return nil }
-        switch scene {
-        case .far, .general, .close:
-            guard let lock = settings.lockStrength else { return nil }
-            let lockValues: (Float, Int, Double)
-            switch lock {
-            case .strong: lockValues = (0.10, 1, 0.420)
-            case .medium: lockValues = (0.20, 2, 0.300)
-            case .light: lockValues = (0.80, 3, 0.140)
-            }
-            switch scene {
-            case .far: return Tuning(distance: 300, strength: 0.76, smoothing: 0.060,
-                pitchSpeed: 220, yawSpeed: 300, predictionMilliseconds: 110,
-                curveSelector: lockValues.0, residualGain: 0.90, minimumGain: 0.38,
-                deadzoneRatio: 0.12, minimumDeadzone: 0.04, lockThreshold: lockValues.0,
-                confirmationFrames: lockValues.1, pauseSeconds: lockValues.2)
-            case .general: return Tuning(distance: 180, strength: 0.80, smoothing: 0.060,
-                pitchSpeed: 300, yawSpeed: 420, predictionMilliseconds: 90,
-                curveSelector: lockValues.0, residualGain: 0.56, minimumGain: 0.06,
-                deadzoneRatio: 0.25, minimumDeadzone: 0.10, lockThreshold: lockValues.0,
-                confirmationFrames: lockValues.1, pauseSeconds: lockValues.2)
-            case .close: return Tuning(distance: 70, strength: 0.88, smoothing: 0.048,
-                pitchSpeed: 420, yawSpeed: 600, predictionMilliseconds: 60,
-                curveSelector: lockValues.0, residualGain: 0.62, minimumGain: 0.06,
-                deadzoneRatio: 0.25, minimumDeadzone: 0.10, lockThreshold: lockValues.0,
-                confirmationFrames: lockValues.1, pauseSeconds: lockValues.2)
-            case .custom: return nil
-            }
-        case .custom:
-            guard let distance = settings.custom.maximumDistance.value,
-                  let strength = settings.custom.strength.value,
-                  let smoothing = settings.custom.smoothing.value,
-                  let horizontal = settings.custom.horizontalSpeed.value,
-                  let vertical = settings.custom.verticalSpeed.value,
-                  let prediction = settings.custom.predictionMilliseconds.value,
-                  let threshold = settings.custom.lockThreshold.value,
-                  let frames = settings.custom.confirmationFrames.value,
-                  let pause = settings.custom.takeoverPauseMilliseconds.value else { return nil }
-            return Tuning(distance: distance, strength: Float(strength) / 100,
-                          smoothing: 0.024 + 0.012 * Float(smoothing),
-                          pitchSpeed: Float(vertical), yawSpeed: Float(horizontal),
-                          predictionMilliseconds: Double(prediction),
-                          curveSelector: Float(threshold) / 100,
-                          residualGain: 0.56, minimumGain: 0.06,
-                          deadzoneRatio: 0.25, minimumDeadzone: 0.10,
-                          lockThreshold: Float(threshold) / 100,
-                          confirmationFrames: frames, pauseSeconds: Double(pause) / 1000)
-        }
+        let custom = scene == .custom
+        if !custom && settings.lockStrength == nil { return nil }
+        let maximumDistance = settings.custom.maximumDistance.value
+        let strength = settings.custom.strength.value
+        let smoothing = settings.custom.smoothing.value
+        let confirmationFrames = settings.custom.confirmationFrames.value
+        let horizontalSpeed = settings.custom.horizontalSpeed.value
+        let verticalSpeed = settings.custom.verticalSpeed.value
+        let prediction = settings.custom.predictionMilliseconds.value
+        let lockThreshold = settings.custom.lockThreshold.value
+        let pause = settings.custom.takeoverPauseMilliseconds.value
+        let customPresent = maximumDistance != nil && strength != nil && smoothing != nil &&
+            confirmationFrames != nil && horizontalSpeed != nil && verticalSpeed != nil &&
+            prediction != nil && lockThreshold != nil && pause != nil
+        if custom && !customPresent { return nil }
+        return CoreSetV17AimConfiguration(storedScene: scene.rawValue,
+            storedLockStrength: settings.lockStrength?.rawValue ?? 0,
+            customValuesPresent: customPresent,
+            customMaximumDistance: maximumDistance ?? 0,
+            customStrength: strength ?? 0, customSmoothing: smoothing ?? 0,
+            customConfirmationFrames: confirmationFrames ?? 0,
+            customHorizontalSpeed: horizontalSpeed ?? 0,
+            customVerticalSpeed: verticalSpeed ?? 0,
+            customPredictionMilliseconds: prediction ?? 0,
+            customLockThreshold: lockThreshold ?? 0,
+            customTakeoverPauseMilliseconds: pause ?? 0)
     }
     private func capture(_ size: CGSize, distance: Int) -> CoreSetPlayerSnapshot? {
         CoreSetPlayerCollector.capture(session, canvasSize: size,
@@ -299,52 +331,51 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     }
     private enum ActionSubmitResult { case idle, committed, failed(String) }
     private func submitMergedAction(snapshot: CoreSetPlayerSnapshot, aimStep: CoreSetBasicAimDelta?,
-        recoilRequest: CoreSetApplyRequest<CoreSetRecoilSettings>?, inputPaused: Bool,
+        recoilRequest: CoreSetApplyRequest<CoreSetRecoilSettings>?,
         primaryToken: CoreSetRequestToken, hostGeneration: UInt64, revision: UInt64,
         requireAimTrigger: Bool) -> ActionSubmitResult {
-        let recoil = recoilRequest.flatMap { recoilTuning($0.desired) }
+        let recoil = recoilRequest.flatMap { recoilConfiguration($0.desired) }
         guard let merged = recoilDynamics.plan(snapshot: snapshot,
             aimPitch: aimStep?.pitch ?? 0, aimYaw: aimStep?.yaw ?? 0,
             geometrySampleKey: aimStep?.geometrySampleKey ?? 0,
-            verticalEnabled: recoil?.verticalEnabled ?? false,
-            verticalStrength: recoil?.verticalStrength ?? 0,
-            stopWhenNotFiring: recoil?.stopWhenNotFiring ?? true,
-            horizontalEnabled: recoil?.horizontalEnabled ?? false,
-            horizontalStrength: recoil?.horizontalStrength ?? 0) else {
+            configuration: recoil) else {
             return .failed("Core v1.7 Aim/Recoil 合并状态无效")
         }
         let pitch = merged.pitch, yaw = merged.yaw
-        guard pitch != 0 || yaw != 0 else { return .idle }
+        let slot = actionSlot(snapshot: snapshot)
+        let recoilEnabled = recoil != nil
+        if pitch == 0 && yaw == 0 {
+            recoilDynamics.observeAimFeedback(pitch: aimStep?.pitch ?? 0,
+                inputRoute: slot == .rotationInput, recoilEnabled: recoilEnabled,
+                aimActive: aimStep != nil, acceptedFirstAxis: false, bothZeroDraft: true)
+            return .idle
+        }
         let axis: CoreSetTargetWriteAxis = pitch != 0 && yaw != 0 ? .both : (pitch != 0 ? .first : .second)
-        let recoilEnabled = recoilRequest?.desired.enabled == true
-        let slot = actionSlot(recoilEnabled: recoilEnabled, inputPaused: inputPaused)
         let lane: CoreSetTargetWriteLane = aimStep == nil && recoilEnabled ? .recoil : .aim
-        let probe = CoreSetIsolatedWriteProbe(liveValidator: { [weak self] _, token, liveHost, liveRevision in
-            guard let self, self.isLive(primaryToken, host: hostGeneration),
-                  token == primaryToken.requestID, liveHost == hostGeneration,
-                  liveRevision == revision else { return false }
-            if requireAimTrigger && !self.triggerState.permits(now: CACurrentMediaTime()) { return false }
-            return self.isLive(primaryToken, host: hostGeneration)
-        })
+        guard let probe = persistentActionWorker(snapshot: snapshot,
+            primaryToken: primaryToken, hostGeneration: hostGeneration,
+            revision: revision) else { return .failed("常驻动作 worker 清理或重建失败") }
+        if requireAimTrigger && !triggerState.permits(now: CACurrentMediaTime()) { return .idle }
         let result = probe.submit(snapshot: snapshot, requestToken: primaryToken.requestID,
             hostGeneration: hostGeneration, configRevision: revision, lane: lane,
             slot: slot, axis: axis, pitchDelta: pitch, yawDelta: yaw)
-        let cleanup = probe.stop()
-        if !cleanup.complete { pendingProbes.append(probe) }
-        guard result.committed, cleanup.complete,
-              isLive(primaryToken, host: hostGeneration) else { return .failed(result.reason) }
-        recoilDynamics.observeCommitted(aimPitch: aimStep?.pitch ?? 0,
+        if result.pending { _ = retireActionWorker() }
+        guard result.committed, isLive(primaryToken, host: hostGeneration) else {
+            return .failed(result.reason)
+        }
+        recoilDynamics.observeAimFeedback(pitch: aimStep?.pitch ?? 0,
             inputRoute: slot == .rotationInput, recoilEnabled: recoilEnabled,
             aimActive: aimStep != nil, acceptedFirstAxis: pitch != 0,
             bothZeroDraft: false)
-        observeCommittedRoute(w20: !inputPaused)
         let aimContributed = aimStep != nil && (merged.aimPitch != 0 || merged.aimYaw != 0)
         let recoilContributed = recoilEnabled && (merged.recoilPitch != 0 || merged.recoilYaw != 0)
         if aimContributed, let aim = active, let callback = pendingCompletion {
+            aimWritesCommitted = true
             pendingCompletion = nil
             DispatchQueue.main.async { callback(aim.token, .applied(observed: aim.desired)) }
         }
         if recoilContributed, let recoil = activeRecoil, let callback = pendingRecoilCompletion {
+            recoilWritesCommitted = true
             pendingRecoilCompletion = nil
             DispatchQueue.main.async { callback(recoil.token, .applied(observed: recoil.desired)) }
         }
@@ -355,12 +386,12 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         guard active == nil, let recoilRequest = activeRecoil else { return }
         guard pendingProbes.isEmpty else { failRecoil(recoilRequest, "旧事务清理待确认，禁止压枪写入"); return }
         guard isLive(recoilRequest.token, host: hostGeneration),
-              recoilTuning(recoilRequest.desired) != nil,
+              recoilConfiguration(recoilRequest.desired) != nil,
               let snapshot = capture(canvas, distance: 500), snapshot.battleInputsPresent else {
             failRecoil(recoilRequest, "压枪战斗采样失效或请求已撤销"); return
         }
         switch submitMergedAction(snapshot: snapshot, aimStep: nil, recoilRequest: recoilRequest,
-            inputPaused: false, primaryToken: recoilRequest.token,
+            primaryToken: recoilRequest.token,
             hostGeneration: hostGeneration, revision: revision, requireAimTrigger: false) {
         case .idle: publish("压枪状态预热或本帧无补偿")
         case .committed: break
@@ -373,7 +404,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         hostGeneration: UInt64, revision: UInt64, idleStatus: String) {
         guard let recoilRequest else { publish(idleStatus); return }
         switch submitMergedAction(snapshot: snapshot, aimStep: nil, recoilRequest: recoilRequest,
-            inputPaused: false, primaryToken: aimRequest.token,
+            primaryToken: aimRequest.token,
             hostGeneration: hostGeneration, revision: revision, requireAimTrigger: false) {
         case .idle: publish(idleStatus + "；压枪本帧预热或无补偿")
         case .committed: break
@@ -383,9 +414,9 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     private func tick(_ request: CoreSetApplyRequest<State>, canvas: CGSize, hostGeneration: UInt64, revision: UInt64) {
         guard pendingProbes.isEmpty else { fail(request, "旧事务清理待确认，禁止后续写入"); return }
         guard isLive(request.token, host: hostGeneration),
-              let tuning = tuning(request.desired),
+              let configuration = configuration(request.desired),
               let size = request.desired.circleSize.value,
-              let snapshot = capture(canvas, distance: tuning.distance), snapshot.battleInputsPresent,
+              let snapshot = capture(canvas, distance: configuration.maximumDistance), snapshot.battleInputsPresent,
               snapshot.cameraWorldPosition != nil else {
             fail(request, "战斗采样失效或请求撤销"); return
         }
@@ -396,7 +427,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         if !trigger {
             guard recoilRequest != nil else { publish("等待触发，未写入"); return }
             switch submitMergedAction(snapshot: snapshot, aimStep: nil, recoilRequest: recoilRequest,
-                inputPaused: false, primaryToken: request.token, hostGeneration: hostGeneration,
+                primaryToken: request.token, hostGeneration: hostGeneration,
                 revision: revision, requireAimTrigger: false) {
             case .idle: publish("等待自瞄触发；压枪本帧预热或无补偿")
             case .committed: break
@@ -404,13 +435,13 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             }
             return
         }
-        let takeoverAllowed = dynamics.permitsTakeover(pitch: snapshot.rotationInputPitch, yaw: snapshot.rotationInputYaw,
-            threshold: tuning.lockThreshold, confirmationFrames: tuning.confirmationFrames,
-            pauseSeconds: tuning.pauseSeconds, now: snapshot.captureCompletedMonotonicSeconds)
+        let takeoverAllowed = dynamics.permitsTakeover(pitch: snapshot.rotationInputPitch,
+            yaw: snapshot.rotationInputYaw, configuration: configuration,
+            now: snapshot.captureCompletedMonotonicSeconds)
         if !takeoverAllowed {
             guard recoilRequest != nil else { publish("检测到接管输入，暂停写入"); return }
             switch submitMergedAction(snapshot: snapshot, aimStep: nil, recoilRequest: recoilRequest,
-                inputPaused: true, primaryToken: request.token, hostGeneration: hostGeneration,
+                primaryToken: request.token, hostGeneration: hostGeneration,
                 revision: revision, requireAimTrigger: false) {
             case .idle: publish("检测到接管输入；压枪本帧预热或无补偿")
             case .committed: break
@@ -418,12 +449,13 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             }
             return
         }
-        let short = min(canvas.width, canvas.height)
-        let radius = max(30, min(short * CGFloat(size) / 1170, min(short * 0.45, 525)))
+        let radius = CoreSetBasicAimDelta.circleRadius(canvasWidth: Double(canvas.width),
+            height: Double(canvas.height), size: size)
+        guard radius > 0 else { fail(request, "Core v1.7 自瞄圈参数无效"); return }
         guard let point = request.desired.point else { fail(request, "fallback点未配置"); return }
         let previousActor = selectedActor
-        let selected = CoreSetBasicAimDelta.select(snapshot: snapshot, point: point.rawValue, radius: Double(radius),
-            maximumDistance: Double(tuning.distance), includeBots: request.desired.includeBots == true,
+        let selected = CoreSetBasicAimDelta.select(snapshot: snapshot, point: point.rawValue, radius: radius,
+            maximumDistance: Double(configuration.maximumDistance), includeBots: request.desired.includeBots == true,
             excludeKnocked: request.desired.excludeKnocked == true,
             lockSameTarget: request.desired.lockSameTarget == true, previousActor: previousActor)
         let actor: UInt64
@@ -462,18 +494,14 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                 actor: actor, publicationID: snapshot.snapshotID,
                 now: snapshot.captureCompletedMonotonicSeconds,
                 currentPitch: snapshot.controlPitchDegrees, currentYaw: snapshot.controlYawDegrees,
-                strength: tuning.strength, smoothingSeconds: tuning.smoothing,
-                curveSelector: tuning.curveSelector, horizontalSpeed: tuning.yawSpeed,
-                verticalSpeed: tuning.pitchSpeed, predictionMilliseconds: tuning.predictionMilliseconds,
-                residualGain: tuning.residualGain, minimumGain: tuning.minimumGain,
-                deadzoneRatio: tuning.deadzoneRatio, minimumDeadzone: tuning.minimumDeadzone) else {
+                configuration: configuration) else {
             runRecoilFallback(snapshot: snapshot, aimRequest: request, recoilRequest: recoilRequest,
                 hostGeneration: hostGeneration, revision: revision,
                 idleStatus: "目标状态预热或采样间隔超限")
             return
         }
         switch submitMergedAction(snapshot: snapshot, aimStep: step, recoilRequest: recoilRequest,
-            inputPaused: false, primaryToken: request.token, hostGeneration: hostGeneration,
+            primaryToken: request.token, hostGeneration: hostGeneration,
             revision: revision, requireAimTrigger: true) {
         case .idle: publish("已对准目标，且压枪本帧无补偿")
         case .committed: break
@@ -492,6 +520,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         timer?.cancel(); timer = nil
         triggerState.reset()
         resetAimRuntime()
+        _ = retireActionWorker()
         let completion = pendingCompletion; pendingCompletion = nil
         active = nil
         if let recoil = activeRecoil { failRecoil(recoil, reason) }
@@ -512,11 +541,11 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     private func failRecoil(_ request: CoreSetApplyRequest<CoreSetRecoilSettings>, _ reason: String) {
         guard activeRecoil?.token == request.token else { return }
         recoilTimer?.cancel(); recoilTimer = nil
-        recoilDynamics.reset(); resetRouteRuntime()
+        recoilDynamics.reset()
         let callback = pendingRecoilCompletion
         pendingRecoilCompletion = nil
         activeRecoil = nil
-        if active == nil { invalidateHost() }
+        if active == nil { _ = retireActionWorker(); invalidateHost() }
         DispatchQueue.main.async { [weak self] in
             callback?(request.token, .failed(reason: reason))
             self?.coordinator?.refreshPlayerAvailability()
@@ -527,29 +556,37 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         worker.async { [weak self] in
             guard let self else { return }
             self.recoilTimer?.cancel(); self.recoilTimer = nil
-            self.recoilDynamics.reset(); self.resetRouteRuntime()
+            self.recoilDynamics.reset()
             let canceled = self.activeRecoil
             let callback = self.pendingRecoilCompletion
             self.activeRecoil = nil; self.pendingRecoilCompletion = nil
             if let canceled, let callback {
                 DispatchQueue.main.async { callback(canceled.token, .failed(reason: "首次压枪提交前已停止")) }
             }
-            self.pendingProbes = self.pendingProbes.filter { !$0.stop().complete }
+            if self.active == nil { _ = self.retireActionWorker() }
+            self.drainPendingActionWorkers()
+            let abandoned = self.recoilWritesCommitted || self.unrestoredActionEffects
             if self.active != nil {
                 let clean = self.pendingProbes.isEmpty
+                if clean { self.recoilWritesCommitted = false }
                 DispatchQueue.main.async {
-                    completion(token, clean ? .restored : .failed(reason: "共享动作旧映射清理待确认"))
+                    completion(token, clean ? (abandoned ? .stoppedWithoutRestoration : .restored) :
+                        .failed(reason: "共享动作旧映射清理待确认"))
                 }
                 return
             }
             self.invalidateHost()
             let readClean = self.session.disconnect()
             let clean = self.pendingProbes.isEmpty && readClean.taskPortReleased && readClean.generationAdvanced
-            if clean { self.session = CoreSetReadSession() }
+            if clean {
+                self.session = CoreSetReadSession(); self.recoilWritesCommitted = false
+                self.unrestoredActionEffects = false
+            }
             self.activeHostGeneration = 0; self.activeRevision = 0
             DispatchQueue.main.async {
                 self.readReady = false; self.cleanupPending = !clean
-                completion(token, clean ? .restored : .failed(reason: "共享动作会话清理待确认"))
+                completion(token, clean ? (abandoned ? .stoppedWithoutRestoration : .restored) :
+                    .failed(reason: "共享动作会话清理待确认"))
                 self.coordinator?.refreshPlayerAvailability()
             }
         }
@@ -565,7 +602,9 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             if let canceled, let callback {
                 DispatchQueue.main.async { callback(canceled.token, .failed(reason: "首次提交前已停止")) }
             }
-            self.pendingProbes = self.pendingProbes.filter { !$0.stop().complete }
+            _ = self.retireActionWorker()
+            self.drainPendingActionWorkers()
+            let abandoned = self.aimWritesCommitted || self.unrestoredActionEffects
             if let recoil = self.activeRecoil, self.pendingProbes.isEmpty {
                 self.invalidateHost()
                 self.cancellation.lock()
@@ -577,7 +616,10 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                 self.activeRevision = revision
                 self.ensureRecoilTimer(canvas: self.activeCanvasSize,
                     hostGeneration: self.activeHostGeneration, revision: revision)
-                DispatchQueue.main.async { completion(token, .restored) }
+                self.aimWritesCommitted = false
+                DispatchQueue.main.async {
+                    completion(token, abandoned ? .stoppedWithoutRestoration : .restored)
+                }
                 return
             }
             if let recoil = self.activeRecoil {
@@ -592,13 +634,17 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             self.recoilTimer?.cancel(); self.recoilTimer = nil
             let readClean = self.session.disconnect()
             let clean = self.pendingProbes.isEmpty && readClean.taskPortReleased && readClean.generationAdvanced
-            if clean { self.session = CoreSetReadSession() }
+            if clean {
+                self.session = CoreSetReadSession(); self.aimWritesCommitted = false
+                self.unrestoredActionEffects = false
+            }
             self.activeHostGeneration = 0; self.activeRevision = 0
             DispatchQueue.main.async {
                 self.readReady = false; self.cleanupPending = !clean
                 if clean { self.executionFailure = nil }
                 self.status = clean ? "已停止后续写入并清理目标会话" : "目标会话清理失败"
-                completion(token, clean ? .restored : .failed(reason: "目标会话清理待确认"))
+                completion(token, clean ? (abandoned ? .stoppedWithoutRestoration : .restored) :
+                    .failed(reason: "目标会话清理待确认"))
                 self.coordinator?.refreshPlayerAvailability()
             }
         }
@@ -611,12 +657,18 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             invalidateHost()
             triggerState.reset()
             resetAimRuntime()
-            recoilDynamics.reset(); resetRouteRuntime()
+            recoilDynamics.reset()
             active = nil; activeRecoil = nil
             pendingCompletion = nil; pendingRecoilCompletion = nil
-            pendingProbes = pendingProbes.filter { !$0.stop().complete }
+            _ = retireActionWorker()
+            drainPendingActionWorkers()
             let result = session.disconnect()
-            return pendingProbes.isEmpty && result.taskPortReleased && result.generationAdvanced
+            let clean = pendingProbes.isEmpty && result.taskPortReleased && result.generationAdvanced
+            if clean {
+                aimWritesCommitted = false; recoilWritesCommitted = false
+                unrestoredActionEffects = false
+            }
+            return clean
         }
     }
 }

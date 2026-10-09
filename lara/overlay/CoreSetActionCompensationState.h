@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreSetActionSelectionState.h"
+#include "CoreSetRecoilStateMachine.h"
 
 #include <algorithm>
 #include <array>
@@ -193,6 +194,35 @@ struct ActionPostObservation {
     std::array<float, 6> values{};
     static constexpr bool writeReady = false;
 };
+
+// Exact c3270..c32dc worker construction of c416c's configuration record.
+// Fixed constants stay beside the identity-bound native model instead of being
+// restated by Objective-C/Swift consumers.
+inline bool referenceActionRecoilPostTuning(const RecoilConfiguration &configuration,
+                                             float firstWeight, float firstBindingScale,
+                                             float secondWeight, float secondBindingScale,
+                                             ActionPostTuning *out) {
+    if (!out || !std::isfinite(firstWeight) || !std::isfinite(firstBindingScale) ||
+        !std::isfinite(secondWeight) || !std::isfinite(secondBindingScale) ||
+        !std::isfinite(configuration.verticalStrength) ||
+        configuration.verticalStrength < 0 || configuration.verticalStrength > 1 ||
+        !std::isfinite(configuration.horizontalStrength) ||
+        configuration.horizontalStrength < 0 || configuration.horizontalStrength > 1) return false;
+    ActionPostTuning result;
+    result.firstStrength = configuration.verticalEnabled ? configuration.verticalStrength : 0;
+    result.firstLimit = 1.5f;
+    result.deadzone = 0.0005000000237487257f;
+    result.firstWeight = firstWeight;
+    result.firstBindingScale = firstBindingScale;
+    result.quietFrameLimit = 6;
+    result.continueLocalTail = configuration.verticalEnabled && !configuration.stopWhenNotFiring;
+    result.secondStrength = configuration.horizontalEnabled ? configuration.horizontalStrength : 0;
+    result.secondLimitScale = 1.0f;
+    result.secondWeight = secondWeight;
+    result.secondBindingScale = secondBindingScale;
+    *out = result;
+    return true;
+}
 
 // Full c416c finite-input key/ownerToken/binding post-state and second-axis tail.
 // Invalid input clears only this Core-local model; it is not stop restoration.

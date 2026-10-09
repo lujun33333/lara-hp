@@ -97,13 +97,15 @@ class ActionConfigurationContract(unittest.TestCase):
         home = body(self.state, "struct CoreSetHomeSettings:")
         self.assertIn("private(set) var retainedCoverMode", home)
         self.assertIn("if mode != .off { retainedCoverMode = mode }", home)
-        for signature in ("@objc private func configureHomeRunMode(",
-                          "@objc private func configureHomeCoverMode("):
-            handler = body(self.menu, signature)
+        run_handler = body(self.menu, "@objc private func configureHomeRunMode(")
+        cover_handler = body(self.menu, "@objc private func configureHomeCoverMode(")
+        for handler in (run_handler, cover_handler):
             self.assertIn("homeConfigurationAvailable", handler)
-            self.assertIn("configured=1 confirmed=0", handler)
-            self.assertIn("targetEffectsCreated=0", handler)
             self.assertNotIn(".applied", handler)
+        self.assertIn("configured=1 confirmed=1", run_handler)
+        self.assertIn("reference-config-only-no-native-consumer", run_handler)
+        self.assertNotIn("onHomeProbeRefusal?(.runMode", run_handler)
+        self.assertIn("onHomeProbeRefusal?(.coverMode", cover_handler)
         run_row = self.menu.split('} else if parts.count == 2 && parts[0] == "运行模式" {', 1)[1]
         run_row = run_row.split('} else if title == "全开"', 1)[0]
         self.assertIn("row.isUserInteractionEnabled = true", run_row)

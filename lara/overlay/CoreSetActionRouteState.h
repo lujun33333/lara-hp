@@ -1,8 +1,18 @@
 #pragma once
 
+#include "CoreSetTargetWriteContract.h"
 #include <cstdint>
 
 namespace CoreSet {
+
+// Worker c2fbc reloads the same-cycle firing byte into w19; c2ef4..c2f24
+// selects template 65 (ControlRotation) for zero and template 66
+// (RotationInput) for nonzero. This is the slot selector, unlike the local
+// c1d04/c3714 route-history bookkeeping below.
+inline TargetActionSlot referenceActionSlotForFireSample(uint8_t rawFire) {
+    return (rawFire & 1) != 0
+        ? TargetActionSlot::rotationInput : TargetActionSlot::controlRotation;
+}
 
 enum class RouteResultGate : uint8_t {
     exactOne, // Core c3150: result+1 must equal 1.

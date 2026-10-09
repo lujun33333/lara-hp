@@ -1,5 +1,6 @@
 #include "../lara/overlay/CoreSetActionCyclePlan.h"
 #include "../lara/overlay/CoreSetActionEffectLedger.h"
+#include "../lara/overlay/CoreSetActionRouteState.h"
 #include <cassert>
 #include <iomanip>
 #include <iostream>
@@ -34,6 +35,23 @@ static void negativeAndTransactionCases() {
     ActionCustomSceneInput custom;
     assert(!planActionScene(3, 4, custom, &scene));
     assert(!planActionScene(4, 4, custom, &scene));
+    AimSceneCompensationValues compensation;
+    assert(aimSceneCompensationValues(0, &compensation));
+    assert(compensation.residualGain == 0.90f && compensation.minimumGain == 0.38f);
+    assert(compensation.deadzoneRatio == 0.12f && compensation.minimumDeadzone == 0.04f);
+    assert(aimSceneCompensationValues(1, &compensation));
+    assert(compensation.residualGain == 0.56f && compensation.minimumGain == 0.06f);
+    assert(compensation.deadzoneRatio == 0.25f && compensation.minimumDeadzone == 0.10f);
+    assert(aimSceneCompensationValues(2, &compensation));
+    assert(compensation.residualGain == 0.62f && compensation.minimumGain == 0.06f);
+    assert(compensation.deadzoneRatio == 0.25f && compensation.minimumDeadzone == 0.10f);
+    assert(aimSceneCompensationValues(3, &compensation));
+    assert(compensation.residualGain == 0.56f && compensation.minimumGain == 0.06f);
+    assert(compensation.deadzoneRatio == 0.25f && compensation.minimumDeadzone == 0.10f);
+    assert(!aimSceneCompensationValues(4, &compensation));
+    assert(referenceActionSlotForFireSample(0) == TargetActionSlot::controlRotation);
+    assert(referenceActionSlotForFireSample(1) == TargetActionSlot::rotationInput);
+    assert(referenceActionSlotForFireSample(3) == TargetActionSlot::rotationInput);
     AimDeltaPlan delta;
     ActionWriteDraft draft;
     assert(mergeAimRecoilDeltas(0, 0, 0, 0, &delta));
@@ -45,8 +63,6 @@ static void negativeAndTransactionCases() {
     assert(!planActionWriteDraft(static_cast<TargetActionSlot>(3), 10, -30, delta, &draft));
     assert(!planActionWriteDraft(TargetActionSlot::controlRotation,
         std::numeric_limits<float>::infinity(), -30, delta, &draft));
-    assert(actionRecoilStrength01(-10) == 0 && actionRecoilStrength01(150) == 1);
-
     // This is a fake-memory transaction, never a mapped kernel/backend write.
     assert(planActionWriteDraft(TargetActionSlot::controlRotation, 10, -30, delta, &draft));
     ControlRotationLease lease;
@@ -137,6 +153,13 @@ static void cleanupEffectCases() {
     receipt.attemptEpoch = 2;
     assert(attempted.acknowledgeVerifiedRestoration(receipt, syntheticVerifier));
     assert(!attempted.cleanupComplete(true, false, true, true));
+
+    ActionEffectLedger abandoned;
+    abandoned.markWriteAttempt();
+    assert(abandoned.abandonWithoutRestoration());
+    assert(abandoned.targetEffectsResolved());
+    assert(abandoned.targetEffectsAbandoned());
+    assert(abandoned.cleanupComplete(true, true, true, true));
 }
 
 int main() {

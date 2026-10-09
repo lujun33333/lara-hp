@@ -60,10 +60,13 @@ def test_uikit_uses_reference_panel_card_and_body_metrics():
         "let caption = label(title, size: 16",
         "button.titleLabel?.font = font(19)",
         "result.addSubview(label(title, size: 17",
-        '.font: font(36)',
-        "value: font(11)",
+        'label("C", size: 36',
+        'label("ORE", size: 36',
+        'label("SET", size: 11',
     ):
         assert token in MENU, token
+    assert 'panel.addSubview(configurationFeedbackLabel)' not in MENU
+    assert 'sidebar.addSubview(exitHUDButton)' not in MENU
     assert "let caption = label(title, size: 12" not in MENU
     assert 'note.accessibilityHint = "原版说明文案，当前功能尚未接入"' not in MENU
 
@@ -82,3 +85,13 @@ def test_aim_recoil_controls_and_cross_window_share_live_receipts():
         assert "suspendActionConsumers" in body
     assert "case .aimControl:" in STATE and "case .recoilControl:" in STATE
 
+
+def test_reference_controls_have_values_without_uikit_only_unselected_gate():
+    aim = function_body(STATE, "struct CoreSetAimSettings:")
+    for token in ("point = .head", "trigger = .either", "scene = .far",
+                  "lockStrength = .light", "circleSize.set(circleSize.bounds.lowerBound)"):
+        assert token in aim, token
+    recoil = function_body(STATE, "struct CoreSetRecoilSettings:")
+    for token in ("stopWhenNotFiring.enabled = true", "verticalEnabled = false",
+                  "horizontalEnabled = false", "verticalStrength.set(", "horizontalStrength.set("):
+        assert token in recoil, token

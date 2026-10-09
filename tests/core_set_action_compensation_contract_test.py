@@ -93,13 +93,16 @@ class CompensationContracts(unittest.TestCase):
         self.assertIn("CoreSetAimConsumer", recoil)
         self.assertIn("actionConsumer.applyRecoil", recoil)
         self.assertNotIn("supportedFields: Set<CoreSetField> { [] }", recoil)
-        for marker in ("CoreSetV17RecoilDynamics", "submitMergedAction", "actionSlot(recoilEnabled:",
-                       "observeCommittedRoute", "tickRecoilOnly"):
+        for marker in ("CoreSetV17RecoilDynamics", "submitMergedAction", "actionSlot(snapshot:",
+                       "routeDynamics.slot(firingSample:", "tickRecoilOnly"):
             self.assertIn(marker, aim)
         bridge = (ROOT / "lara/overlay/CoreSetIsolatedWriteProbe.mm").read_text(encoding="utf-8")
         self.assertIn('CoreSetActionCompensationState.h', bridge)
         self.assertIn("referenceActionCandidateMotion", bridge)
         self.assertIn("referenceActionGeometry", bridge)
+        self.assertIn("planActionScene", bridge)
+        self.assertIn("aimSceneCompensationValues", bridge)
+        self.assertIn("referenceActionRecoilPostTuning", bridge)
         self.assertNotIn("basicAimDynamicStep(", bridge)
 
     def test_local_numerical_bytes_calls_constants_and_feedback_replay(self):

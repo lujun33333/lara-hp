@@ -2,7 +2,7 @@ import Foundation
 
 // Recoil is a typed facade over the same serial Core v1.7 action worker used
 // by Aim. This prevents independent timers from racing +0x620/+0x828 and keeps
-// c416c/c571c history, route counters and the final write receipt in one owner.
+// c416c/c571c history, same-cycle slot selection and the final write receipt in one owner.
 final class CoreSetRecoilConsumer: CoreSetFeatureConsumer {
     typealias State = CoreSetRecoilSettings
     let capability = CoreSetCapability.recoilControl

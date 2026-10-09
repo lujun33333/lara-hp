@@ -19,6 +19,30 @@ struct AimSceneValues {
     int predictionMilliseconds;
 };
 
+// Remaining c1664 table columns at 0x1008a9a00/10/20. They are consumed by
+// c4af8 as normalized compensation/deadzone values. Keep the conversion here
+// with the identity-bound table instead of recreating scene constants in Swift.
+struct AimSceneCompensationValues {
+    float residualGain;
+    float minimumGain;
+    float deadzoneRatio;
+    float minimumDeadzone;
+};
+
+inline bool aimSceneCompensationValues(int storedScene, AimSceneCompensationValues *out) {
+    if (!out || storedScene < 0 || storedScene > 3) return false;
+    static constexpr int rows[4][4] = {
+        {90, 38, 12, 4},
+        {56, 6, 25, 10},
+        {62, 6, 25, 10},
+        {56, 6, 25, 10},
+    };
+    const int *row = rows[storedScene];
+    *out = {row[0] / 100.0f, row[1] / 100.0f,
+            row[2] / 100.0f, row[3] / 100.0f};
+    return true;
+}
+
 // C+0x180 scene 0/1/2 only. Scene 3 is custom and requires explicit user
 // slider values; no compiled row is treated as a default.
 inline bool aimSceneValues(int storedScene, AimSceneValues *out) {

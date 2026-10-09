@@ -191,7 +191,9 @@ static bool CSCorePlayerHealthMatches(float health, float maximum) {
 struct CSCorePlayerState {
     float speed = 0;
     uint32_t team = 0;
-    uint64_t stateOwner = 0;
+    // PawnStateRepSyncData.CurrentStatesMask.Array data pointer. Core reads
+    // actor+0x1700 as a qword and then the leading uint32 from that storage.
+    uint64_t stateMaskData = 0;
     uint32_t stateFlags = 0;
     uint8_t status = 0;
     float health = 0;
@@ -212,9 +214,9 @@ static bool CSReadCorePlayerState(CoreSetReadSession *session, uint64_t generati
         !CSCorePlayerSpeedMatches(state->speed) || actor == local ||
         !CSCaptureReadValue(session, generation, actor + 0xb78, &state->team, cache) ||
         state->team < 1 || state->team > 100 || state->team == localTeam ||
-        !CSCaptureReadValue(session, generation, actor + 0x1700, &state->stateOwner, cache) ||
-        !CSUserPointerValid(state->stateOwner) ||
-        !CSCaptureReadValue(session, generation, state->stateOwner, &state->stateFlags, cache) ||
+        !CSCaptureReadValue(session, generation, actor + 0x1700, &state->stateMaskData, cache) ||
+        !CSUserPointerValid(state->stateMaskData) ||
+        !CSCaptureReadValue(session, generation, state->stateMaskData, &state->stateFlags, cache) ||
         (state->stateFlags & (1u << 20)) ||
         !CSCaptureReadValue(session, generation, actor + 0x3be0, &state->status, cache) ||
         state->status == 4 ||
@@ -336,6 +338,12 @@ static bool CSReadGrenadeClock(CoreSetReadSession *session, uint64_t generation,
         clock->worldTime <= 1.0e9 && std::isfinite(clock->delta) && std::fabs(clock->delta) <= 1.0e9f;
     clock->status = clock->present ? 8 : 7;
     return true;
+}
+
+// Core d8210..d8230: status 1 (HasLastBreath) forces candidate flag14;
+// otherwise flag14 is CurrentStatesMask bit19. Status 4 was rejected earlier.
+static uint8_t CSReferenceFlag14(uint32_t stateFlags, uint8_t status) {
+    return status == 1 ? 1 : (uint8_t)((stateFlags >> 19) & 1);
 }
 
 static bool CSWeaponID(CoreSetReadSession *session, uint64_t generation,
@@ -528,11 +536,8 @@ static bool CSReadBoneState(CoreSetReadSession *session, uint64_t generation, ui
                        state->component.data(), state->component.size(), &cache)) return false;
     std::vector<uint8_t> transforms((size_t)array.count * 0x30);
     if (!CSRead(session, generation, array.data, transforms.data(), transforms.size())) return false;
-    // Core d8f24..d908c independently transforms bone 0 into candidate +0x1e0.
-    // The full array is already present, so publishing this sample adds no read.
-    CSBoneSample rootSample = {0, {}};
-    std::memcpy(rootSample.bytes.data(), transforms.data(), rootSample.bytes.size());
-    state->samples.push_back(rootSample);
+    // Core d8ba8 selects the profile's first index and d94a8..d94c4 copies
+    // that same transformed point into candidate +0x1e0 and +0x1ec.
     for (unsigned edge = 0; edge < 28; ++edge) {
         uint8_t index = state->edges[edge];
         if (std::any_of(state->samples.begin(), state->samples.end(),
@@ -700,8 +705,9 @@ static void CSPublishAimAnchors(CoreSetPlayerMark *mark, const CSBoneState &stat
         mark.referenceAnchor1ecWorldPosition = nil;
         return;
     }
-    mark.referenceAnchor1e0WorldPosition = CSBoneWorldPoint(state, 0);
-    mark.referenceAnchor1ecWorldPosition = CSBoneWorldPoint(state, state.edges[0]);
+    CoreSetWorldPoint *anchor = CSBoneWorldPoint(state, state.edges[0]);
+    mark.referenceAnchor1e0WorldPosition = anchor;
+    mark.referenceAnchor1ecWorldPosition = anchor;
 }
 
 @interface CoreSetGrenadeMark ()
@@ -759,6 +765,7 @@ static void CSPublishAimAnchors(CoreSetPlayerMark *mark, const CSBoneState &stat
 @property(nonatomic) uint64_t localActorAddress;
 @property(nonatomic) BOOL localADS;
 @property(nonatomic) BOOL localFiring;
+@property(nonatomic) uint8_t localFiringRaw;
 @property(nonatomic) float controlPitchDegrees;
 @property(nonatomic) float controlYawDegrees;
 @property(nonatomic) float rotationInputPitch;
@@ -921,7 +928,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
     mark.actorWorldPosition = [CoreSetWorldPoint pointWithX:position.x y:position.y z:position.z];
     mark.healthStatusCode = state.status;
     mark.referenceStateWord = state.stateFlags;
-    mark.referenceFlag14 = state.status == 1 ? 1 : (uint8_t)((state.stateFlags >> 19) & 1);
+    mark.referenceFlag14 = CSReferenceFlag14(state.stateFlags, state.status);
     mark.downedKnown = YES;
     mark.downed = (mark.referenceFlag14 & 1) != 0;
     mark.weaponName = source.weaponName; mark.weaponID = source.weaponID;
@@ -973,6 +980,25 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
 @implementation CoreSetPlayerCollector
 + (NSString *)lastCaptureDiagnostic {
     return [NSString stringWithUTF8String:CSLastCaptureDiagnostic.c_str()];
+}
++ (BOOL)validateLiveIdentity:(CoreSetReadSession *)session snapshot:(CoreSetPlayerSnapshot *)snapshot {
+    if (!session || !snapshot || !snapshot.battleInputsPresent || !snapshot.controllerAddress ||
+        !snapshot.localActorAddress || ![session connect] ||
+        session.processID != snapshot.processID || session.imageBase != snapshot.imageBase ||
+        session.generation != snapshot.sessionGeneration ||
+        session.imageBase > UINT64_MAX - CSWorldSlot) return NO;
+    const uint64_t generation = snapshot.sessionGeneration;
+    uint64_t world = 0, driver = 0, connection = 0, controller = 0, local = 0;
+    return CSReadValue(session, generation, session.imageBase + CSWorldSlot, &world) &&
+        CSUserPointerValid(world) && world <= UINT64_MAX - 0xc0 &&
+        CSReadValue(session, generation, world + 0xc0, &driver) &&
+        CSUserPointerValid(driver) && driver <= UINT64_MAX - 0x88 &&
+        CSReadValue(session, generation, driver + 0x88, &connection) &&
+        CSUserPointerValid(connection) && connection <= UINT64_MAX - 0x30 &&
+        CSReadValue(session, generation, connection + 0x30, &controller) &&
+        controller == snapshot.controllerAddress && controller <= UINT64_MAX - 0x3540 &&
+        CSReadValue(session, generation, controller + 0x3540, &local) &&
+        local == snapshot.localActorAddress;
 }
 + (CoreSetPlayerSnapshot *)capture:(CoreSetReadSession *)session canvasSize:(CGSize)size {
     return [self capture:session canvasSize:size playerBones:NO botBones:NO
@@ -1355,19 +1381,19 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
             if (team == localTeam) continue;
             ++coreEnemyTeam;
 
-            uint64_t coreState = 0;
+            uint64_t coreStateMaskData = 0;
             uint32_t coreStateFlags = 0;
             uint8_t status = 0;
             float health = 0, maximum = 0;
             uint64_t rootComponent = 0, meshComponent = 0;
             uint8_t ai = 0;
-            // 0x1000d54e0..0x1000d5544: read an 8-byte state owner at
-            // +0x1700, then its leading uint32 flags; bit20 and status byte 4
-            // both reject the candidate.
-            if (!CSReadValue(session, generation, actor + 0x1700, &coreState) ||
-                !CSUserPointerValid(coreState)) continue;
+            // 0x1000d54e0..0x1000d5544: PawnStateRepSyncData is at +0x1700;
+            // its CurrentStatesMask.Array data pointer is followed to the
+            // leading uint32 state word. Bit20 and status byte 4 reject.
+            if (!CSReadValue(session, generation, actor + 0x1700, &coreStateMaskData) ||
+                !CSUserPointerValid(coreStateMaskData)) continue;
             ++coreStatePointerValid;
-            if (!CSReadValue(session, generation, coreState, &coreStateFlags)) continue;
+            if (!CSReadValue(session, generation, coreStateMaskData, &coreStateFlags)) continue;
             ++coreStateFlagsRead;
             if (coreStateFlags & (1u << 20)) continue;
             ++coreStateBit20Clear;
@@ -1475,7 +1501,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
             mark.rosterMeshComponent = meshComponent;
             mark.healthStatusCode = status;
             mark.referenceStateWord = coreStateFlags;
-            mark.referenceFlag14 = status == 1 ? 1 : (uint8_t)((coreStateFlags >> 19) & 1);
+            mark.referenceFlag14 = CSReferenceFlag14(coreStateFlags, status);
             mark.downedKnown = YES;
             mark.downed = (mark.referenceFlag14 & 1) != 0;
             mark.playerName = playerName; mark.teamID = team;
@@ -1696,7 +1722,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
         mark.bot = current.ai != 0;
         mark.healthStatusCode = current.status;
         mark.referenceStateWord = current.stateFlags;
-        mark.referenceFlag14 = current.status == 1 ? 1 : (uint8_t)((current.stateFlags >> 19) & 1);
+        mark.referenceFlag14 = CSReferenceFlag14(current.stateFlags, current.status);
         mark.downedKnown = YES;
         mark.downed = (mark.referenceFlag14 & 1) != 0;
         mark.teamID = current.team;
@@ -2137,6 +2163,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
         snapshot.localActorAddress = local;
         snapshot.localADS = localADS != 0;
         snapshot.localFiring = localFiring != 0;
+        snapshot.localFiringRaw = localFiring;
         snapshot.controlPitchDegrees = controlRotation[0];
         snapshot.controlYawDegrees = controlRotation[1];
         snapshot.rotationInputPitch = rotationInput[0];
@@ -2320,6 +2347,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
     snapshot.controllerAddress = source.controllerAddress;
     snapshot.localActorAddress = source.localActorAddress;
     snapshot.localADS = source.localADS; snapshot.localFiring = source.localFiring;
+    snapshot.localFiringRaw = source.localFiringRaw;
     snapshot.controlPitchDegrees = source.controlPitchDegrees;
     snapshot.controlYawDegrees = source.controlYawDegrees;
     snapshot.rotationInputPitch = source.rotationInputPitch;
@@ -2443,6 +2471,7 @@ static CoreSetPlayerMark *CSRefreshPlayerMark(CoreSetPlayerMark *source,
     snapshot.controllerAddress = source.controllerAddress;
     snapshot.localActorAddress = source.localActorAddress;
     snapshot.localADS = source.localADS; snapshot.localFiring = source.localFiring;
+    snapshot.localFiringRaw = source.localFiringRaw;
     snapshot.controlPitchDegrees = source.controlPitchDegrees;
     snapshot.controlYawDegrees = source.controlYawDegrees;
     snapshot.rotationInputPitch = source.rotationInputPitch;

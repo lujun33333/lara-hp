@@ -58,9 +58,9 @@ private final class CoreSetMenuConsumer<Value: Equatable>: CoreSetFeatureConsume
 }
 
 // Local presentation only. Reference geometry does not establish device pixel parity.
-final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapConsumer {
+final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapConsumer, UIGestureRecognizerDelegate {
     private weak var basicAimStatusLabel: UILabel?
-    private var basicAimStatus = "基础模式待配置"
+    private var basicAimStatus = "基础模式待启动"
     func updateBasicAimStatus(_ status: String) {
         basicAimStatus = status
         if case .unavailable(let reason) = featureState.aim.availability {
@@ -230,6 +230,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private let content = UIScrollView()
     private let closeButton = UIButton(type: .system)
     private let exitHUDButton = UIButton(type: .system)
+    private var panelPlacementInitialized = false
+    private var panelScale: CGFloat = 1
     private enum HostedAction: String {
         case close, exitHUD, page, theme, homeRunMode, homeCoverMode, homeKernelAction, homeInformationAction
         case boundRange, adjustmentRange, localAimCircleSize
@@ -399,6 +401,10 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         panel.layer.borderWidth = 1
         panel.clipsToBounds = true
         view.addSubview(panel)
+        let panelPan = UIPanGestureRecognizer(target: self, action: #selector(moveReferencePanel(_:)))
+        panelPan.cancelsTouchesInView = false
+        panelPan.delegate = self
+        panel.addGestureRecognizer(panelPan)
         closeButton.setTitle("×", for: .normal)
         closeButton.titleLabel?.font = font(28)
         closeButton.accessibilityLabel = "关闭菜单"
@@ -434,9 +440,14 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         let safe = view.bounds.inset(by: view.safeAreaInsets)
         let scale = min(1, min(max(1, safe.width - 16) / referenceSize.width,
                                max(1, safe.height - 16) / referenceSize.height))
+        panelScale = scale
         panel.bounds = CGRect(origin: .zero, size: referenceSize)
-        panel.center = CGPoint(x: safe.midX, y: safe.midY)
         panel.transform = CGAffineTransform(scaleX: scale, y: scale)
+        if !panelPlacementInitialized {
+            panel.center = CGPoint(x: safe.midX, y: safe.midY)
+            panelPlacementInitialized = true
+        }
+        panel.center = clampedPanelCenter(panel.center, in: safe, scale: scale)
         // Keep the ordinary modal close target usable when the reference panel scales down.
         closeButton.bounds = CGRect(x: 0, y: 0, width: 44, height: 44)
         let closeCenter = CGPoint(x: panel.center.x + (818 - referenceSize.width / 2) * scale,
@@ -446,6 +457,33 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         hostedColorOverlay?.frame = view.bounds
         hostedColorCard?.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
         if selectedPage == 4 { refreshRadarRangeRows() }
+    }
+
+    private func clampedPanelCenter(_ proposed: CGPoint, in safe: CGRect, scale: CGFloat) -> CGPoint {
+        let halfWidth = referenceSize.width * scale / 2
+        let halfHeight = referenceSize.height * scale / 2
+        let x = safe.width < halfWidth * 2 ? safe.midX : min(safe.maxX - halfWidth, max(safe.minX + halfWidth, proposed.x))
+        let y = safe.height < halfHeight * 2 ? safe.midY : min(safe.maxY - halfHeight, max(safe.minY + halfHeight, proposed.y))
+        return CGPoint(x: x, y: y)
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+        let point = pan.location(in: panel)
+        // Core's ImGui window is movable; reserve the title/brand area so page
+        // controls keep their original hit behavior.
+        return point.x >= 0 && point.x <= 160 && point.y >= 0 && point.y <= 104
+    }
+
+    @objc private func moveReferencePanel(_ sender: UIPanGestureRecognizer) {
+        guard sender.state == .began || sender.state == .changed else { return }
+        let translation = sender.translation(in: view)
+        let safe = view.bounds.inset(by: view.safeAreaInsets)
+        panel.center = clampedPanelCenter(
+            CGPoint(x: panel.center.x + translation.x, y: panel.center.y + translation.y),
+            in: safe, scale: panelScale)
+        sender.setTranslation(.zero, in: view)
+        view.setNeedsLayout()
     }
 
     private func font(_ size: CGFloat) -> UIFont {
@@ -494,24 +532,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         panel.backgroundColor = gray(26, 250)
         panel.layer.borderColor = gray(50, 215).cgColor
         closeButton.setTitleColor(gray(255, 80), for: .normal)
-        exitHUDButton.frame = CGRect(x: 13, y: 485, width: 135, height: 44)
-        exitHUDButton.backgroundColor = accent.withAlphaComponent(0.22)
-        exitHUDButton.setTitleColor(gray(255, 80), for: .normal)
-
         let sidebar = UIView(frame: CGRect(x: 0, y: 0, width: 160, height: 535))
         sidebar.backgroundColor = gray(32, 240)
         panel.addSubview(sidebar)
         let divider = UIView(frame: CGRect(x: 160, y: 0, width: 1, height: 535))
         divider.backgroundColor = gray(50, 215)
         panel.addSubview(divider)
-        let brand = label("CORE SET", size: 36, frame: CGRect(x: 3.5, y: 35, width: 153, height: 48))
-        brand.textAlignment = .center
-        let styledBrand = NSMutableAttributedString(string: "CORE SET", attributes: [
-            .font: font(36), .foregroundColor: accent
-        ])
-        styledBrand.addAttribute(.font, value: font(11), range: NSRange(location: 5, length: 3))
-        brand.attributedText = styledBrand
-        sidebar.addSubview(brand)
+        addReferenceBrand(to: sidebar)
 
         let groupY: [CGFloat] = [104, 183, 376]
         for (index, title) in ["初始化", "视觉", "战斗"].enumerated() {
@@ -535,8 +562,6 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             pageButtons.append(button)
             registerHosted(button, .page)
         }
-        sidebar.addSubview(exitHUDButton)
-        registerHosted(exitHUDButton, .exitHUD)
         content.frame = CGRect(x: 170, y: 38, width: 658, height: 492)
         content.contentSize = CGSize(width: 658, height: 492)
         content.contentOffset = .zero
@@ -553,15 +578,30 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             x: min(max(0, offset.x), max(0, content.contentSize.width - content.bounds.width)),
             y: min(max(0, offset.y), max(0, content.contentSize.height - content.bounds.height)))
         registerHostedColorEditor()
-        configurationFeedbackLabel.frame = CGRect(x: 170, y: 1, width: 620, height: 14)
-        configurationFeedbackLabel.font = font(10)
-        configurationFeedbackLabel.textColor = gray(255, 80)
-        configurationFeedbackLabel.adjustsFontSizeToFitWidth = true
-        configurationFeedbackLabel.minimumScaleFactor = 0.7
-        configurationFeedbackLabel.text = configurationFeedback
-        configurationFeedbackLabel.accessibilityLabel = configurationFeedback
-        panel.addSubview(configurationFeedbackLabel)
         installUnavailableFeedback(in: panel)
+    }
+
+    private func addReferenceBrand(to sidebar: UIView) {
+        let large = font(36)
+        let small = font(11)
+        let cWidth = ceil(("C" as NSString).size(withAttributes: [.font: large]).width)
+        let oreWidth = ceil(("ORE" as NSString).size(withAttributes: [.font: large]).width)
+        let setWidth = ceil(("SET" as NSString).size(withAttributes: [.font: small]).width)
+        let largeGap: CGFloat = 6
+        let smallGap: CGFloat = 3.5
+        let total = cWidth + oreWidth + largeGap + smallGap * 2 + setWidth
+        var x = (160 - total) / 2
+        let c = label("C", size: 36, frame: CGRect(x: x, y: 35, width: cWidth, height: 48))
+        c.textColor = accent
+        sidebar.addSubview(c)
+        x += cWidth + smallGap
+        let ore = label("ORE", size: 36, frame: CGRect(x: x, y: 35, width: oreWidth, height: 48))
+        ore.textColor = accent
+        sidebar.addSubview(ore)
+        x += oreWidth + largeGap + smallGap
+        let set = label("SET", size: 11, frame: CGRect(x: x, y: 55, width: setWidth, height: 16))
+        set.textColor = accent
+        sidebar.addSubview(set)
     }
 
     private func rebuildCurrentPage() {
@@ -872,7 +912,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         let name = title.components(separatedBy: "  ").first ?? title
         if selectedPage == 0 {
             switch name {
-            case "运行模式": return "home.runMode：未提供同义资源/调度策略消费者及切换、停止回执"
+            case "运行模式": return nil // Core only normalizes/persists C+0x12c; no separate consumer.
             case "掩体判断": return "home.coverMode：未提供全局/局内/关闭的同义遮挡消费者及关闭恢复回执"
             case "内核利用": return "kernelAction：当前场景动作 owner 未绑定或正在执行"
             case "获取信息": return "informationAction：当前场景动作 owner 未绑定或正在执行"
@@ -888,11 +928,17 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             }
         }
         if selectedPage == 6 {
-            let fields = ["启用压枪": "enabled", "停火不压": "stopWhenNotFiring",
-                          "垂直补偿": "verticalEnabled", "垂直补偿强度": "verticalStrength",
-                          "水平补偿": "horizontalEnabled", "水平补偿强度": "horizontalStrength"]
-            guard let field = fields[name] else { return nil }
-            return "recoil.\(field)：双轴增量公式、输入生命周期、动作消费者和停止回执未提供"
+            let fields: [String: (String, CoreSetField)] = [
+                "启用压枪": ("enabled", .recoilEnabled),
+                "停火不压": ("stopWhenNotFiring", .recoilStopWhenNotFiring),
+                "垂直补偿": ("verticalEnabled", .recoilVerticalEnabled),
+                "垂直补偿强度": ("verticalStrength", .recoilVerticalStrength),
+                "水平补偿": ("horizontalEnabled", .recoilHorizontalEnabled),
+                "水平补偿强度": ("horizontalStrength", .recoilHorizontalStrength)
+            ]
+            guard let (path, field) = fields[name],
+                  case .unavailable(let reason) = featureState.recoil.fieldAvailability(field) else { return nil }
+            return "recoil.\(path)：\(reason)"
         }
         return nil
     }
@@ -990,7 +1036,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         card.layer.cornerRadius = 12
         card.layer.borderWidth = 1
         card.layer.borderColor = gray(70, 190).cgColor
-        card.addSubview(label("RGBA 本地编辑", size: 17,
+        let editorTitle: String
+        switch target {
+        case .theme: editorTitle = "主题颜色"
+        case .player(let role), .bot(let role): editorTitle = role.rawValue
+        case .material: editorTitle = "分类颜色"
+        }
+        card.addSubview(label(editorTitle, size: 17,
                               frame: CGRect(x: 20, y: 12, width: 290, height: 28)))
         let preview = UIView(frame: CGRect(x: 20, y: 48, width: 290, height: 24))
         preview.layer.cornerRadius = 4
@@ -1207,12 +1259,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 case .notApplied, .unavailable:
                     self.stagedConfigurationPaths.insert(path)
                     self.stagedConfigurationReadiness[path] = self.canApply(self.featureState[keyPath: path])
-                case .applied, .failed: break
+                case .applied, .appliedWithoutRestoration, .failed: break
                 }
                 let channel = self.featureState[keyPath: path]
                 let result: String
                 switch outcome {
                 case .applied: result = "applied"
+                case .appliedWithoutRestoration: result = "applied-without-restoration"
                 case .notApplied(let reason): result = "notApplied:\(reason)"
                 case .unavailable(let reason): result = "unavailable:\(reason)"
                 case .failed(let reason): result = "failed:\(reason)"
@@ -1286,14 +1339,14 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 self.featureState.aimDisplay.restoration, self.featureState.recoil.restoration,
                 self.appearanceChannel?.restoration ?? .notNeeded, self.directoryChannel?.restoration ?? .notNeeded]
             self.rebuildMenu()
-            completion(states.allSatisfy { $0 == .notNeeded || $0 == .confirmed })
+            completion(states.allSatisfy { $0.stopComplete })
         }
     }
     func suspendAimConsumer(completion: @escaping (Bool) -> Void) {
         precondition(Thread.isMainThread)
         featureState.aim.suspend()
         guard let token = featureState.aim.pendingStop else {
-            completion(featureState.aim.restoration == .notNeeded || featureState.aim.restoration == .confirmed); return
+            completion(featureState.aim.restoration.stopComplete); return
         }
         guard let consumer = gameConsumers[\CoreSetFeatureState.aim] as? CoreSetMenuConsumer<CoreSetAimSettings> else {
             completion(false); return
@@ -1302,8 +1355,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             DispatchQueue.main.async {
                 guard let self, self.featureState.aim.receiveStop(token, outcome: outcome) else { completion(false); return }
                 self.rebuildMenu()
-                completion(self.featureState.aim.restoration == .notNeeded ||
-                           self.featureState.aim.restoration == .confirmed)
+                completion(self.featureState.aim.restoration.stopComplete)
             }
         }
     }
@@ -1344,7 +1396,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             guard let self else { completion(false); return }
             let states = [self.featureState.aim.restoration, self.featureState.recoil.restoration]
             self.rebuildMenu()
-            completion(!consumerMissing && states.allSatisfy { $0 == .notNeeded || $0 == .confirmed })
+            completion(!consumerMissing && states.allSatisfy { $0.stopComplete })
         }
     }
 
@@ -1399,14 +1451,14 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     func suspendMenuHostConsumer(completion: @escaping (Bool) -> Void) {
         precondition(Thread.isMainThread)
         hostChannel.suspend()
-        guard let token = hostChannel.pendingStop else { completion(hostChannel.restoration == .notNeeded || hostChannel.restoration == .confirmed); return }
+        guard let token = hostChannel.pendingStop else { completion(hostChannel.restoration.stopComplete); return }
         guard let consumer = hostConsumer else { completion(false); return }
         consumer.stop(token) { [weak self] token, outcome in
             DispatchQueue.main.async {
                 guard let self, self.hostChannel.receiveStop(token, outcome: outcome) else { completion(false); return }
-                if self.hostChannel.restoration == .confirmed { self.lastHostAppliedToken = nil }
+                if self.hostChannel.restoration.stopComplete { self.lastHostAppliedToken = nil }
                 _ = self.featureState.setInfrastructure(.hostWindow, availability: .unavailable(reason: "Host consumer stopped"))
-                completion(self.hostChannel.restoration == .confirmed)
+                completion(self.hostChannel.restoration.stopComplete)
             }
         }
     }
@@ -2020,7 +2072,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                     selection.isSelected = values.indices.contains(optionIndex) &&
                         featureState.home.desired.runMode == values[optionIndex]
                     selection.backgroundColor = selection.isSelected ? accent : gray(41, 230)
-                    selection.accessibilityHint = "仅保存原版0/1配置；未绑定资源调度动作消费者"
+                    selection.accessibilityHint = "同步原版0/1归一化配置；Core镜像中没有独立运行消费者"
                     selection.addTarget(self, action: #selector(configureHomeRunMode(_:)), for: .touchUpInside)
                     registerHosted(selection, .homeRunMode)
                     row.isUserInteractionEnabled = true
@@ -3196,8 +3248,6 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             card.addSubview(button)
             x += scenarioWidths[index] + 6
         }
-        let note = previewSceneValue == 3 ? "仅本地参数配置；不算v1.7原效果闭合" : "预设参数来源未验证；不执行动作"
-        card.addSubview(label(note, size: 10, frame: CGRect(x: 12, y: 64, width: 299, height: 18), secondary: true))
     }
 
     @objc private func selectPreviewScene(_ sender: UIButton) {
@@ -3258,8 +3308,6 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         }.count
         let heading = "\(materialCategoryTitles[previewMaterialCategory])   \(complete) / \(items.count)"
         card.addSubview(label(heading, size: 16, frame: CGRect(x: 20, y: 180, width: card.bounds.width - 130, height: 22)))
-        card.addSubview(label("本地目录预览", size: 16,
-                              frame: CGRect(x: card.bounds.width - 106, y: 180, width: 90, height: 22), secondary: true))
         let oldOffset = materialGrid.contentOffset
         materialGridItems.subviews.forEach { $0.removeFromSuperview() }
         materialGrid.frame = CGRect(x: 16, y: 208, width: card.bounds.width - 32,
@@ -3533,9 +3581,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         let values: [CoreSetRunMode] = [.safe, .efficiency]
         guard homeConfigurationAvailable, values.indices.contains(sender.tag) else { return }
         featureState.home.updateDesired { $0.runMode = values[sender.tag] }
-        onHomeProbeRefusal?(.runMode, sender.tag)
-        showConfigurationFeedback("home.runMode：配置已记录；未绑定原版资源调度消费者")
-        NSLog("Core-SET: menu stage=desired point=v17-000 option=%d configured=1 confirmed=0 targetEffectsCreated=0 scope=typed-home-configuration",
+        showConfigurationFeedback("home.runMode：已同步原版0/1归一化配置（原版无独立运行消费者）")
+        NSLog("Core-SET: menu stage=desired point=v17-000 option=%d configured=1 confirmed=1 targetEffectsCreated=0 scope=reference-config-only-no-native-consumer",
               sender.tag)
         rebuildMenu()
     }
@@ -3756,7 +3803,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         editGame(\.aim) { $0.enabled = true }
     }
     @objc private func stopBasicAim() {
-        if featureState.aim.restoration == .notNeeded || featureState.aim.restoration == .confirmed {
+        if featureState.aim.restoration.stopComplete {
             guard aimConfigurationAvailable(.basicAimEnabled) else { return }
             featureState.aim.updateDesired { $0.enabled = false }
             recordAimConfiguration(view, path: "aim.enabled=false")
@@ -3775,11 +3822,11 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             DispatchQueue.main.async {
                 guard let self else { return }
                 let received = self.featureState.aim.receiveStop(token, outcome: outcome)
-                if received && self.featureState.aim.restoration == .confirmed {
+                if received && self.featureState.aim.restoration.stopComplete {
                     self.featureState.aim.updateDesired { $0.enabled = false }
                 }
                 NSLog("Core-SET: hosted input stage=actual control=%@ capability=aimStop confirmed=%d",
-                      hostedSource, received && self.featureState.aim.restoration == .confirmed ? 1 : 0)
+                      hostedSource, received && self.featureState.aim.restoration.stopComplete ? 1 : 0)
                 self.rebuildMenu()
             }
         }
@@ -3907,7 +3954,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         let restorationNeedsStop: Bool
         switch featureState.aim.restoration {
         case .required, .pending, .failed: restorationNeedsStop = true
-        case .notNeeded, .confirmed: restorationNeedsStop = false
+        case .notNeeded, .confirmed, .abandoned: restorationNeedsStop = false
         }
         let turningOff = state.enabled == true || restorationNeedsStop
         let readyToConfigureOn = editable && aimConfigurationAvailable(.basicAimEnabled) && configured &&
@@ -3950,11 +3997,6 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             localColorRows(in: settings)
             let fps = card("局内绘制帧率", CGRect(x: 335, y: 203, width: 323, height: 90))
             disabledRows(["FPS 调节"], in: fps, y: 38)
-            let presented = label("", size: 9, frame: CGRect(x: 12, y: 65, width: 299, height: 18), secondary: true)
-            presented.accessibilityIdentifier = "core-set.0.v17-029.presentation-observation"
-            presented.accessibilityHint = "实际 drawable presentedTime 窗口；不是 preferredFramesPerSecond，也不是跨应用像素验收"
-            fps.addSubview(presented); presentationRateLabel = presented
-            updatePresentedFrameObservation(featureState.presentedFrameSnapshot)
             let performance = card("性能监测", CGRect(x: 335, y: 321, width: 323, height: 145))
             let values = performanceValues()
             for (index, title) in ["CPU 占用", "内存占用", "内存峰值"].enumerated() {

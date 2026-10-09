@@ -122,7 +122,10 @@ enum CoreSetField: Hashable {
     }
 }
 
-enum CoreSetRestoration: Equatable { case notNeeded, required, pending, confirmed, failed(String) }
+enum CoreSetRestoration: Equatable {
+    case notNeeded, required, pending, confirmed, abandoned, failed(String)
+    var stopComplete: Bool { self == .notNeeded || self == .confirmed || self == .abandoned }
+}
 enum CoreSetActualPhase: Equatable { case unknown, applying, active, stopping, stopped, failed(String) }
 
 struct CoreSetRequestToken: Equatable {
@@ -140,6 +143,9 @@ struct CoreSetApplyRequest<Value: Equatable> {
 // report .applied from a menu callback or from host-window readiness alone.
 enum CoreSetApplyOutcome<Value: Equatable> {
     case applied(observed: Value)
+    // Disabled state applied after the producer stopped, while earlier target
+    // deltas were deliberately not restored to a baseline.
+    case appliedWithoutRestoration(observed: Value)
     // A synchronous rejection before creating any new effects. An unavailable
     // receipt after submission is deliberately not equivalent to this outcome.
     case notApplied(reason: String)
@@ -147,7 +153,13 @@ enum CoreSetApplyOutcome<Value: Equatable> {
     case failed(reason: String)
 }
 
-enum CoreSetStopOutcome { case restored, failed(reason: String) }
+enum CoreSetStopOutcome {
+    case restored
+    // Producer stopped and resources drained, but prior target deltas were
+    // intentionally not restored to a captured baseline.
+    case stoppedWithoutRestoration
+    case failed(reason: String)
+}
 
 protocol CoreSetFeatureConsumer: AnyObject {
     associatedtype State: Equatable
@@ -351,6 +363,11 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         case .applied(let observed):
             guard binding?.currentAvailability() == .ready else { refreshAvailability(); return false }
             actual = observed; phase = .active; observationInvalidationReason = nil
+        case .appliedWithoutRestoration(let observed):
+            actual = observed; phase = .stopped; mayHaveEffects = false
+            restoration = .abandoned
+            observationInvalidationReason = "target deltas abandoned without baseline restoration"
+            effectsBeforePendingApply = false
         case .notApplied(let reason):
             availability = .unavailable(reason: reason)
             if actual == nil && !effectsBeforePendingApply {
@@ -396,6 +413,10 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         case .restored:
             mayHaveEffects = false; restoration = .confirmed; phase = .stopped; actual = nil
             observationInvalidationReason = nil; effectsBeforePendingApply = false
+        case .stoppedWithoutRestoration:
+            mayHaveEffects = false; restoration = .abandoned; phase = .stopped; actual = nil
+            observationInvalidationReason = "target deltas abandoned without baseline restoration"
+            effectsBeforePendingApply = false
         case .failed(let reason): restoration = .failed(reason); phase = .failed(reason)
         }
         return true
@@ -476,7 +497,9 @@ enum CoreSetReferenceMenuAppearance {
     }
 }
 
-enum CoreSetRunMode: String { case safe, efficiency } // Reference UI 0/1 is evidenced; runtime strategy is not.
+// Core normalizes and persists this 0/1 selection. No separate native runtime
+// consumer of C+0x12c exists in the recovered image.
+enum CoreSetRunMode: String { case safe, efficiency }
 enum CoreSetCoverMode: String { case global, inGame, off } // No guessed backend policy.
 enum CoreSetTheme: String { case dark, light }
 enum CoreSetFloatingPalette: Int, CaseIterable {
@@ -837,7 +860,26 @@ struct CoreSetAimSettings: Equatable {
     var custom = CoreSetAimCustomSettings()
     var showCustomControls: Bool { scene == .custom }
     var showLockStrength: Bool { scene != nil && scene != .custom }
-    // Switching scenes preserves custom values; preset-derived values remain unresolved.
+    // Core stores these as ordinary bool/int fields. A fresh local model must
+    // therefore have a bounded value for every always-visible control instead
+    // of inventing a UIKit-only "unselected" state. Persisted/reference values
+    // may replace these after loading.
+    init() {
+        enabled = false
+        point = .head
+        preaimCircle = false
+        trigger = .either
+        dynamicCircle.enabled = true // native inverted flag starts at zero
+        showCircle = false
+        connectionLine = false
+        circleSize.set(circleSize.bounds.lowerBound)
+        excludeKnocked = false
+        includeBots = false
+        lockSameTarget = false
+        scene = .far
+        lockStrength = .light
+    }
+    // Switching scenes preserves custom values.
 }
 
 // A local HUD preview only. This state never changes aimControl or target memory.
@@ -849,6 +891,15 @@ struct CoreSetAimDisplaySettings: Equatable {
     var dynamicCircle: Bool?
     var includeBots: Bool?
     var maximumDistance = CoreSetIntSetting(10...500)
+    init() {
+        circleVisible = false
+        circleSize.set(circleSize.bounds.lowerBound)
+        connectionLine = false
+        preaimMarker = false
+        dynamicCircle = true
+        includeBots = false
+        maximumDistance.set(300) // confirmed far-scene distance
+    }
 }
 
 struct CoreSetRecoilSettings: Equatable {
@@ -858,6 +909,14 @@ struct CoreSetRecoilSettings: Equatable {
     var verticalStrength = CoreSetIntSetting(0...100)
     var horizontalEnabled: Bool?
     var horizontalStrength = CoreSetIntSetting(0...100)
+    init() {
+        enabled = false
+        stopWhenNotFiring.enabled = true // native continue-when-not-firing flag is inverted
+        verticalEnabled = false
+        verticalStrength.set(verticalStrength.bounds.lowerBound)
+        horizontalEnabled = false
+        horizontalStrength.set(horizontalStrength.bounds.lowerBound)
+    }
     var verticalDesiredActive: Bool? {
         if enabled == false || verticalEnabled == false { return false }
         return enabled == true && verticalEnabled == true ? true : nil

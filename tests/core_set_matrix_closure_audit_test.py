@@ -59,8 +59,16 @@ def require_matrix(menu, native, action):
     assert counts["mapped_points"] == 31 and counts["original_effect_points"] == 0
     assert counts["shared_reference_component_classes"] == len(component_keys)
     assert counts["per_point_unresolved_requirement_entries"] == sum(len(p["next_exact_edges"]) for p in action["points"]) == 113
-    assert counts["unique_unresolved_requirements"] == len({e for p in action["points"] for e in p["next_exact_edges"]}) == 8
+    assert counts["unique_unresolved_requirements"] == len({e for p in action["points"] for e in p["next_exact_edges"]}) == 6
     assert "NOT point-specific" in counts["scope"]
+    anchor = action["aim_anchor_producer_evidence"]
+    assert "same first-bone world point" in anchor["semantics"]
+    assert action_points["v17-107"]["closed_producer_edges"] == ["profile-first-bone-to-candidate-1e0-and-1ec"]
+    assert not any("anchor1e0/1ec actual producers" in edge for edge in gaps)
+    knocked = action["knocked_flag_producer_evidence"]
+    assert "HasLastBreath status" in knocked["semantics"]
+    assert action_points["v17-114"]["closed_producer_edges"] == ["has-last-breath-or-state-bit19-to-candidate-flag14"]
+    assert not any("pawn-state bit19 producer" in edge for edge in gaps)
     assert not action["compensation_evidence"]["write_ready"]
     assert not action["compensation_evidence"]["target_effect_restored"]
     assert not action["cleanup_contract"]["production_restoration_verifier_installed"]
@@ -82,12 +90,16 @@ def require_recoil_source(source):
 def require_aim_source(source):
     assert not re.fullmatch(r"\s*\[\]\s*", body(source, "var supportedFields:"))
     assert "CoreSetIsolatedWriteProbe" in source
+    assert "persistentActionWorker" in source
+    submit = body(source, "private func submitMergedAction(")
+    assert "let cleanup = probe.stop()" not in submit
     assert "includeBattleInputs: true" in source
     assert "result.committed" in source and "cleanup.complete" in source
+    assert "cleanup.targetEffectsAbandoned" in source and "unrestoredActionEffects" in source
     assert ".applied(observed: request.desired)" in source
     stop = body(source, "func stop(")
     assert "timer?.cancel()" in stop and "pendingProbes" in stop
-    assert "clean ? .restored" in stop
+    assert ".stoppedWithoutRestoration" in stop
 
 
 def require_retained_effect_obligation(state, ledger):
@@ -137,7 +149,7 @@ class MatrixClosureAudit(unittest.TestCase):
     def test_negative_missing_aim_writer_and_forgiven_stop_source_mutants(self):
         source = read("lara/views/app/CoreSetAimConsumer.swift")
         for altered in (source.replace("CoreSetIsolatedWriteProbe", "RemovedAimProbe"),
-                        source.replace("clean ? .restored", "true ? .restored"),
+                        source.replace(".stoppedWithoutRestoration", ".restored"),
                         source.replace("includeBattleInputs: true", "includeBattleInputs: false")):
             with self.assertRaises(AssertionError): require_aim_source(altered)
 

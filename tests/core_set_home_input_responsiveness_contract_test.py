@@ -84,9 +84,12 @@ class HomeInputResponsivenessContract(unittest.TestCase):
 
     def test_visual_contract_literals_unchanged_by_scheduler(self):
         rebuild = body(self.menu, "private func rebuildMenu(")
-        for marker in ('label("CORE SET", size: 36', "CGRect(x: 170, y: 38, width: 658, height: 492)",
+        for marker in ("addReferenceBrand(to: sidebar)", "CGRect(x: 170, y: 38, width: 658, height: 492)",
                        "panel.backgroundColor = gray(26, 250)", "closeButton.setTitleColor(gray(255, 80)"):
             self.assertIn(marker, rebuild)
+        brand = body(self.menu, "private func addReferenceBrand(")
+        for marker in ('label("C", size: 36', 'label("ORE", size: 36', 'label("SET", size: 11'):
+            self.assertIn(marker, brand)
 
 
 if __name__ == "__main__":

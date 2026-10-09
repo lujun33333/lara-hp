@@ -163,7 +163,8 @@ class HomeSchedulerContract(unittest.TestCase):
         self.assertEqual({point["id"] for point in evidence["points"]},
                          {f"v17-{point:03}" for point in (0, 1, 2, 3, 5, 6, 8, 9, 10)})
         bound = {point["id"] for point in evidence["points"] if point["producer_bound"]}
-        self.assertEqual(bound, {"v17-002", "v17-003"})
+        self.assertEqual(bound, {"v17-000", "v17-002", "v17-003", "v17-005", "v17-006",
+                                 "v17-008", "v17-009", "v17-010"})
         self.assertTrue(all(not point["original_runtime_receipt_verified"] for point in evidence["points"]))
         for source in evidence["source_manifest"]:
             current = (ROOT / source["source"]).read_text(encoding="utf-8")
@@ -175,7 +176,7 @@ class HomeSchedulerContract(unittest.TestCase):
                     self.assertIn(site["anchor"], lines[line - 1])
         self.assertEqual([hit["class"] for hit in evidence["provider_scan"]["conformers"]],
                          ["CoreSetHomeRuntimeProducer"])
-        self.assertEqual(evidence["provider_scan"]["binding_calls"], [])
+        self.assertEqual(len(evidence["provider_scan"]["binding_calls"]), 2)
         self.assertEqual(evidence["provider_scan"]["home_consumer_bindings"], [])
         self.assertIn("homeTelemetry.bindReferenceObservationProvider(homeProducer)", self.coordinator)
         self.assertIn("NOT proof of absent internal functionality", evidence["external_partial"]["limit"])
@@ -187,15 +188,16 @@ class HomeSchedulerContract(unittest.TestCase):
         points = {point["id"]: point for point in evidence["points"]}
         self.assertIn("20s stagnant counter", points["v17-002"]["missing_same_meaning_interface"])
         self.assertIn("609a8 tuple", points["v17-003"]["missing_same_meaning_interface"])
-        self.assertIn("native-ready", points["v17-005"]["current_candidate"])
-        self.assertIn("hasOffsets", points["v17-006"]["current_candidate"])
+        self.assertIn("bound live local environment producer", points["v17-005"]["current_candidate"])
+        self.assertIn("bound live local information producer", points["v17-006"]["current_candidate"])
         self.assertIn("running is not stage", points["v17-008"]["missing_same_meaning_interface"])
         self.assertIn("PAGE counters", points["v17-009"]["missing_same_meaning_interface"])
         self.assertIn("same units", points["v17-010"]["missing_same_meaning_interface"])
-        self.assertIn("decompressed length", points["v17-010"]["current_candidate"])
+        self.assertIn("bound kernelcache transfer byte producer", points["v17-010"]["current_candidate"])
         self.assertIn("system OTA switch", points["v17-010"]["current_candidate"])
         self.assertEqual(points["v17-010"]["caller_evidence_keys"],
-                         ["range_fetch", "kernel_cache_call", "local_copy", "ota_switch", "observation_boundary"])
+                         ["range_fetch", "kernel_cache_call", "local_copy", "ota_switch",
+                          "observation_boundary", "live_home_producer"])
 
     def test_source_probe_refuses_changed_call_chain_and_counter_substitution(self):
         sys.path.insert(0, str(ROOT / "tools"))
@@ -226,7 +228,8 @@ class HomeSchedulerContract(unittest.TestCase):
         self.assertEqual(len(scan["binding_calls"]), 1)
         self.assertEqual(len(scan["home_consumer_bindings"]), 1)
         self.assertEqual({point["id"] for point in evidence["points"] if point["producer_bound"]},
-                         {"v17-002", "v17-003"})
+                         {"v17-000", "v17-002", "v17-003", "v17-005", "v17-006",
+                          "v17-008", "v17-009", "v17-010"})
 
 
 def replay(path):

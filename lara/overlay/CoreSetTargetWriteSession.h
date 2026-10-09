@@ -40,6 +40,9 @@ typedef NS_ENUM(uint8_t, CoreSetTargetWriteAxis) {
 @property(nonatomic, readonly) BOOL noInFlight;
 // Resource drain alone never proves a prior target write was restored.
 @property(nonatomic, readonly) BOOL targetEffectsResolved;
+// True means the continuous view delta was intentionally not restored. This
+// is a distinct terminal policy, not an independent restoration receipt.
+@property(nonatomic, readonly) BOOL targetEffectsAbandoned;
 @property(nonatomic, readonly) BOOL complete;
 - (instancetype)initWithReadTaskPortReleased:(BOOL)readTaskPortReleased
                          mappedAliasReleased:(BOOL)mappedAliasReleased
@@ -49,7 +52,8 @@ typedef NS_ENUM(uint8_t, CoreSetTargetWriteAxis) {
                          mappedAliasReleased:(BOOL)mappedAliasReleased
                           generationAdvanced:(BOOL)generationAdvanced
                                   noInFlight:(BOOL)noInFlight
-                       targetEffectsResolved:(BOOL)targetEffectsResolved;
+                       targetEffectsResolved:(BOOL)targetEffectsResolved
+                      targetEffectsAbandoned:(BOOL)targetEffectsAbandoned;
 @end
 
 @interface CoreSetTargetWriteResult : NSObject
@@ -78,6 +82,11 @@ typedef NS_ENUM(uint8_t, CoreSetTargetWriteAxis) {
 @property(nonatomic, readonly) BOOL pendingCleanup;
 // The default initializer installs no authority and cannot perform a write.
 - (instancetype)initWithRequestAuthority:(nullable id<CoreSetTargetWriteAuthority>)authority;
+// A writer that consumes an existing immutable snapshot must borrow the exact
+// read lease that produced it.  Its generation is session-local, so creating a
+// second CoreSetReadSession can never establish snapshot identity parity.
+- (instancetype)initWithRequestAuthority:(nullable id<CoreSetTargetWriteAuthority>)authority
+                              readSession:(nullable CoreSetReadSession *)readSession;
 // Typed build-15915 slots only: controller +0x620/+0x624 or +0x828/+0x82c.
 // Axis selects a four-byte float or an eight-byte pair. No general UVA API.
 - (CoreSetTargetWriteResult *)writeControllerActionForPID:(int32_t)pid

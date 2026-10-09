@@ -72,19 +72,21 @@
     // Legacy callers provide no target restoration/no-effects proof.
     return [self initWithReadTaskPortReleased:readTaskPortReleased
         mappedAliasReleased:mappedAliasReleased generationAdvanced:generationAdvanced
-        noInFlight:noInFlight targetEffectsResolved:NO];
+        noInFlight:noInFlight targetEffectsResolved:NO targetEffectsAbandoned:NO];
 }
 - (instancetype)initWithReadTaskPortReleased:(BOOL)readTaskPortReleased
                          mappedAliasReleased:(BOOL)mappedAliasReleased
                           generationAdvanced:(BOOL)generationAdvanced
                                   noInFlight:(BOOL)noInFlight
-                       targetEffectsResolved:(BOOL)targetEffectsResolved {
+                       targetEffectsResolved:(BOOL)targetEffectsResolved
+                      targetEffectsAbandoned:(BOOL)targetEffectsAbandoned {
     if ((self = [super init])) {
         _readTaskPortReleased = readTaskPortReleased;
         _mappedAliasReleased = mappedAliasReleased;
         _generationAdvanced = generationAdvanced;
         _noInFlight = noInFlight;
         _targetEffectsResolved = targetEffectsResolved;
+        _targetEffectsAbandoned = targetEffectsAbandoned;
         _complete = readTaskPortReleased && mappedAliasReleased && generationAdvanced &&
             noInFlight && targetEffectsResolved;
     }
@@ -110,6 +112,7 @@
     CoreSet::ControlRotationWriteGate _gate;
     CoreSet::ActionEffectLedger _effects;
     uint64_t _generation;
+    BOOL _ownsReadSession;
     BOOL _pendingCleanup;
     BOOL _backendBound;
     BOOL _stopped;
@@ -121,9 +124,14 @@
     return [self initWithRequestAuthority:nil];
 }
 - (instancetype)initWithRequestAuthority:(id<CoreSetTargetWriteAuthority> _Nullable)authority {
+    return [self initWithRequestAuthority:authority readSession:nil];
+}
+- (instancetype)initWithRequestAuthority:(id<CoreSetTargetWriteAuthority> _Nullable)authority
+                              readSession:(CoreSetReadSession * _Nullable)readSession {
     if ((self = [super init])) {
-        _readSession = [[CoreSetReadSession alloc] init];
-        _readSession.diagnosticLabel = @"target-write";
+        _readSession = readSession ?: [[CoreSetReadSession alloc] init];
+        _ownsReadSession = readSession == nil;
+        if (_ownsReadSession) _readSession.diagnosticLabel = @"target-write";
         _backend = [[CoreSetMappedPageWriteBackend alloc] initWithReadSession:_readSession];
         _authority = authority;
         _generation = 1;
@@ -252,17 +260,27 @@
         BOOL drained = _gate.stopAfterDrain();
         BOOL backendClean = [_backend disconnect];
         BOOL mappedReleased = _backend.aliasesReleased;
-        CoreSetReadCleanupResult *readCleanup = [_readSession disconnect];
+        CoreSetReadCleanupResult *readCleanup = _ownsReadSession ? [_readSession disconnect] : nil;
+        // A borrowed read lease belongs to the capture worker. Probe cleanup
+        // must neither disconnect it nor advance its generation.
+        BOOL readReleased = !_ownsReadSession ||
+            (readCleanup.taskPortReleased && readCleanup.transportReleased);
+        BOOL readAdvanced = !_ownsReadSession || readCleanup.generationAdvanced;
         BOOL advanced = _generation != UINT64_MAX;
         if (advanced) ++_generation;
-        const BOOL effectsResolved = YES;
-        _pendingCleanup = _pendingCleanup || !backendClean || !drained || !readCleanup.complete ||
+        // The Core-compatible continuous view worker intentionally does not
+        // restore a pre-action camera baseline. Close the ledger through the
+        // explicit abandonment policy instead of claiming verified restore.
+        const BOOL effectsResolved = _effects.abandonWithoutRestoration();
+        const BOOL effectsAbandoned = _effects.targetEffectsAbandoned();
+        _pendingCleanup = _pendingCleanup || !backendClean || !drained || !readReleased || !readAdvanced ||
             !advanced || !mappedReleased || !effectsResolved;
         return [[CoreSetTargetWriteCleanupResult alloc]
-            initWithReadTaskPortReleased:readCleanup.taskPortReleased && readCleanup.transportReleased
+            initWithReadTaskPortReleased:readReleased
             mappedAliasReleased:mappedReleased
-            generationAdvanced:advanced && readCleanup.generationAdvanced
-            noInFlight:drained && backendClean targetEffectsResolved:effectsResolved];
+            generationAdvanced:advanced && readAdvanced
+            noInFlight:drained && backendClean targetEffectsResolved:effectsResolved
+            targetEffectsAbandoned:effectsAbandoned];
     }
 }
 @end

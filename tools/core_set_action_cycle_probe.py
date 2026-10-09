@@ -209,7 +209,10 @@ def target_evidence(path: Path) -> dict:
     properties = []
     for name, descriptor, relative in (("ControlRotation", 0x11081AAB8, 0x620),
                                        ("RotationInput", 0x110948700, 0x828),
-                                       ("Pitch", 0x1103E7150, 0), ("Yaw", 0x1103E7118, 4)):
+                                       ("Pitch", 0x1103E7150, 0), ("Yaw", 0x1103E7118, 4),
+                                       ("PawnStateRepSyncData", 0x10F8421B8, 0x1700),
+                                       ("CurrentStatesMask", 0x10F62FA28, 0),
+                                       ("DisabledStatesMask", 0x10F62F9E8, 0x10)):
         label = q(descriptor + 8)
         assert data[offset(label):offset(label) + len(name) + 1] == name.encode() + b"\0"
         assert q(descriptor + 0x30) == relative
@@ -219,10 +222,23 @@ def target_evidence(path: Path) -> dict:
              0xE10: 0x104CE7800, 0xEE0: 0x107CFD600, 0xEE8: 0x107CFD69C}
     for slot, function in slots.items(): assert q(table + slot) == function
     md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+    bitmask_name = q(0x10EEE9D68 + 0x18)
+    assert data[offset(bitmask_name):offset(bitmask_name) + 17] == b"BitMaskContainer\0"
+    assert q(0x10EEE9D68 + 0x28) == 0x10 and q(0x10EEE9D68 + 0x30) == 8
+    health_status = {}
+    for index in range(6):
+        entry = 0x10F58CCC8 + index * 16
+        name_pointer = q(entry)
+        end = offset(name_pointer)
+        name = data[end:end + 100].split(b"\0", 1)[0].decode("ascii")
+        health_status[name] = q(entry + 8)
+    assert health_status == {"HealthyAlive": 0, "HasLastBreath": 1, "ZombieState": 2,
+                             "WaitingForRevival": 3, "FinishedLastBreath": 4, "MAX": 5}
     anchors = [0x106F37508, 0x106F375B4, 0x106F3F024, 0x104C7AFD4, 0x104C76770,
                0x107CFD680, 0x107CFD71C, 0x104CE7884, 0x104CE7990, 0x104CE79A0,
                0x104CE7CF0, 0x10A8381AC, 0x10A838598, 0x104C5F584,
-               0x106DB8470, 0x106D2D6D0, 0x103D2F784, 0x1039B826C]
+               0x106DB8470, 0x106D2D6D0, 0x103D2F784, 0x1039B826C,
+               0x1053A9488, 0x10A3C4124, 0x10A3C4150, 0x10A95EC68]
     windows = [{"address": hex(va), "file_offset": hex(offset(va)),
                 "instructions": [{"address": hex(i.address), "bytes": bytes(i.bytes).hex(),
                                   "instruction": i.mnemonic + " " + i.op_str}
@@ -232,7 +248,65 @@ def target_evidence(path: Path) -> dict:
             "properties": properties, "stextra_vtable": hex(table),
             "vtable_slots": {hex(slot): hex(function) for slot, function in slots.items()},
             "windows": windows, "zero_reset_source": "0x111120f20",
+            "pawn_state_storage": {"actor_property": "PawnStateRepSyncData+0x1700",
+                                   "current_mask": "CurrentStatesMask+0x0",
+                                   "container": "BitMaskContainer", "size": 0x10, "alignment": 8,
+                                   "read_shape": "actor+0x1700 qword -> Array data -> leading uint32"},
+            "health_status_enum": health_status,
             "boundary": "specific STExtra ctor/vtable + two-axis additive input/UpdateRotation/conditional reset static chain; not atomic against game threads and not an external restore contract"}
+
+
+def aim_anchor_producer_evidence(core: CoreImage) -> dict:
+    sites = {
+        "candidate_anchor_1e0_pointer": (0x1000D7F04, "add", "x10, x8, #0x1e0"),
+        "candidate_anchor_1ec_pointer": (0x1000D7F08, "add", "x8, x8, #0x1ec"),
+        "profile_first_index": (0x1000D8BA8, "ldr", "w27, [x8]"),
+        "first_index_transform": (0x1000D8F00, "umaddl", "x8, w27, w9, x8"),
+        "anchor_1e0_destination": (0x1000D94A8, "ldr", "x12, [sp, #0x80]"),
+        "anchor_1e0_xy": (0x1000D94B0, "str", "x8, [x12]"),
+        "anchor_1ec_destination": (0x1000D94BC, "ldr", "x8, [sp, #0x50]"),
+        "anchor_1ec_xy": (0x1000D94C4, "str", "x10, [x8]"),
+    }
+    observed = {}
+    for label, (address, mnemonic, operand) in sites.items():
+        instruction = core.instructions(address, 4)[0]
+        assert instruction.mnemonic == mnemonic and operand in instruction.op_str, (label, instruction)
+        observed[label] = {"address": hex(address), "file_offset": hex(core.file_offset(address)),
+                           "instruction": instruction.mnemonic + " " + instruction.op_str}
+    table_addresses = (0x100AC8698, 0x100AC8708, 0x100AC8778, 0x100AC87E8,
+                       0x100AC8858, 0x100AC88C8, 0x100AC8938, 0x100AC89A8,
+                       0x100AC8A18)
+    profiles = []
+    for address in table_addresses:
+        first, second = struct.unpack("<II", core.raw(address, 8))
+        assert first in (6, 28) and second == 5
+        profiles.append({"address": hex(address), "first_index": first, "second_index": second})
+    return {"sites": observed, "profiles": profiles,
+            "semantics": "Core selects profile[0], transforms it, then copies the same first-bone world point into candidate +0x1e0 and +0x1ec",
+            "target_owner": "build15915 mesh ComponentSpaceTransforms (+0x838, fallback +0x848), 0x30-byte transforms, component transform +0x1f0"}
+
+
+def knocked_flag_producer_evidence(core: CoreImage, target: dict) -> dict:
+    sites = {
+        "state_word": (0x1000D8210, "ldr", "w9, [sp, #0x4c]"),
+        "bit20_reject": (0x1000D8214, "tbnz", "w9, #0x14"),
+        "finished_last_breath_reject": (0x1000D8218, "cmp", "w8, #4"),
+        "state_bit19": (0x1000D8224, "ubfx", "w9, w9, #0x13, #1"),
+        "has_last_breath": (0x1000D8228, "cmp", "w8, #1"),
+        "composite_flag": (0x1000D822C, "csinc", "w8, w9, wzr, ne"),
+        "candidate_flag14": (0x1000D874C, "strb", "w8, [sp, #0x3ac]"),
+    }
+    observed = {}
+    for label, (address, mnemonic, operand) in sites.items():
+        instruction = core.instructions(address, 4)[0]
+        assert instruction.mnemonic == mnemonic and operand in instruction.op_str, (label, instruction)
+        observed[label] = {"address": hex(address), "file_offset": hex(core.file_offset(address)),
+                           "instruction": instruction.mnemonic + " " + instruction.op_str}
+    assert target["health_status_enum"]["HasLastBreath"] == 1
+    assert target["health_status_enum"]["FinishedLastBreath"] == 4
+    return {"sites": observed,
+            "semantics": "candidate flag14 = 1 for HasLastBreath status, otherwise CurrentStatesMask bit19; bit20 and FinishedLastBreath reject before publication",
+            "target_owner": target["pawn_state_storage"]}
 
 
 def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
@@ -244,6 +318,8 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
     selection_edges = static_edges(core)
     from core_set_action_compensation_probe import static_edges as compensation_static_edges
     compensation_edges = compensation_static_edges(core)
+    anchor_producer = aim_anchor_producer_evidence(core)
+    knocked_producer = knocked_flag_producer_evidence(core, target)
     anchors = [(0x1000C1A78, 32), (0x1000C22A0, 0x80), (0x1000C3278, 64),
                (0x1000C1378, 0x180), (0x1000C1664, 0x180), (0x1000C4854, 0x160),
                (0x1000C5AD8, 0x100), (0x1000C6730, 0x64), (0x1000C2E24, 64),
@@ -278,12 +354,8 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
         if number >= 131:
             closed.extend(["post_state_two_axis", "recoil_caller_merge", "prior_aim_feedback", "stop_post_state_local"])
         edge = "current eligible-candidate evidence and selector observable, distinct from closed reference component parity"
-        if number == 114:
-            edge = "Core pawn-state bit19 producer/owner → build15915 PawnStateRepSyncData+1700 storage/knocked semantics"
         if number in (120, 129, 130):
             edge = "same-cycle input lease and independent observation of user-input arbitration"
-        if number == 107:
-            edge = "bone58 validity + anchor1e0/1ec actual producers → build15915 world bone owner/lifetime"
         if number == 116:
             edge = "sticky rank/publish → source record invalidation, target identity lease and live selector observable"
         points.append({"id": point["id"], "title": point["title"],
@@ -293,6 +365,8 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
                        "core_self_storage": point["storage"], "control_sites": point["control_sites"],
                        "current_alternative_preview": point["alternative_preview"],
                        "component_parity_contracts": components,
+                       "closed_producer_edges": ((["profile-first-bone-to-candidate-1e0-and-1ec"] if number == 107 else []) +
+                                                 (["has-last-breath-or-state-bit19-to-candidate-flag14"] if number == 114 else [])),
                        "closed_reference_edges": closed,
                        # Former c4af8/c416c numeric-component gap is now exact
                        # reference parity; the three authority/receipt/restore
@@ -313,6 +387,8 @@ def action_evidence(core: CoreImage, native_map: dict, target: dict) -> dict:
             "closure_counts": closure_counts,
             "reference_windows": [core.proof_window(va, size) for va, size in anchors],
             "reference_tables": tables, "target_static_evidence": target,
+            "aim_anchor_producer_evidence": anchor_producer,
+            "knocked_flag_producer_evidence": knocked_producer,
             "selection_route_history_evidence": selection_edges,
             "compensation_evidence": compensation_edges,
             "function_edges": [

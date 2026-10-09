@@ -35,6 +35,19 @@ int main() {
     assert(!referenceActionCompensation({1, 2}, .01f, {}, invalid, &delta));
     assert(referenceActionRecoilCallerMerge(INFINITY, 1, .5f) == 0);
     assert(referenceActionRecoilCallerMerge(1, 1, 0) == 0);
+    RecoilConfiguration recoilConfiguration;
+    assert(planRecoilConfiguration(true, true, 70, false, true, 35, &recoilConfiguration));
+    ActionPostTuning recoilPostTuning;
+    RecoilConfiguration invalidRecoil = recoilConfiguration;
+    invalidRecoil.verticalStrength = NAN;
+    assert(!referenceActionRecoilPostTuning(invalidRecoil, 1.3f, .8f, .4f, .8f,
+                                             &recoilPostTuning));
+    assert(referenceActionRecoilPostTuning(recoilConfiguration, 1.3f, .8f, .4f, .8f,
+                                            &recoilPostTuning));
+    assert(recoilPostTuning.firstStrength == .7f && recoilPostTuning.firstLimit == 1.5f);
+    assert(recoilPostTuning.deadzone == 0.0005000000237487257f &&
+           recoilPostTuning.quietFrameLimit == 6 && recoilPostTuning.continueLocalTail);
+    assert(recoilPostTuning.secondStrength == .35f && recoilPostTuning.secondLimitScale == 1.0f);
     std::cout << std::setprecision(17) << "{\"scope\":\"Core-self compensation CFG only; no target authority\",\"prediction\":[";
     bool comma = false;
     for (float distance : {-1.f, 0.f, 12.f, 12.01f, 21.f, 29.99f, 30.f, 37.5f, 45.f, 100.f}) {

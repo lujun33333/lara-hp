@@ -1,6 +1,6 @@
 #import "CoreSetIsolatedWriteProbe.h"
 #import <QuartzCore/QuartzCore.h>
-#include "CoreSetSingleAttemptGate.h"
+#include "CoreSetSerialActionGate.h"
 #include "CoreSetActionCompensationState.h"
 #include "CoreSetActionCyclePlan.h"
 #include "CoreSetActionSelectionState.h"
@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cmath>
 #include <cfloat>
+#include <climits>
 #include <cstring>
 
 static char CSProbeQueueKey;
@@ -61,6 +62,10 @@ private:
 }
 @end
 @implementation CoreSetBasicAimDelta
++ (double)circleRadiusForCanvasWidth:(double)width height:(double)height size:(NSInteger)size {
+    if (size < INT_MIN || size > INT_MAX) return 0;
+    return CoreSet::aimCircleRadius(width, height, (int)size);
+}
 + (CoreSetPlayerMark *)selectFromSnapshot:(CoreSetPlayerSnapshot *)snapshot point:(NSInteger)point
     radius:(double)radius maximumDistance:(double)maximumDistance includeBots:(BOOL)includeBots
     excludeKnocked:(BOOL)excludeKnocked
@@ -124,6 +129,75 @@ private:
     return [CoreSetWorldPoint pointWithX:result.x y:result.y z:result.z];
 }
 @end
+
+@interface CoreSetV17AimConfiguration ()
+@property(nonatomic) NSInteger maximumDistance;
+@property(nonatomic) float lockThreshold;
+@property(nonatomic) NSInteger confirmationFrames;
+@property(nonatomic) double takeoverPauseSeconds;
+@property(nonatomic) float strength;
+@property(nonatomic) float smoothingSeconds;
+@property(nonatomic) float horizontalSpeed;
+@property(nonatomic) float verticalSpeed;
+@property(nonatomic) double predictionMilliseconds;
+@property(nonatomic) float residualGain;
+@property(nonatomic) float minimumGain;
+@property(nonatomic) float deadzoneRatio;
+@property(nonatomic) float minimumDeadzone;
+@end
+
+@implementation CoreSetV17AimConfiguration
+- (instancetype)initWithStoredScene:(NSInteger)storedScene
+                  storedLockStrength:(NSInteger)storedLockStrength
+                 customValuesPresent:(BOOL)customValuesPresent
+               customMaximumDistance:(NSInteger)customMaximumDistance
+                      customStrength:(NSInteger)customStrength
+                     customSmoothing:(NSInteger)customSmoothing
+            customConfirmationFrames:(NSInteger)customConfirmationFrames
+               customHorizontalSpeed:(NSInteger)customHorizontalSpeed
+                 customVerticalSpeed:(NSInteger)customVerticalSpeed
+        customPredictionMilliseconds:(NSInteger)customPredictionMilliseconds
+                 customLockThreshold:(NSInteger)customLockThreshold
+   customTakeoverPauseMilliseconds:(NSInteger)customTakeoverPauseMilliseconds {
+    const NSInteger values[] = {storedScene, storedLockStrength, customMaximumDistance,
+        customStrength, customSmoothing, customConfirmationFrames, customHorizontalSpeed,
+        customVerticalSpeed, customPredictionMilliseconds, customLockThreshold,
+        customTakeoverPauseMilliseconds};
+    for (NSInteger value : values) if (value < INT_MIN || value > INT_MAX) return nil;
+    CoreSet::ActionCustomSceneInput custom;
+    custom.allNinePresent = customValuesPresent;
+    custom.maximumDistance = (int)customMaximumDistance;
+    custom.strength = (int)customStrength;
+    custom.smoothing = (int)customSmoothing;
+    custom.confirmationFrames = (int)customConfirmationFrames;
+    custom.horizontalSpeed = (int)customHorizontalSpeed;
+    custom.verticalSpeed = (int)customVerticalSpeed;
+    custom.predictionMilliseconds = (int)customPredictionMilliseconds;
+    custom.lockThreshold = (int)customLockThreshold;
+    custom.pauseMilliseconds = (int)customTakeoverPauseMilliseconds;
+    CoreSet::ActionScenePlan plan;
+    CoreSet::AimSceneCompensationValues compensation;
+    if (!CoreSet::planActionScene((int)storedScene, (int)storedLockStrength, custom, &plan) ||
+        !CoreSet::aimSceneCompensationValues((int)storedScene, &compensation)) return nil;
+    if ((self = [super init])) {
+        _maximumDistance = plan.scene.maximumDistance;
+        _lockThreshold = (float)plan.tuning.lockThreshold01;
+        _confirmationFrames = plan.lock.confirmationFrames;
+        _takeoverPauseSeconds = plan.lock.pauseMilliseconds / 1000.0;
+        _strength = (float)plan.tuning.strength01;
+        _smoothingSeconds = (float)plan.tuning.smoothingStep;
+        _horizontalSpeed = (float)plan.tuning.horizontalDegreesPerSecond;
+        _verticalSpeed = (float)plan.tuning.verticalDegreesPerSecond;
+        _predictionMilliseconds = plan.tuning.predictionMilliseconds;
+        _residualGain = compensation.residualGain;
+        _minimumGain = compensation.minimumGain;
+        _deadzoneRatio = compensation.deadzoneRatio;
+        _minimumDeadzone = compensation.minimumDeadzone;
+    }
+    return self;
+}
+@end
+
 @interface CoreSetV17AimDynamics () {
     CoreSet::ActionCandidateMotionState _motion;
     CoreSet::ActionGeometryClockState _geometry;
@@ -143,23 +217,22 @@ private:
     if (!_dropout.reuse(generation, now, stateClear, &actor, &point)) return nil;
     return [CoreSetWorldPoint pointWithX:point.x y:point.y z:point.z];
 }
-- (BOOL)permitsTakeoverPitch:(float)pitch yaw:(float)yaw threshold:(float)threshold
-    confirmationFrames:(NSInteger)confirmationFrames pauseSeconds:(double)pauseSeconds now:(double)now {
+- (BOOL)permitsTakeoverPitch:(float)pitch yaw:(float)yaw
+    configuration:(CoreSetV17AimConfiguration *)configuration now:(double)now {
+    if (!configuration) return NO;
     CoreSet::ActionTakeoverObservation observed;
     const float magnitude = std::hypot(pitch, yaw);
-    return CoreSet::referenceActionTakeover(_takeover, true, false, magnitude, threshold,
-        (int)confirmationFrames, (int)std::lround(pauseSeconds * 1000.0), now, &observed) &&
+    return CoreSet::referenceActionTakeover(_takeover, true, false, magnitude,
+        configuration.lockThreshold, (int)configuration.confirmationFrames,
+        (int)std::lround(configuration.takeoverPauseSeconds * 1000.0), now, &observed) &&
         observed.aimAllowed && observed.mergePredecessor == CoreSet::ActionMergePredecessor::inputDirect;
 }
 - (CoreSetBasicAimDelta *)planFromCamera:(CoreSetWorldPoint *)camera
     target:(CoreSetWorldPoint *)target actor:(uint64_t)actor publicationID:(NSUUID *)publicationID
     now:(double)now currentPitch:(float)currentPitch currentYaw:(float)currentYaw
-    strength:(float)strength smoothingSeconds:(float)smoothingSeconds
-    curveSelector:(float)curveSelector horizontalSpeed:(float)horizontalSpeed
-    verticalSpeed:(float)verticalSpeed predictionMilliseconds:(double)predictionMilliseconds
-    residualGain:(float)residualGain minimumGain:(float)minimumGain
-    deadzoneRatio:(float)deadzoneRatio minimumDeadzone:(float)minimumDeadzone {
-    if (!camera || !target || !publicationID || !std::isfinite(now) || now < 0) return nil;
+    configuration:(CoreSetV17AimConfiguration *)configuration {
+    if (!camera || !target || !publicationID || !configuration ||
+        !std::isfinite(now) || now < 0) return nil;
     uuid_t bytes{}; [publicationID getUUIDBytes:bytes];
     uint64_t first = 0, second = 0;
     std::memcpy(&first, bytes, sizeof(first));
@@ -179,11 +252,12 @@ private:
     input.velocityPresent = _motion.velocityPresent;
     input.currentAngles = {currentYaw, currentPitch};
     CoreSet::ActionGeometryTuning tuning;
-    tuning.compensation = {strength, smoothingSeconds, curveSelector,
-        {horizontalSpeed, verticalSpeed}, residualGain, minimumGain};
-    tuning.predictionMilliseconds = (float)predictionMilliseconds;
-    tuning.deadzoneRatio = deadzoneRatio;
-    tuning.minimumDeadzone = minimumDeadzone;
+    tuning.compensation = {configuration.strength, configuration.smoothingSeconds,
+        configuration.lockThreshold, {configuration.horizontalSpeed, configuration.verticalSpeed},
+        configuration.residualGain, configuration.minimumGain};
+    tuning.predictionMilliseconds = (float)configuration.predictionMilliseconds;
+    tuning.deadzoneRatio = configuration.deadzoneRatio;
+    tuning.minimumDeadzone = configuration.minimumDeadzone;
     CoreSet::ActionGeometryObservation observed;
     if (!CoreSet::referenceActionGeometry(_geometry, input, tuning, &observed) || !observed.valid) return nil;
     uint64_t sampleKey = 0;
@@ -204,6 +278,38 @@ private:
 @property(nonatomic) float recoilYaw;
 @end
 @implementation CoreSetV17ActionDelta @end
+
+@interface CoreSetV17RecoilConfiguration ()
+@property(nonatomic) BOOL verticalEnabled;
+@property(nonatomic) float verticalStrength;
+@property(nonatomic) BOOL stopWhenNotFiring;
+@property(nonatomic) BOOL horizontalEnabled;
+@property(nonatomic) float horizontalStrength;
+@end
+
+@implementation CoreSetV17RecoilConfiguration
+- (instancetype)initWithEnabled:(BOOL)enabled
+                 verticalEnabled:(BOOL)verticalEnabled
+          verticalStrengthPercent:(NSInteger)verticalStrengthPercent
+               stopWhenNotFiring:(BOOL)stopWhenNotFiring
+               horizontalEnabled:(BOOL)horizontalEnabled
+        horizontalStrengthPercent:(NSInteger)horizontalStrengthPercent {
+    if (verticalStrengthPercent < INT_MIN || verticalStrengthPercent > INT_MAX ||
+        horizontalStrengthPercent < INT_MIN || horizontalStrengthPercent > INT_MAX) return nil;
+    CoreSet::RecoilConfiguration configuration;
+    if (!CoreSet::planRecoilConfiguration(enabled, verticalEnabled,
+            (int)verticalStrengthPercent, stopWhenNotFiring, horizontalEnabled,
+            (int)horizontalStrengthPercent, &configuration)) return nil;
+    if ((self = [super init])) {
+        _verticalEnabled = configuration.verticalEnabled;
+        _verticalStrength = configuration.verticalStrength;
+        _stopWhenNotFiring = configuration.stopWhenNotFiring;
+        _horizontalEnabled = configuration.horizontalEnabled;
+        _horizontalStrength = configuration.horizontalStrength;
+    }
+    return self;
+}
+@end
 
 @interface CoreSetV17RecoilDynamics () {
     CoreSet::ActionPostState _post;
@@ -226,9 +332,12 @@ private:
 }
 - (CoreSetV17ActionDelta *)planSnapshot:(CoreSetPlayerSnapshot *)snapshot
     aimPitch:(float)aimPitch aimYaw:(float)aimYaw geometrySampleKey:(uint64_t)geometrySampleKey
-    verticalEnabled:(BOOL)verticalEnabled verticalStrength:(float)verticalStrength
-    stopWhenNotFiring:(BOOL)stopWhenNotFiring horizontalEnabled:(BOOL)horizontalEnabled
-    horizontalStrength:(float)horizontalStrength {
+    configuration:(CoreSetV17RecoilConfiguration *)configuration {
+    const BOOL verticalEnabled = configuration.verticalEnabled;
+    const float verticalStrength = configuration.verticalStrength;
+    const BOOL stopWhenNotFiring = configuration ? configuration.stopWhenNotFiring : YES;
+    const BOOL horizontalEnabled = configuration.horizontalEnabled;
+    const float horizontalStrength = configuration.horizontalStrength;
     if (!snapshot.battleInputsPresent ||
         !std::isfinite(aimPitch) || !std::isfinite(aimYaw) ||
         !std::isfinite(verticalStrength) || verticalStrength < 0 || verticalStrength > 1 ||
@@ -259,18 +368,14 @@ private:
     CoreSetRecoilPostSample *sample = snapshot.recoilPostSample;
     CoreSet::ActionPostRecord record{true, sample.key, sample.ownerToken, sample.active,
         {sample.value0, sample.value1, sample.value2, sample.value3, sample.value4, sample.value5}};
+    CoreSet::RecoilConfiguration nativeConfiguration{verticalEnabled, verticalStrength,
+        static_cast<bool>(stopWhenNotFiring), horizontalEnabled, horizontalStrength};
     CoreSet::ActionPostTuning tuning;
-    tuning.firstStrength = verticalEnabled ? verticalStrength : 0;
-    tuning.firstLimit = 1.5f;
-    tuning.deadzone = 0.0005000000237487257f;
-    tuning.firstWeight = snapshot.recoilFirstWeight;
-    tuning.firstBindingScale = snapshot.recoilFirstBindingScale;
-    tuning.quietFrameLimit = 6;
-    tuning.continueLocalTail = verticalEnabled && !stopWhenNotFiring;
-    tuning.secondStrength = horizontalEnabled ? horizontalStrength : 0;
-    tuning.secondLimitScale = 1.0f;
-    tuning.secondWeight = snapshot.recoilSecondWeight;
-    tuning.secondBindingScale = snapshot.recoilSecondBindingScale;
+    if (!CoreSet::referenceActionRecoilPostTuning(nativeConfiguration,
+            snapshot.recoilFirstWeight, snapshot.recoilFirstBindingScale,
+            snapshot.recoilSecondWeight, snapshot.recoilSecondBindingScale, &tuning)) {
+        _post = {}; _raw = {}; return nil;
+    }
     CoreSet::ActionPostObservation post;
     if (!CoreSet::referenceActionPostState(_post, record, tuning,
                                             snapshot.recoilBinding, &post)) {
@@ -281,7 +386,7 @@ private:
     float rawCombined = 0;
     if (verticalEnabled && _previousGeometrySampleKey && _previousControlPresent) {
         CoreSet::RecoilRawInput input;
-        input.firing = snapshot.localFiring;
+        input.firing = (snapshot.localFiringRaw & 1) != 0;
         input.readValid = true;
         input.sampleKey = _previousGeometrySampleKey;
         input.binding = snapshot.recoilBinding;
@@ -299,7 +404,7 @@ private:
     const float recoilYaw = horizontalEnabled ? post.values[5] : 0;
     return finish(recoilPitch, recoilYaw);
 }
-- (void)observeCommittedAimPitch:(float)aimPitch inputRoute:(BOOL)inputRoute
+- (void)observeAimFeedbackWithPitch:(float)aimPitch inputRoute:(BOOL)inputRoute
     recoilEnabled:(BOOL)recoilEnabled aimActive:(BOOL)aimActive
     acceptedFirstAxis:(BOOL)acceptedFirstAxis bothZeroDraft:(BOOL)bothZeroDraft {
     _priorAimPitch = CoreSet::referenceActionPriorAimFeedback(_priorAimPitch, aimPitch,
@@ -307,19 +412,11 @@ private:
 }
 @end
 
-@interface CoreSetV17ActionRouteDynamics () {
-    CoreSet::ActionRouteState _state;
-}
-@end
 @implementation CoreSetV17ActionRouteDynamics
-- (void)reset { _state = {}; }
-- (BOOL)useControlRotationWithRecoilEnabled:(BOOL)recoilEnabled inputPaused:(BOOL)inputPaused {
-    // c35f0/c35f8 is the only live control predecessor: mode flag set,
-    // alternate clear, recoil master enabled, and not the paused input path.
-    return recoilEnabled && !inputPaused && _state.modeFlag && !_state.alternate;
-}
-- (void)observeCommittedWithW20:(BOOL)w20 {
-    _state.observeResult(1, CoreSet::RouteResultGate::lowBit, w20);
+- (CoreSetTargetWriteSlot)slotForFiringSample:(uint8_t)firingSample {
+    const auto slot = CoreSet::referenceActionSlotForFireSample(firingSample);
+    return slot == CoreSet::TargetActionSlot::rotationInput
+        ? CoreSetTargetWriteSlotRotationInput : CoreSetTargetWriteSlotControlRotation;
 }
 @end
 static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) {
@@ -330,7 +427,7 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
 // Separate authority owner avoids a writer -> probe -> writer retain cycle.
 @interface CSProbeAuthority : NSObject <CoreSetTargetWriteAuthority> {
 @public
-    CoreSet::SingleAttemptGate gate;
+    CoreSet::SerialActionGate gate;
     CoreSet::ActionContext context;
     std::atomic<bool> stopping;
 }
@@ -365,7 +462,6 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
     dispatch_queue_t _queue;
     CSProbeAuthority *_authority;
     CoreSetTargetWriteSession *_writer;
-    BOOL _submitted;
 }
 - (CoreSetTargetWriteResult *)submitSnapshot:(CoreSetPlayerSnapshot *)snapshot
     requestToken:(NSUUID *)requestToken hostGeneration:(uint64_t)hostGeneration
@@ -376,12 +472,26 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
 
 @implementation CoreSetIsolatedWriteProbe
 - (instancetype)initWithLiveValidator:(CoreSetProbeLiveValidator)validator {
+    if (!validator) return nil;
     if ((self = [super init])) {
         _queue = dispatch_queue_create("coreset.isolated.single.write", DISPATCH_QUEUE_SERIAL);
         dispatch_queue_set_specific(_queue, &CSProbeQueueKey, (__bridge void *)self, NULL);
         _authority = [CSProbeAuthority new];
         _authority.validator = validator;
         _writer = [[CoreSetTargetWriteSession alloc] initWithRequestAuthority:_authority];
+    }
+    return self;
+}
+- (instancetype)initWithReadSession:(CoreSetReadSession *)readSession
+                       liveValidator:(CoreSetProbeLiveValidator)validator {
+    if (!readSession || !validator) return nil;
+    if ((self = [super init])) {
+        _queue = dispatch_queue_create("coreset.isolated.single.write", DISPATCH_QUEUE_SERIAL);
+        dispatch_queue_set_specific(_queue, &CSProbeQueueKey, (__bridge void *)self, NULL);
+        _authority = [CSProbeAuthority new];
+        _authority.validator = validator;
+        _writer = [[CoreSetTargetWriteSession alloc] initWithRequestAuthority:_authority
+                                                                  readSession:readSession];
     }
     return self;
 }
@@ -402,11 +512,10 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
         return CSProbeFailure(@"recursive probe submission rejected", _writer.pendingCleanup);
     __block CoreSetTargetWriteResult *result;
     dispatch_sync(_queue, ^{
-        if (self->_authority->stopping.load() || self->_submitted) {
-            result = CSProbeFailure(@"probe stopped or single attempt already consumed", self->_writer.pendingCleanup);
+        if (self->_authority->stopping.load()) {
+            result = CSProbeFailure(@"action worker stopped", self->_writer.pendingCleanup);
             return;
         }
-        self->_submitted = YES;
         const BOOL first = axis == CoreSetTargetWriteAxisFirst || axis == CoreSetTargetWriteAxisBoth;
         const BOOL second = axis == CoreSetTargetWriteAxisSecond || axis == CoreSetTargetWriteAxisBoth;
         if (!snapshot || !requestToken || !snapshot.battleInputsPresent ||
@@ -435,7 +544,7 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
         [snapshot.snapshotID getUUIDBytes:context.snapshotID.data()];
         if (![self->_authority live] || !self->_authority->gate.begin(context, context,
             snapshot.captureCompletedMonotonicSeconds, CACurrentMediaTime())) {
-            result = CSProbeFailure(@"live request/target validation rejected or snapshot expired", NO);
+            result = CSProbeFailure(@"live request/target validation rejected, busy or snapshot expired", NO);
         } else {
             const float oldValues[2] = {
                 slot == CoreSetTargetWriteSlotControlRotation ? snapshot.controlPitchDegrees : snapshot.rotationInputPitch,
@@ -473,11 +582,10 @@ static CoreSetTargetWriteResult *CSProbeFailure(NSString *reason, BOOL pending) 
         // than disconnecting under an in-flight writer transaction.
         return [[CoreSetTargetWriteCleanupResult alloc] initWithReadTaskPortReleased:NO
             mappedAliasReleased:NO generationAdvanced:NO noInFlight:NO
-            targetEffectsResolved:NO];
+            targetEffectsResolved:NO targetEffectsAbandoned:NO];
     }
     dispatch_sync(_queue, cleanup);
     return result;
 }
 - (void)dealloc { _authority->stopping.store(true); [_writer disconnect]; }
 @end
-

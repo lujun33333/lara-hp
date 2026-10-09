@@ -253,8 +253,9 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
             "root-connection-playercontroller", "root-controller-camera-manager",
             "root-controller-local-character")]
         self.assertEqual(ordered, sorted(ordered))
-        self.assertLess(collector.index("controller + 0x680, &manager"),
-                        collector.index("controller + 0x3540, &local"))
+        capture_root = collector.index('CSLastCaptureDiagnostic = "root-world-netdriver"')
+        self.assertLess(collector.index("controller + 0x680, &manager", capture_root),
+                        collector.index("controller + 0x3540, &local", capture_root))
         self.assertLess(collector.index('CSLastCaptureDiagnostic = "root-world-netdriver"'),
                         collector.index('CSLastCaptureDiagnostic = "root-level"'))
 

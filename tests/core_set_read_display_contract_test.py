@@ -191,12 +191,12 @@ class ReadDisplayContracts(unittest.TestCase):
         scan = self.collector[self.collector.index("for (int32_t start = 0; start < array.count;"):
                               self.collector.index('CSLastCaptureDiagnostic = "stability-roots"')]
         ordered = ("actor + 0x10bc", "if (actor == local) continue", "actor + 0xb78",
-                   "actor + 0x1700", "coreState, &coreStateFlags", "actor + 0x3be0",
+                   "actor + 0x1700", "coreStateMaskData, &coreStateFlags", "actor + 0x3be0",
                    "actor + 0x1060", "actor + 0x1068", "actor + 0x260",
                    "actor + 0x658", "actor + 0xb94", "++coreAccepted")
         positions = [scan.index(token) for token in ordered]
         self.assertEqual(positions, sorted(positions))
-        for declaration in ("float coreSpeed", "uint32_t team", "uint64_t coreState",
+        for declaration in ("float coreSpeed", "uint32_t team", "uint64_t coreStateMaskData",
                             "uint32_t coreStateFlags", "uint8_t status", "float health = 0, maximum",
                             "uint64_t rootComponent = 0, meshComponent",
                             "uint8_t ai"):

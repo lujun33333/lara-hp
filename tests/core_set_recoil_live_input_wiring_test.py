@@ -54,34 +54,43 @@ def test_geometry_exposes_exact_next_frame_recoil_key():
 def test_shared_recoil_dynamics_preserves_core_order_and_constants():
     header = (ROOT / "lara/overlay/CoreSetIsolatedWriteProbe.h").read_text(encoding="utf-8")
     source = (ROOT / "lara/overlay/CoreSetIsolatedWriteProbe.mm").read_text(encoding="utf-8")
+    compensation = (ROOT / "lara/overlay/CoreSetActionCompensationState.h").read_text(encoding="utf-8")
+    state = (ROOT / "lara/overlay/CoreSetRecoilStateMachine.h").read_text(encoding="utf-8")
     assert "CoreSetV17RecoilDynamics" in header
+    assert "CoreSetV17RecoilConfiguration" in header
     for token in (
         "referenceActionPostState(_post", "stepRecoilRawState(&_raw",
         "referenceActionRecoilCallerMerge", "mergeAimRecoilDeltas",
         "referenceActionPriorAimFeedback", "raw.combined",
         "post.values[2]", "post.values[5]",
-        "tuning.firstLimit = 1.5f", "tuning.deadzone = 0.0005000000237487257f",
-        "tuning.quietFrameLimit = 6", "tuning.secondLimitScale = 1.0f",
+        "referenceActionRecoilPostTuning(nativeConfiguration",
+        "input.firing = (snapshot.localFiringRaw & 1) != 0",
     ):
         assert token in source
+    for token in ("planRecoilConfiguration", "verticalStrengthPercent / 100.0f",
+                  "horizontalStrengthPercent / 100.0f"):
+        assert token in state
+    for token in ("result.firstLimit = 1.5f", "result.deadzone = 0.0005000000237487257f",
+                  "result.quietFrameLimit = 6", "result.secondLimitScale = 1.0f"):
+        assert token in compensation
     assert source.index("referenceActionPostState(_post") < source.index("stepRecoilRawState(&_raw")
     assert source.index("stepRecoilRawState(&_raw") < source.index("referenceActionRecoilCallerMerge")
     assert source.index("referenceActionRecoilCallerMerge") < source.index("return finish(recoilPitch, recoilYaw)")
 
 
-def test_recoil_and_aim_use_one_serial_worker_and_dynamic_slot_route():
+def test_recoil_and_aim_use_one_serial_worker_and_reference_fire_slot_route():
     aim = (ROOT / "lara/views/app/CoreSetAimConsumer.swift").read_text(encoding="utf-8")
     recoil = (ROOT / "lara/views/app/CoreSetRecoilConsumer.swift").read_text(encoding="utf-8")
     coordinator = (ROOT / "lara/views/app/CoreSetRuntimeCoordinator.swift").read_text(encoding="utf-8")
     menu = (ROOT / "lara/views/app/CoreSetMenuViewController.swift").read_text(encoding="utf-8")
     for token in (
         "CoreSetV17RecoilDynamics", "submitMergedAction", "tickRecoilOnly",
-        "CoreSetV17ActionRouteDynamics", "routeDynamics.useControlRotation",
-        "? .controlRotation : .rotationInput", "routeDynamics.observeCommitted",
-        "observeCommittedRoute(w20: !inputPaused)", "lane: lane",
+        "CoreSetV17ActionRouteDynamics", "routeDynamics.slot(firingSample:",
+        "actionSlot(snapshot:", "lane: lane",
         "pendingRecoilCompletion", "stopRecoil(",
         "merged.recoilPitch", "merged.recoilYaw", "recoilContributed",
-        "aimContributed",
+        "aimContributed", "recoilConfiguration(", "configuration: recoil",
+        "bothZeroDraft: true", "observeAimFeedback(pitch:",
         "共享动作旧映射清理待确认", "压枪同步终止",
     ):
         assert token in aim, token
@@ -92,5 +101,8 @@ def test_recoil_and_aim_use_one_serial_worker_and_dynamic_slot_route():
     assert "apply(\\.recoil)" in menu
     assert "editGame(\\.recoil)" in menu
     route = (ROOT / "lara/overlay/CoreSetIsolatedWriteProbe.mm").read_text(encoding="utf-8")
-    assert "_state.observeResult(1, CoreSet::RouteResultGate::lowBit, w20)" in route
-    assert "_state.modeFlag && !_state.alternate" in route
+    assert "referenceActionSlotForFireSample(firingSample)" in route
+    assert "_state.modeFlag && !_state.alternate" not in route
+    assert "private struct RecoilTuning" not in aim
+    assert "Float(vertical) / 100" not in aim
+    assert "Float(horizontal) / 100" not in aim
