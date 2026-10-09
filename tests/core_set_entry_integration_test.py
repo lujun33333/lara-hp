@@ -279,6 +279,9 @@ need(swift(launcher, "launchApplication"),
      "error != CoreSetRuntimeCoordinator.userCancelledLaunchReason",
      "error != CoreSetRuntimeCoordinator.sceneEndedLaunchReason")
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
+remote_adapter_header = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.h").read_text(encoding="utf-8")
+need(remote_adapter_header,
+     "- (nullable instancetype)initWithCoreHosting:(BOOL)coreHosting")
 need(remote_adapter, "CALayerHost", "SBMainWorkspace", "mainWindowScene", "setContextId:",
      "kCoreSetCoreMenuLevel", "kCoreSetCoreIconLevel", "kCoreSetCoreDrawLevel", "RemoteCall",
      "doRemoteCallCheckedWithTimeout", '@"core-sbs-three-surface-wz-fallback-v3"',

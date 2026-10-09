@@ -14,7 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)isCoreHostingAvailable NS_SWIFT_NAME(isCoreHostingAvailable());
 // Cached results from the existing readback path; never starts another remote call.
 - (NSString *)hostingDiagnosticSnapshot;
-- (instancetype)initWithCoreHosting:(BOOL)coreHosting NS_SWIFT_NAME(init(coreHosting:));
+- (nullable instancetype)initWithCoreHosting:(BOOL)coreHosting NS_SWIFT_NAME(init(coreHosting:));
 - (instancetype)initWithRemoteCall:(RemoteCall *)remoteCall NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 - (void)prepareForHostGeneration:(uint64_t)generation;
