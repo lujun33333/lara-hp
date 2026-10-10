@@ -111,7 +111,6 @@ static NSString *CSString(id value) {
     layer.opaque = NO;
     layer.maximumDrawableCount = 3;
     layer.allowsNextDrawableTimeout = YES;
-    layer.displaySyncEnabled = NO;
     [fallback addSubview:_surfaceView];
     _renderPass = [MTLRenderPassDescriptor renderPassDescriptor];
     _renderPass.colorAttachments[0].loadAction = MTLLoadActionClear;
