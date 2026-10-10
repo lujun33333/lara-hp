@@ -96,7 +96,10 @@ class MenuClickRecoveryContract(unittest.TestCase):
         self.assertLess(deactivate.index("applicationDeactivated = true"),
                         deactivate.index("host.setApplicationActive(false)"))
         self.assertIn("applicationDeactivated = false", body(self.coordinator, "func activate()"))
-        self.assertIn("suspendActionConsumers", body(self.coordinator, "private func prepareCoreHosting("))
+        install = body(self.coordinator, "private func installSpringBoardHosting(")
+        self.assertIn("suspendActionConsumers", install)
+        self.assertLess(install.index("suspendActionConsumers"),
+                        install.index("startHosted(in:"))
         host_changed = body(self.coordinator, "private func hostChanged()")
         self.assertIn("!retainActionsForHostedInactive", host_changed)
         self.assertIn("suspendActionConsumers", host_changed)

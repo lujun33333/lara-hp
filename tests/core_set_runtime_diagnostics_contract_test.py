@@ -129,17 +129,17 @@ host = read("lara/overlay/CoreSetHUDHost.mm")
 adapter = read("lara/overlay/CoreSetRemoteHostingAdapter.mm")
 for contract in ("BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation",
                  "UIApplicationEvents", "CoreSetPendingTouchQueue"):
-    assert contract not in host
+    assert contract in host, contract
 for contract in (
-    "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
     "kCoreSetDrawLevel = 999998.0", "kCoreSetIconLevel = 1000000.0",
-    "kCoreSetMenuLevel = 999999.0", "objc_setAssociatedObject",
-    "UIApplicationProtectedDataWillBecomeUnavailable", '@"core17-local-sbs-v4"',
+    "kCoreSetMenuLevel = 999999.0", "CALayerHost", "SBMainWorkspace",
+    "mainWindowScene", "setContextId:", "RemoteCall", "remote_getClass",
+    "doRemoteCallCheckedWithTimeout", '@"ios26-springboard-calayerhost-v1"',
 ):
     assert contract in adapter, contract
-for contract in ("CALayerHost", "SBMainWorkspace", "setContextId:",
-                 "initWithCoreHosting", "isCoreHostingAvailable", "RemoteCall",
-                 "remote_getClass", "doRemoteCallCheckedWithTimeout"):
+for contract in ("SBSAccessibilityWindowHostingController",
+                 "registerWindowWithContextID:atLevel:",
+                 "initWithCoreHosting", "isCoreHostingAvailable"):
     assert contract not in adapter, contract
 
 build = read("scripts/build_ipa_pe.sh")
@@ -157,7 +157,7 @@ for missing in ("task-read-denied", "main-image-or-uuid-not-found"):
     combined = session
     assert missing in combined
     assert missing not in combined.replace(missing, "REMOVED", 1)
-assert "CALayerHost" not in adapter
+assert "CALayerHost" in adapter
 
-print("PASS: target read stages, consumer labels, truthful manifest and Core 1.7 scene/SBS diagnostics")
+print("PASS: target read stages, consumer labels, and iOS 26 CALayerHost/HID diagnostics")
 print("LIMIT: source contract only; requires a fresh device log for runtime closure")

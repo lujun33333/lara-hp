@@ -65,9 +65,21 @@ class HomeInputResponsivenessContract(unittest.TestCase):
         self.assertIn("UIControlEventTouchUpInside", self.host)
         self.assertIn("UIPanGestureRecognizer", self.host)
         self.assertIn("_menuWindow.userInteractionEnabled = YES", self.host)
-        self.assertNotIn("IOHIDEventSystemClient", self.host)
-        self.assertNotIn("BKSHID", self.host)
-        self.assertNotIn("AXEventRepresentation", self.host)
+        # Cross-application input is passive and its callback never drives UI
+        # directly. Parsed value snapshots pass through a bounded/coalescing
+        # serial queue before the main-thread ImGui dispatch.
+        for marker in ("IOHIDEventSystemClient", "BKSHID", "AXEventRepresentation",
+                       "PendingTouchQueue", "_pendingTouchSerialQueue"):
+            self.assertIn(marker, self.host)
+        callback = body(self.host, "static void CoreSetHostedHIDCallback(")
+        self.assertIn("receiveHostedHIDEvent:event", callback)
+        self.assertNotIn("dispatch_get_main_queue", callback)
+        receive = body(self.host,
+                       "- (void)receiveHostedHIDEvent:(CoreSetIOHIDEventRef)event {")
+        self.assertIn("dispatch_async(_pendingTouchSerialQueue", receive)
+        drain = body(self.host, "- (void)drainPendingTouchActionsOnQueue {")
+        self.assertIn("dispatch_async(dispatch_get_main_queue()", drain)
+        self.assertIn("coalesced-move", receive)
 
     def test_negative_mutants_fail_contract(self):
         mutants = (

@@ -1006,9 +1006,49 @@ final class CoreSetRuntimeCoordinator {
             finishGameLaunch(epoch: epoch, error: "场景已失活，已取消跨应用托管", completion: completion)
             return
         }
-        let adapter = CoreSetRemoteHostingAdapter()
+        let manager = laramgr.shared
+        if manager.rcready, let process = manager.sbProc {
+            installSpringBoardHosting(process: process, epoch: epoch, completion: completion)
+            return
+        }
+        guard !manager.rcrunning else {
+            finishGameLaunch(epoch: epoch,
+                error: "SpringBoard 远程会话正在初始化，请稍后重试", completion: completion)
+            return
+        }
+        gameLaunchStatus = "正在初始化 iOS 26 SpringBoard 托管会话"
+        NSLog("Core-SET: game launch epoch=%llu stage=springboard-rc start", epoch)
+        publishStatus()
+        manager.rcinit(process: "SpringBoard", migbypass: false) { [weak self] success in
+            guard let self, self.gameLaunchCurrent(epoch) else { return }
+            NSLog("Core-SET: game launch epoch=%llu stage=springboard-rc ready=%d",
+                  epoch, success ? 1 : 0)
+            guard success, let process = manager.sbProc else {
+                let detail = manager.rcLastError ?? "远程调用初始化失败"
+                self.finishGameLaunch(epoch: epoch,
+                    error: "SpringBoard 托管不可用：\(detail)", completion: completion)
+                return
+            }
+            self.installSpringBoardHosting(process: process, epoch: epoch,
+                                           completion: completion)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(180)) { [weak self] in
+            guard let self, self.gameLaunchCurrent(epoch), manager.rcrunning else { return }
+            self.finishGameLaunch(epoch: epoch,
+                error: "SpringBoard 远程会话初始化超时；后台任务结束前请勿重试",
+                completion: completion)
+        }
+    }
+
+    private func installSpringBoardHosting(process: RemoteCall, epoch: UInt64,
+                                           completion: @escaping (String?) -> Void) {
+        guard gameLaunchCurrent(epoch), let scene, scene.activationState == .foregroundActive else {
+            finishGameLaunch(epoch: epoch, error: "场景已失活，已取消跨应用托管", completion: completion)
+            return
+        }
+        let adapter = CoreSetRemoteHostingAdapter(remoteCall: process)
         if let reason = adapter.sessionIdentityFailureReason {
-            let detail = "Core 1.7 SBS 托管不可用：\(reason)"
+            let detail = "iOS 26 SpringBoard 镜像托管不可用：\(reason)"
             globallogger.log("Core-SET: \(detail)")
             finishGameLaunch(epoch: epoch, error: detail, completion: completion)
             return
@@ -1031,7 +1071,7 @@ final class CoreSetRuntimeCoordinator {
             }
             guard self.host.installRemoteHostingAdapter(adapter) else {
                 self.finishGameLaunch(epoch: epoch,
-                    error: "Core 1.7 SBS 适配器安装失败", completion: completion)
+                    error: "iOS 26 SpringBoard 镜像适配器安装失败", completion: completion)
                 return
             }
             self.coreHostingAdapter = adapter
@@ -1041,13 +1081,15 @@ final class CoreSetRuntimeCoordinator {
                 guard let self, self.gameLaunchCurrent(epoch) else { return }
                 guard registered else {
                     self.rollbackGameLaunch(epoch: epoch,
-                        error: "Core 1.7 本地 SBS context 注册失败", completion: completion)
+                        error: "iOS 26 三窗口镜像注册失败", completion: completion)
                     return
                 }
                 self.host.setApplicationActive(true)
                 self.hostChanged()
                 self.menu.setHostedExitAvailable(true)
-                NSLog("Core-SET: hosting mode=core17-local-sbs roles=draw,icon,menu levels=999998,1000000,999999 registered=1")
+                let inputArmed = self.host.armHostedInput()
+                NSLog("Core-SET: hosting mode=ios26-springboard-calayerhost roles=draw,icon,menu levels=999998,1000000,999999 registered=1 inputArmed=%d",
+                      inputArmed ? 1 : 0)
                 self.showHostedMenuAndOpenGame(epoch: epoch, completion: completion)
             }) else {
                 self.finishGameLaunch(epoch: epoch,
@@ -1085,7 +1127,7 @@ final class CoreSetRuntimeCoordinator {
 
     private func rollbackGameLaunch(epoch: UInt64, error: String,
                                     completion: @escaping (String?) -> Void) {
-        host.whenHostingOperationIdle { [weak self] in
+        host.whenHostedReadbackIdle { [weak self] in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
             self.host.stopHostedAsync { [weak self] result in
                 guard let self, self.gameLaunchCurrent(epoch) else { return }
@@ -1118,7 +1160,7 @@ final class CoreSetRuntimeCoordinator {
         }
         hostingCleanupFailed = false
         returnToLocalPending = true
-        host.whenHostingOperationIdle { [weak self] in
+        host.whenHostedReadbackIdle { [weak self] in
             guard let self else { return }
             self.host.stopHostedAsync { [weak self] result in
                 guard let self else { return }
