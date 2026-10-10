@@ -1638,7 +1638,7 @@ private final class CoreSetHostPresentationOwner: CoreSetMenuHostPresentationOwn
     private func colors(for palette: CoreSetFloatingPalette) -> [UIColor] {
         palette.referenceColors.map { UIColor(red: CGFloat($0.red), green: CGFloat($0.green), blue: CGFloat($0.blue), alpha: 1) }
     }
-    private func matches(_ state: State, generation: UInt64) -> Bool {
+    private func matches(_ state: CoreSetMenuHostSettings, generation: UInt64) -> Bool {
         guard host.generation == generation, host.floatingControlReady,
               host.panelVisible == state.menuVisible, let palette = state.floatingPalette else { return false }
         let expected = colors(for: palette), observed = host.observedFloatingColors
