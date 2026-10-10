@@ -1,84 +1,28 @@
 #import "CoreSetRemoteHostingAdapter.h"
-#import "../kexploit/TaskRop/RemoteCall.h"
-#import <objc/message.h>
 #import <QuartzCore/QuartzCore.h>
-#include <atomic>
+#import <objc/runtime.h>
 #include <cmath>
-#include <cstring>
+#include <dlfcn.h>
 
-static NSString *const CSHostBuildMarker = @"core17-sbs-only-v3";
+static const double kCoreSetDrawLevel = 999998.0;
+static const double kCoreSetIconLevel = 1000000.0;
+static const double kCoreSetMenuLevel = 999999.0;
+static NSString *const CSHostBuildMarker = @"core17-local-sbs-v4";
 
-static BOOL CSChecked(RemoteCall *process, const char *label, void *function,
-                      const uint64_t *arguments, NSUInteger count, uint64_t *value) {
-    if (!process || !function || !label || count > 8 || (count && !arguments)) return NO;
-    uint64_t slots[8] = {};
-    if (count) memcpy(slots, arguments, count * sizeof(uint64_t));
-    RemoteCallResult *result = [process doRemoteCallCheckedWithTimeout:10000
-        functionName:label functionPointer:function args:slots argCount:count];
-    if (!result || result.status != RemoteCallCompletionStatusCompleted ||
-        !result.returnValueValid) return NO;
-    if (value) *value = result.value;
-    return YES;
-}
-
-static BOOL CSMessage(RemoteCall *process, uint64_t object, uint64_t selector,
-                      uint64_t a0, uint64_t a1, uint64_t *value) {
-    if (!object || !selector) return NO;
-    const uint64_t args[] = {object, selector, a0, a1};
-    return CSChecked(process, "objc_msgSend", (void *)objc_msgSend, args, 4, value);
-}
-
-static uint64_t CSClass(RemoteCall *process, const char *name) {
-    return process && name ? remote_getClass(process, name) : 0;
-}
-
-static uint64_t CSSel(RemoteCall *process, const char *name) {
-    return process && name ? remote_sel(process, name) : 0;
-}
-
-static BOOL CSMainInvocation(RemoteCall *process, uint64_t target, uint64_t selector,
-                             const void *argument0, size_t length0,
-                             const void *argument1, size_t length1,
-                             uint64_t *result) {
-    if (!process || !target || !selector || length0 > 0x100 || length1 > 0x100 ||
-        process.trojanMem == 0 || process.trojanMemIsStackFallback) return NO;
-    uint64_t signature = 0, invocation = 0, value = 0;
-    const uint64_t cls = CSClass(process, "NSInvocation");
-    const uint64_t signatureSelector = CSSel(process, "methodSignatureForSelector:");
-    const uint64_t createSelector = CSSel(process, "invocationWithMethodSignature:");
-    const uint64_t setTarget = CSSel(process, "setTarget:");
-    const uint64_t setSelector = CSSel(process, "setSelector:");
-    const uint64_t setArgument = CSSel(process, "setArgument:atIndex:");
-    const uint64_t performMain = CSSel(process, "performSelectorOnMainThread:withObject:waitUntilDone:");
-    const uint64_t invoke = CSSel(process, "invoke");
-    const uint64_t getReturn = CSSel(process, "getReturnValue:");
-    if (!cls || !signatureSelector || !createSelector || !setTarget || !setSelector ||
-        !setArgument || !performMain || !invoke || !getReturn ||
-        !CSMessage(process, target, signatureSelector, selector, 0, &signature) || !signature ||
-        !CSMessage(process, cls, createSelector, signature, 0, &invocation) || !invocation ||
-        !CSMessage(process, invocation, setTarget, target, 0, nullptr) ||
-        !CSMessage(process, invocation, setSelector, selector, 0, nullptr)) return NO;
-    if (argument0 && length0) {
-        const uint64_t slot = process.trojanMem + 0x800;
-        if (![process remote_write:slot from:argument0 size:length0] ||
-            !CSMessage(process, invocation, setArgument, slot, 2, nullptr)) return NO;
+static Class CSAccessibilityHostingClass(void) {
+    Class cls = NSClassFromString(@"SBSAccessibilityWindowHostingController");
+    if (cls) return cls;
+    static void *accessibilityUtilities;
+    static void *springBoardServices;
+    @synchronized (NSBundle.class) {
+        if (!accessibilityUtilities) accessibilityUtilities = dlopen(
+            "/System/Library/PrivateFrameworks/AccessibilityUtilities.framework/AccessibilityUtilities",
+            RTLD_LAZY | RTLD_LOCAL);
+        if (!springBoardServices) springBoardServices = dlopen(
+            "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices",
+            RTLD_LAZY | RTLD_LOCAL);
     }
-    if (argument1 && length1) {
-        const uint64_t slot = process.trojanMem + 0xa00;
-        if (![process remote_write:slot from:argument1 size:length1] ||
-            !CSMessage(process, invocation, setArgument, slot, 3, nullptr)) return NO;
-    }
-    const uint64_t dispatch[] = {invocation, performMain, invoke, 0, 1};
-    if (!CSChecked(process, "main-thread invoke", (void *)objc_msgSend,
-                   dispatch, 5, nullptr)) return NO;
-    if (!result) return YES;
-    const uint64_t returnSlot = process.trojanMem + 0xc00;
-    uint64_t zero = 0;
-    if (![process remote_write:returnSlot from:&zero size:sizeof(zero)] ||
-        !CSMessage(process, invocation, getReturn, returnSlot, 0, nullptr) ||
-        ![process remoteRead:returnSlot to:&value size:sizeof(value)]) return NO;
-    *result = value;
-    return YES;
+    return NSClassFromString(@"SBSAccessibilityWindowHostingController");
 }
 
 static uint32_t CSContext(UIWindow *window) {
@@ -102,115 +46,188 @@ static uint32_t CSContext(UIWindow *window) {
     }
     @try {
         id value = [window.layer valueForKey:@"contextId"];
-        if ([value respondsToSelector:@selector(unsignedIntValue)]) {
+        if ([value respondsToSelector:@selector(unsignedIntValue)])
             context = [value unsignedIntValue];
-        }
     } @catch (__unused NSException *exception) {
         context = 0;
     }
     return context;
 }
 
-@interface CoreSetRemoteHostSide : NSObject
+static NSInvocation *CSHostingInvocation(id target, SEL selector, uint32_t context,
+                                         const double *level) {
+    if (!target || !selector || ![target respondsToSelector:selector]) return nil;
+    NSMethodSignature *signature = [target methodSignatureForSelector:selector];
+    const NSUInteger argumentCount = level ? 4 : 3;
+    if (!signature || signature.numberOfArguments < argumentCount) return nil;
+    NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
+    invocation.target = target;
+    invocation.selector = selector;
+    [invocation setArgument:&context atIndex:2];
+    if (level) [invocation setArgument:(void *)level atIndex:3];
+    [invocation retainArguments];
+    return invocation;
+}
+
+@interface CoreSetLocalHostSide : NSObject
 @property(nonatomic, weak) UIWindow *source;
 @property(nonatomic) uint32_t context;
 @property(nonatomic) double level;
+@property(nonatomic, strong) id controller;
+@property(nonatomic) SEL associationKey;
+@property(nonatomic) SEL lockInvocationKey;
+@property(nonatomic) SEL unlockInvocationKey;
 @property(nonatomic, copy) NSString *role;
-@property(nonatomic) uint64_t controller;
 @property(nonatomic) BOOL registered;
 @end
-@implementation CoreSetRemoteHostSide @end
+@implementation CoreSetLocalHostSide @end
 
 @implementation CoreSetRemoteHostingAdapter {
-    RemoteCall *_process;
-    CoreSetRemoteHostSide *_menu;
-    CoreSetRemoteHostSide *_icon;
-    CoreSetRemoteHostSide *_draw;
+    CoreSetLocalHostSide *_draw;
+    CoreSetLocalHostSide *_icon;
+    CoreSetLocalHostSide *_menu;
     uint64_t _hostGeneration;
-    pid_t _pid;
     BOOL _busy;
-    dispatch_queue_t _queue;
-    std::atomic_bool _cancelled;
 }
 
-- (instancetype)initWithRemoteCall:(RemoteCall *)remoteCall {
-    if ((self = [super init])) {
-        _process = remoteCall;
-        _pid = remoteCall.pid;
-        _queue = dispatch_queue_create("core-set.v17-sbs-host", DISPATCH_QUEUE_SERIAL);
-        _cancelled.store(false);
-    }
-    return self;
-}
-
+- (instancetype)init { return [super init]; }
 - (uint64_t)hostGeneration { return _hostGeneration; }
 - (BOOL)cleanupPending { return _busy; }
 - (BOOL)sessionIdentityReady {
-    return _process && _pid > 0 && _process.pid == _pid && _process.trojanMem != 0 &&
-        !_process.trojanMemIsStackFallback;
+    Class cls = CSAccessibilityHostingClass();
+    return cls && [cls instancesRespondToSelector:
+        NSSelectorFromString(@"registerWindowWithContextID:atLevel:")] &&
+        [cls instancesRespondToSelector:
+        NSSelectorFromString(@"unregisterWindowWithContextID:")];
 }
 - (NSString *)sessionIdentityFailureReason {
-    return self.sessionIdentityReady ? nil : @"SpringBoard RemoteCall session unavailable";
+    return self.sessionIdentityReady ? nil : @"应用进程无法解析 Core SBS 托管类或注册 selector";
 }
 - (NSString *)hostingDiagnosticSnapshot {
-    return [NSString stringWithFormat:@"mode=core17-springboard-sbs build=%@ pid=%d draw=%d icon=%d menu=%d generation=%llu",
-        CSHostBuildMarker, _pid, _draw.registered, _icon.registered, _menu.registered,
+    return [NSString stringWithFormat:
+        @"mode=core17-local-sbs build=%@ draw=%d icon=%d menu=%d generation=%llu",
+        CSHostBuildMarker, _draw.registered, _icon.registered, _menu.registered,
         (unsigned long long)_hostGeneration];
 }
 - (BOOL)localSurfacesStillPublished {
-    return NSThread.isMainThread && !_busy && _draw.registered && _icon.registered && _menu.registered &&
-        _draw.source && _icon.source && _menu.source &&
-        CSContext(_draw.source) == _draw.context &&
-        CSContext(_icon.source) == _icon.context &&
-        CSContext(_menu.source) == _menu.context;
+    if (!NSThread.isMainThread || _busy || !_draw.registered || !_icon.registered ||
+        !_menu.registered) return NO;
+    UIApplication *application = UIApplication.sharedApplication;
+    for (CoreSetLocalHostSide *side in @[_draw, _icon, _menu]) {
+        if (!side.source || CSContext(side.source) != side.context ||
+            objc_getAssociatedObject(application, side.associationKey) != side.controller)
+            return NO;
+    }
+    return YES;
 }
 - (void)prepareForHostGeneration:(uint64_t)generation {
     if (NSThread.isMainThread && generation) _hostGeneration = generation;
 }
 
-- (BOOL)registerSide:(CoreSetRemoteHostSide *)side {
-    if (_cancelled.load() || !self.sessionIdentityReady || !side.context ||
-        !std::isfinite(side.level)) return NO;
-    const uint64_t cls = CSClass(_process, "SBSAccessibilityWindowHostingController");
-    const uint64_t alloc = CSSel(_process, "alloc");
-    const uint64_t init = CSSel(_process, "init");
-    const uint64_t registerSelector = CSSel(_process, "registerWindowWithContextID:atLevel:");
-    NSLog(@"Core-SET: core17-sbs build=%@ stage=remote-class pid=%d role=%@ context=%u class=%llu selector=%llu",
-          CSHostBuildMarker, _pid, side.role, side.context, cls, registerSelector);
-    uint64_t controller = 0, initialized = 0;
-    if (!cls || !alloc || !init || !registerSelector ||
-        !CSMessage(_process, cls, alloc, 0, 0, &controller) || !controller ||
-        !CSMessage(_process, controller, init, 0, 0, &initialized) || !initialized) return NO;
-    side.controller = initialized;
-    const uint32_t context = side.context;
-    const double level = side.level;
-    if (!CSMainInvocation(_process, initialized, registerSelector,
-                          &context, sizeof(context),
-                          &level, sizeof(level), nullptr)) return NO;
-    side.registered = YES;
-    NSLog(@"Core-SET: core17-sbs build=%@ stage=remote-registered pid=%d role=%@ context=%u level=%.0f",
-          CSHostBuildMarker, _pid, side.role, context, level);
+- (BOOL)registerSide:(CoreSetLocalHostSide *)side {
+    Class cls = CSAccessibilityHostingClass();
+    SEL selector = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
+    if (!cls || !side.context || !std::isfinite(side.level) || !side.associationKey ||
+        ![cls instancesRespondToSelector:selector]) return NO;
+    id controller = [[cls alloc] init];
+    if (!controller) return NO;
+    side.controller = controller;
+    double level = side.level;
+    NSInvocation *invocation = CSHostingInvocation(controller, selector, side.context, &level);
+    if (!invocation) return NO;
+    @try {
+        [invocation invoke];
+        objc_setAssociatedObject(UIApplication.sharedApplication, side.associationKey,
+                                 controller, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } @catch (__unused NSException *exception) {
+        return NO;
+    }
+    side.registered = objc_getAssociatedObject(UIApplication.sharedApplication,
+                                                side.associationKey) == controller;
+    NSLog(@"Core-SET: core17-local-sbs build=%@ stage=registered role=%@ context=%u level=%.0f",
+          CSHostBuildMarker, side.role, side.context, side.level);
+    return side.registered;
+}
+
+- (BOOL)removeLifecycleForSides:(NSArray<CoreSetLocalHostSide *> *)sides {
+    UIApplication *application = UIApplication.sharedApplication;
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    @try {
+        for (NSUInteger phase = 0; phase < 2; phase++) {
+            for (CoreSetLocalHostSide *side in sides) {
+                SEL key = phase == 0 ? side.lockInvocationKey : side.unlockInvocationKey;
+                id invocation = key ? objc_getAssociatedObject(application, key) : nil;
+                if (invocation) [center removeObserver:invocation];
+                if (key) objc_setAssociatedObject(application, key, nil,
+                                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                if (key && objc_getAssociatedObject(application, key)) return NO;
+            }
+        }
+    } @catch (__unused NSException *exception) {
+        return NO;
+    }
     return YES;
 }
 
-- (BOOL)removeSide:(CoreSetRemoteHostSide *)side {
-    if (!side || !side.controller) return YES;
-    const uint64_t unregisterSelector = CSSel(_process, "unregisterWindowWithContextID:");
-    const uint64_t releaseSelector = CSSel(_process, "release");
-    const uint32_t context = side.context;
-    const BOOL unregistered = !side.registered || (unregisterSelector && context &&
-        CSMainInvocation(_process, side.controller, unregisterSelector,
-                         &context, sizeof(context), nullptr, 0, nullptr));
-    const BOOL released = unregistered && releaseSelector &&
-        CSMainInvocation(_process, side.controller, releaseSelector,
-                         nullptr, 0, nullptr, 0, nullptr);
-    if (released) {
-        side.controller = 0;
-        side.context = 0;
-        side.registered = NO;
-        side.source = nil;
+- (BOOL)installLifecycleForSides:(NSArray<CoreSetLocalHostSide *> *)sides {
+    SEL unregisterSelector = NSSelectorFromString(@"unregisterWindowWithContextID:");
+    SEL registerSelector = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
+    UIApplication *application = UIApplication.sharedApplication;
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    NSMutableArray<NSInvocation *> *locks = [NSMutableArray arrayWithCapacity:3];
+    NSMutableArray<NSInvocation *> *unlocks = [NSMutableArray arrayWithCapacity:3];
+    if (![self removeLifecycleForSides:sides]) return NO;
+    @try {
+        for (CoreSetLocalHostSide *side in sides) {
+            double level = side.level;
+            NSInvocation *lock = CSHostingInvocation(side.controller, unregisterSelector,
+                                                     side.context, nullptr);
+            NSInvocation *unlock = CSHostingInvocation(side.controller, registerSelector,
+                                                       side.context, &level);
+            if (!lock || !unlock || !side.lockInvocationKey || !side.unlockInvocationKey)
+                return NO;
+            objc_setAssociatedObject(application, side.lockInvocationKey, lock,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(application, side.unlockInvocationKey, unlock,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [locks addObject:lock]; [unlocks addObject:unlock];
+        }
+        for (NSInvocation *invocation in locks)
+            [center addObserver:invocation selector:@selector(invoke)
+                           name:UIApplicationProtectedDataWillBecomeUnavailable object:nil];
+        for (NSInvocation *invocation in unlocks)
+            [center addObserver:invocation selector:@selector(invoke)
+                           name:UIApplicationProtectedDataDidBecomeAvailable object:nil];
+    } @catch (__unused NSException *exception) {
+        (void)[self removeLifecycleForSides:sides];
+        return NO;
     }
-    return released;
+    return YES;
+}
+
+- (BOOL)removeSide:(CoreSetLocalHostSide *)side {
+    if (!side) return YES;
+    UIApplication *application = UIApplication.sharedApplication;
+    id associated = side.associationKey
+        ? objc_getAssociatedObject(application, side.associationKey) : nil;
+    if (associated && associated != side.controller) return NO;
+    id controller = associated ?: side.controller;
+    @try {
+        SEL selector = NSSelectorFromString(@"unregisterWindowWithContextID:");
+        NSInvocation *invocation = CSHostingInvocation(controller, selector,
+                                                       side.context, nullptr);
+        if (side.registered && !invocation) return NO;
+        if (invocation) [invocation invoke];
+        if (side.associationKey)
+            objc_setAssociatedObject(application, side.associationKey, nil,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } @catch (__unused NSException *exception) {
+        return NO;
+    }
+    if (side.associationKey && objc_getAssociatedObject(application, side.associationKey))
+        return NO;
+    side.controller = nil; side.registered = NO; side.source = nil; side.context = 0;
+    return YES;
 }
 
 - (void)registerThreeSurfacesAsync:(UIWindow *)menuWindow iconWindow:(UIWindow *)iconWindow
@@ -218,79 +235,84 @@ static uint32_t CSContext(UIWindow *window) {
                          completion:(void (^)(BOOL, uint64_t))completion {
     if (!completion) return;
     const uint64_t generation = _hostGeneration;
-    if (!NSThread.isMainThread || _busy || _menu || _icon || _draw || !generation ||
-        !menuWindow || !iconWindow || !drawWindow || !self.sessionIdentityReady) {
+    if (!NSThread.isMainThread || _busy || _draw || _icon || _menu || !generation ||
+        !drawWindow || !iconWindow || !menuWindow || !self.sessionIdentityReady) {
         dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, generation); });
         return;
     }
-    CoreSetRemoteHostSide *menu = [CoreSetRemoteHostSide new];
-    CoreSetRemoteHostSide *icon = [CoreSetRemoteHostSide new];
-    CoreSetRemoteHostSide *draw = [CoreSetRemoteHostSide new];
+    CoreSetLocalHostSide *draw = [CoreSetLocalHostSide new];
+    CoreSetLocalHostSide *icon = [CoreSetLocalHostSide new];
+    CoreSetLocalHostSide *menu = [CoreSetLocalHostSide new];
     [CATransaction flush];
-    draw.source = drawWindow; draw.context = CSContext(drawWindow); draw.level = 999998.0;
+    draw.source = drawWindow; draw.context = CSContext(drawWindow); draw.level = kCoreSetDrawLevel;
     draw.role = @"darkswordOverlayDrawHostController";
-    icon.source = iconWindow; icon.context = CSContext(iconWindow); icon.level = 1000000.0;
+    draw.associationKey = NSSelectorFromString(@"darkswordOverlayDrawHostController");
+    draw.lockInvocationKey = NSSelectorFromString(@"darkswordOverlayDrawLockInvocation");
+    draw.unlockInvocationKey = NSSelectorFromString(@"darkswordOverlayDrawUnlockInvocation");
+    icon.source = iconWindow; icon.context = CSContext(iconWindow); icon.level = kCoreSetIconLevel;
     icon.role = @"darkswordOverlayIconHostController";
-    menu.source = menuWindow; menu.context = CSContext(menuWindow); menu.level = 999999.0;
+    icon.associationKey = NSSelectorFromString(@"darkswordOverlayIconHostController");
+    icon.lockInvocationKey = NSSelectorFromString(@"darkswordOverlayIconLockInvocation");
+    icon.unlockInvocationKey = NSSelectorFromString(@"darkswordOverlayIconUnlockInvocation");
+    menu.source = menuWindow; menu.context = CSContext(menuWindow); menu.level = kCoreSetMenuLevel;
     menu.role = @"darkswordOverlayMenuHostController";
-    NSLog(@"Core-SET: core17-sbs build=%@ stage=context-capture draw=%u icon=%u menu=%u",
+    menu.associationKey = NSSelectorFromString(@"darkswordOverlayMenuHostController");
+    menu.lockInvocationKey = NSSelectorFromString(@"darkswordOverlayMenuLockInvocation");
+    menu.unlockInvocationKey = NSSelectorFromString(@"darkswordOverlayMenuUnlockInvocation");
+    NSLog(@"Core-SET: core17-local-sbs build=%@ stage=context-capture draw=%u icon=%u menu=%u",
           CSHostBuildMarker, draw.context, icon.context, menu.context);
-    if (!draw.context || !icon.context || !menu.context ||
-        draw.context == icon.context || draw.context == menu.context || icon.context == menu.context) {
+    if (!draw.context || !icon.context || !menu.context || draw.context == icon.context ||
+        draw.context == menu.context || icon.context == menu.context) {
         dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, generation); });
         return;
     }
-    _menu = menu; _icon = icon; _draw = draw; _busy = YES; _cancelled.store(false);
-    dispatch_async(_queue, ^{
-        BOOL ok = NO;
-        @synchronized (self->_process) {
-            const BOOL drawReady = [self registerSide:draw];
-            const BOOL iconReady = drawReady && [self registerSide:icon];
-            const BOOL menuReady = iconReady && [self registerSide:menu];
-            ok = drawReady && iconReady && menuReady;
-            if (!ok) {
-                (void)[self removeSide:menu];
-                (void)[self removeSide:icon];
-                (void)[self removeSide:draw];
-            }
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self->_busy = NO;
-            const BOOL current = ok && !self->_cancelled.load() &&
-                self->_hostGeneration == generation && self->_draw == draw &&
-                self->_icon == icon && self->_menu == menu;
-            completion(current, generation);
-        });
-    });
+    _draw = draw; _icon = icon; _menu = menu; _busy = YES;
+    const BOOL drawReady = [self registerSide:draw];
+    const BOOL iconReady = drawReady && [self registerSide:icon];
+    const BOOL menuReady = iconReady && [self registerSide:menu];
+    NSArray *sides = @[draw, icon, menu];
+    const BOOL lifecycleReady = drawReady && iconReady && menuReady &&
+        [self installLifecycleForSides:sides];
+    _busy = NO;
+    const BOOL ready = lifecycleReady && self.localSurfacesStillPublished;
+    if (!ready) {
+        _busy = YES;
+        (void)[self removeLifecycleForSides:sides];
+        (void)[self removeSide:draw];
+        (void)[self removeSide:icon];
+        (void)[self removeSide:menu];
+        _draw = nil; _icon = nil; _menu = nil; _busy = NO;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{ completion(ready, generation); });
 }
 
 - (void)unregisterThreeSurfacesAsync:(UIWindow *)menuWindow iconWindow:(UIWindow *)iconWindow
                            drawWindow:(UIWindow *)drawWindow
                            completion:(void (^)(BOOL, BOOL, BOOL))completion {
     if (!completion) return;
-    if (!NSThread.isMainThread || _busy || (_menu.source && _menu.source != menuWindow) ||
-        (_icon.source && _icon.source != iconWindow) || (_draw.source && _draw.source != drawWindow)) {
+    if (!NSThread.isMainThread || _busy || (_draw.source && _draw.source != drawWindow) ||
+        (_icon.source && _icon.source != iconWindow) || (_menu.source && _menu.source != menuWindow)) {
         dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, NO, NO); });
         return;
     }
-    _busy = YES; _cancelled.store(true);
-    CoreSetRemoteHostSide *menu = _menu;
-    CoreSetRemoteHostSide *icon = _icon;
-    CoreSetRemoteHostSide *draw = _draw;
-    dispatch_async(_queue, ^{
-        BOOL drawRemoved = NO, iconRemoved = NO, menuRemoved = NO;
-        @synchronized (self->_process) {
-            drawRemoved = [self removeSide:draw];
-            iconRemoved = [self removeSide:icon];
-            menuRemoved = [self removeSide:menu];
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self->_busy = NO;
-            if (drawRemoved) self->_draw = nil;
-            if (iconRemoved) self->_icon = nil;
-            if (menuRemoved) self->_menu = nil;
-            completion(menuRemoved, iconRemoved, drawRemoved);
-        });
+    _busy = YES;
+    CoreSetLocalHostSide *draw = _draw;
+    CoreSetLocalHostSide *icon = _icon;
+    CoreSetLocalHostSide *menu = _menu;
+    NSMutableArray *sides = [NSMutableArray arrayWithCapacity:3];
+    if (draw) [sides addObject:draw];
+    if (icon) [sides addObject:icon];
+    if (menu) [sides addObject:menu];
+    const BOOL lifecycleRemoved = [self removeLifecycleForSides:sides];
+    const BOOL drawRemoved = lifecycleRemoved && [self removeSide:draw];
+    const BOOL iconRemoved = lifecycleRemoved && [self removeSide:icon];
+    const BOOL menuRemoved = lifecycleRemoved && [self removeSide:menu];
+    if (drawRemoved) _draw = nil;
+    if (iconRemoved) _icon = nil;
+    if (menuRemoved) _menu = nil;
+    _busy = NO;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        completion(menuRemoved, iconRemoved, drawRemoved);
     });
 }
 @end

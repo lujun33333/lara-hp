@@ -127,22 +127,20 @@ for result in ("applied", "notApplied:", "unavailable:", "failed:"):
 
 host = read("lara/overlay/CoreSetHUDHost.mm")
 adapter = read("lara/overlay/CoreSetRemoteHostingAdapter.mm")
-scenes = read("lara/overlay/CoreSetFloatingSceneManager.mm")
 for contract in ("BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation",
                  "UIApplicationEvents", "CoreSetPendingTouchQueue"):
     assert contract not in host
 for contract in (
     "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
-    "draw.level = 999998.0", "icon.level = 1000000.0",
-    "menu.level = 999999.0", "RemoteCall", "remote_getClass",
-    "doRemoteCallCheckedWithTimeout", '@"core17-sbs-only-v3"',
+    "kCoreSetDrawLevel = 999998.0", "kCoreSetIconLevel = 1000000.0",
+    "kCoreSetMenuLevel = 999999.0", "objc_setAssociatedObject",
+    "UIApplicationProtectedDataWillBecomeUnavailable", '@"core17-local-sbs-v4"',
 ):
     assert contract in adapter, contract
 for contract in ("CALayerHost", "SBMainWorkspace", "setContextId:",
-                 "initWithCoreHosting", "isCoreHostingAvailable"):
+                 "initWithCoreHosting", "isCoreHostingAvailable", "RemoteCall",
+                 "remote_getClass", "doRemoteCallCheckedWithTimeout"):
     assert contract not in adapter, contract
-for contract in ("FBSceneManager", "-touchFloating", "-noTouchFloating"):
-    assert contract in scenes, contract
 
 build = read("scripts/build_ipa_pe.sh")
 for contract in (

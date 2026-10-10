@@ -85,24 +85,24 @@ class MenuClickRecoveryContract(unittest.TestCase):
     def test_valid_remote_host_retains_channels_but_local_teardown_still_stops(self):
         deactivate = body(self.coordinator, "func deactivate()")
         retained = deactivate[:deactivate.index("aimSuspendedForHost = true")]
-        for gate in ("guard !stopping, !applicationDeactivated", "remoteHostingAdapter != nil",
-                     "!returnToLocalPending", "!exitHUDRestorationPending", "!remoteCleanupFailed"):
+        for gate in ("guard !stopping, !applicationDeactivated", "coreHostingAdapter != nil",
+                     "!returnToLocalPending", "!exitHUDRestorationPending", "!hostingCleanupFailed"):
             self.assertIn(gate, retained)
         self.assertIn("host.setApplicationActive(false)", retained)
-        self.assertIn("deactivate-remote-retained", retained)
+        self.assertIn("deactivate-core-retained", retained)
         self.assertIn("return", retained)
         self.assertNotIn("suspendActionConsumers", retained)
         self.assertIn("menu.suspendActionConsumers", deactivate)
         self.assertLess(deactivate.index("applicationDeactivated = true"),
                         deactivate.index("host.setApplicationActive(false)"))
         self.assertIn("applicationDeactivated = false", body(self.coordinator, "func activate()"))
-        self.assertIn("suspendActionConsumers", body(self.coordinator, "private func rebuildHostedWindows("))
+        self.assertIn("suspendActionConsumers", body(self.coordinator, "private func prepareCoreHosting("))
         host_changed = body(self.coordinator, "private func hostChanged()")
-        self.assertIn("!retainActionsForRemoteInactive", host_changed)
+        self.assertIn("!retainActionsForHostedInactive", host_changed)
         self.assertIn("suspendActionConsumers", host_changed)
-        retention = body(self.coordinator, "private var retainActionsForRemoteInactive:")
-        for gate in ("applicationDeactivated", "remoteHostingAdapter != nil", "!returnToLocalPending",
-                     "!exitHUDRestorationPending", "!remoteCleanupFailed"):
+        retention = body(self.coordinator, "private var retainActionsForHostedInactive:")
+        for gate in ("applicationDeactivated", "coreHostingAdapter != nil", "!returnToLocalPending",
+                     "!exitHUDRestorationPending", "!hostingCleanupFailed"):
             self.assertIn(gate, retention)
 
     def test_host_visibility_is_owned_snapshot_replay_not_generic_feature_channel(self):

@@ -258,21 +258,20 @@ assert launch.index("axDeviceSupportStatus()") < launch.index("init_offsets()") 
 kernel_offsets = swift(coordinator, "prepareKernelOffsets")
 need(kernel_offsets, "fetchkcache(action: action)",
      "fetched && !action.isCancellationRequested && dlkcache()",
-     "manager.hasOffsets = validated", "prepareSpringBoardHosting", ".seconds(180)")
-assert kernel_offsets.index("fetchkcache(action: action)") < kernel_offsets.index("fetched && !action.isCancellationRequested && dlkcache()") < kernel_offsets.index("manager.hasOffsets = validated") < kernel_offsets.index("guard validated else") < kernel_offsets.rindex("prepareSpringBoardHosting")
-need(coordinator, 'rcinit(process: "SpringBoard"', "rebuildHostedWindows(process:")
-remote = swift(coordinator, "rebuildHostedWindows")
-need(remote, "CoreSetRemoteHostingAdapter(remoteCall: process)",
-     "CoreSetFloatingSceneManager.shared().createScenes",
+     "manager.hasOffsets = validated", "prepareCoreHosting", ".seconds(180)")
+assert kernel_offsets.index("fetchkcache(action: action)") < kernel_offsets.index("fetched && !action.isCancellationRequested && dlkcache()") < kernel_offsets.index("manager.hasOffsets = validated") < kernel_offsets.index("guard validated else") < kernel_offsets.rindex("prepareCoreHosting")
+core_host = swift(coordinator, "prepareCoreHosting")
+need(core_host, "CoreSetRemoteHostingAdapter()",
      "if self.host.localSurfacesReady", "let stopped = self.host.stop()",
      "guard stopped.complete.boolValue else",
      "host.installRemoteHostingAdapter(adapter)",
-     "host.startHosted(menuScene: touchScene, drawScene: drawScene",
-     "hosting mode=core17-springboard-sbs")
-assert remote.index("let stopped = self.host.stop()") < remote.index("host.installRemoteHostingAdapter(adapter)")
-assert remote.index("host.installRemoteHostingAdapter(adapter)") < remote.index("host.startHosted(menuScene: touchScene")
+     "host.startHosted(in: scene, menuController:",
+     "hosting mode=core17-local-sbs")
+assert core_host.index("let stopped = self.host.stop()") < core_host.index("host.installRemoteHostingAdapter(adapter)")
+assert core_host.index("host.installRemoteHostingAdapter(adapter)") < core_host.index("host.startHosted(in: scene")
 for forbidden in ("host.attach(adapter)", "verifyHostedWindows", "confirmHostedReadbackAsync",
-                  "wz-springboard-mirror", "prepareCoreHosting"):
+                  "wz-springboard-mirror", 'rcinit(process: "SpringBoard"',
+                  "rebuildHostedWindows(process:", "CoreSetFloatingSceneManager"):
     assert forbidden not in coordinator, forbidden
 action_stop = swift(menu, "suspendActionConsumers")
 need(action_stop, "stop(\\.aim)", "stop(\\.recoil)", "group.notify(queue: .main)")
@@ -283,18 +282,19 @@ for forbidden in ("BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation",
     assert forbidden not in host, forbidden
 remote_adapter = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.mm").read_text(encoding="utf-8")
 remote_adapter_header = (ROOT / "lara/overlay/CoreSetRemoteHostingAdapter.h").read_text(encoding="utf-8")
-need(remote_adapter_header,
-     "initWithRemoteCall:(RemoteCall *)remoteCall")
+need(remote_adapter_header, "- (instancetype)init NS_DESIGNATED_INITIALIZER")
 need(remote_adapter, "SBSAccessibilityWindowHostingController",
      "registerWindowWithContextID:atLevel:", "unregisterWindowWithContextID:",
-     "draw.level = 999998.0",
-     "icon.level = 1000000.0", "menu.level = 999999.0",
+     "kCoreSetDrawLevel = 999998.0", "kCoreSetIconLevel = 1000000.0",
+     "kCoreSetMenuLevel = 999999.0",
      "darkswordOverlayDrawHostController", "darkswordOverlayIconHostController",
      "darkswordOverlayMenuHostController",
-     "RemoteCall", "doRemoteCallCheckedWithTimeout:10000",
-     '@"core17-sbs-only-v3"')
+     "UIApplicationProtectedDataWillBecomeUnavailable",
+     "UIApplicationProtectedDataDidBecomeAvailable",
+     "objc_setAssociatedObject", '@"core17-local-sbs-v4"')
 for forbidden in ("CALayerHost", "SBMainWorkspace", "setContextId:",
-                  "initWithCoreHosting", "isCoreHostingAvailable"):
+                  "initWithCoreHosting", "isCoreHostingAvailable", "RemoteCall",
+                  "remote_getClass", "doRemoteCallCheckedWithTimeout"):
     assert forbidden not in remote_adapter + remote_adapter_header, forbidden
 open_game = swift(coordinator, "showHostedMenuAndOpenGame")
 need(open_game, "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication")

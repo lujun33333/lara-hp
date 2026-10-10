@@ -2,6 +2,7 @@
 
 from hashlib import sha256
 from pathlib import Path
+import plistlib
 import struct
 import zipfile
 
@@ -10,7 +11,9 @@ read = lambda name: (ROOT / name).read_text(encoding="utf-8")
 REFERENCE_IPA = ROOT.parent / "源码 - 和平" / "自签Core-SET和平-v1.7.ipa"
 with zipfile.ZipFile(REFERENCE_IPA) as archive:
     reference_image = archive.read("Payload/Core.app/Core")
+    reference_info = plistlib.loads(archive.read("Payload/Core.app/Info.plist"))
 assert sha256(reference_image).hexdigest() == "c842be92434b88b4d535d0d10a30ace068ce6b9a7b9a97ec5a6ca8fd97fa3dd5"
+assert reference_info["UIApplicationSceneManifest"]["UIApplicationSupportsMultipleScenes"] is False
 assert reference_image[0x7401CB:0x7401CB + 40].startswith(b"SBSAccessibilityWindowHostingController\0")
 assert reference_image[0x7401F3:0x7401F3 + 43].startswith(b"registerWindowWithContextID:atLevel:\0")
 assert struct.unpack_from("<d", reference_image, 0x8A3A40)[0] == 999998.0
@@ -50,10 +53,10 @@ for forbidden in (
     b"BKSHIDEventRegisterEventCallback", b"IOHIDEventSystemClient",
     b"AXEventRepresentation", b"UIApplicationEvents",
     b"CALayerHost", b"SBMainWorkspace", b"setContextId:",
+    b"FBSceneManager", b"-touchFloating", b"-noTouchFloating",
 ):
     assert forbidden not in reference_image, forbidden
 
-manager = read("lara/overlay/CoreSetFloatingSceneManager.mm")
 adapter = read("lara/overlay/CoreSetRemoteHostingAdapter.mm")
 host = read("lara/overlay/CoreSetHUDHost.mm")
 owner = read("lara/views/app/CoreSetRuntimeCoordinator.swift")
@@ -79,53 +82,36 @@ metal = read("lara/overlay/CoreSetMetalRenderAdapter.mm")
 imgui = read("lara/third_party/imgui/imgui.h")
 imgui_surface = read("lara/overlay/CoreSetImGuiMenuSurface.mm")
 
-for token in (
-    'CSClassObject(@"FBSceneManager")',
-    'CSClassObject(@"FBSMutableSceneDefinition")',
-    'CSClassObject(@"FBSSceneIdentity")',
-    'CSClassObject(@"FBSSceneClientIdentity")',
-    'CSClassObject(@"UIApplicationSceneSpecification")',
-    'CSClassObject(@"FBSMutableSceneParameters")',
-    'CSClassObject(@"UIMutableApplicationSceneSettings")',
-    'CSClassObject(@"UIRootWindowScenePresentationBinder")',
-    '@"-touchFloating"', '@"-noTouchFloating"',
-    '@"setLevel:", 1', '@"setForeground:", YES',
-    '@"setInterruptionPolicy:", 1',
-    '@"setDeviceOrientationEventsEnabled:", YES',
-    '@"setInterfaceOrientation:", UIInterfaceOrientationPortrait',
-    '@"setStatusBarStyle:", 0',
-    'binderAllocation, binderInit, 0, displayConfiguration',
-):
-    assert token in manager, token
-
-assert "<true/>" in plist[plist.index("UIApplicationSupportsMultipleScenes"):]
-for token in (
-    "CoreSetFloatingSceneManager.isFloating(identifier:",
-    "configuration.delegateClass = CoreSetFloatingSceneDelegate.self",
-    "CoreSetFloatingSceneManager.shared().connect(",
-    "CoreSetFloatingSceneManager.shared().disconnect(scene:",
-):
-    assert token in app, token
+assert "<false/>" in plist[plist.index("UIApplicationSupportsMultipleScenes"):]
+assert "CoreSetFloatingSceneManager" not in app + project
 
 for token in (
-    'CSClass(_process, "SBSAccessibilityWindowHostingController")',
-    'CSSel(_process, "registerWindowWithContextID:atLevel:")',
-    'CSSel(_process, "unregisterWindowWithContextID:")',
-    "draw.level = 999998.0", "icon.level = 1000000.0",
-    "menu.level = 999999.0", "drawReady && iconReady && menuReady",
+    'NSClassFromString(@"SBSAccessibilityWindowHostingController")',
+    'NSSelectorFromString(@"registerWindowWithContextID:atLevel:")',
+    'NSSelectorFromString(@"unregisterWindowWithContextID:")',
+    "kCoreSetDrawLevel = 999998.0", "kCoreSetIconLevel = 1000000.0",
+    "kCoreSetMenuLevel = 999999.0", "drawReady && iconReady && menuReady",
     '@"darkswordOverlayDrawHostController"',
     '@"darkswordOverlayIconHostController"',
     '@"darkswordOverlayMenuHostController"',
-    "RemoteCall *_process", "remote_getClass(process, name)",
-    "doRemoteCallCheckedWithTimeout:10000",
+    '@"darkswordOverlayDrawLockInvocation"',
+    '@"darkswordOverlayIconLockInvocation"',
+    '@"darkswordOverlayMenuLockInvocation"',
+    '@"darkswordOverlayDrawUnlockInvocation"',
+    '@"darkswordOverlayIconUnlockInvocation"',
+    '@"darkswordOverlayMenuUnlockInvocation"',
+    "objc_setAssociatedObject", "objc_getAssociatedObject",
+    "UIApplicationProtectedDataWillBecomeUnavailable",
+    "UIApplicationProtectedDataDidBecomeAvailable",
     'NSSelectorFromString(@"_contextId")', '[window.layer valueForKey:@"contextId"]',
     "stage=context-capture draw=%u icon=%u menu=%u",
-    '@"core17-sbs-only-v3"', "stage=remote-class", "stage=remote-registered",
+    '@"core17-local-sbs-v4"', "stage=registered role=%@",
 ):
     assert token in adapter, token
 for forbidden in (
     "CALayerHost", "SBMainWorkspace", "setContextId:",
-    "initWithCoreHosting", "isCoreHostingAvailable", "CSLoadCoreHostingFrameworks",
+    "initWithCoreHosting", "isCoreHostingAvailable", "RemoteCall",
+    "remote_getClass", "doRemoteCallCheckedWithTimeout",
 ):
     assert forbidden not in adapter, forbidden
 
@@ -169,21 +155,19 @@ for token in ("CoreSetDrawWindow", "CoreSetIconWindow", "CoreSetMenuWindow",
               "registerThreeSurfacesAsync:menuWindow iconWindow:iconWindow drawWindow:drawWindow"):
     assert token in host, token
 for token in (
-    "CoreSetFloatingSceneManager.shared().createScenes",
-    "CoreSetRemoteHostingAdapter(remoteCall: process)",
-    "host.startHosted(menuScene: touchScene, drawScene: drawScene",
-    "hosting mode=core17-springboard-sbs roles=draw,icon,menu levels=999998,1000000,999999 registered=1",
+    "CoreSetRemoteHostingAdapter()",
+    "host.startHosted(in: scene, menuController:",
+    "hosting mode=core17-local-sbs roles=draw,icon,menu levels=999998,1000000,999999 registered=1",
 ):
     assert token in owner, token
 for forbidden in (
-    "prepareCoreHosting", "isCoreHostingAvailable", "coreHosting: true",
+    "isCoreHostingAvailable", "coreHosting: true",
     "host.attach(adapter)", "verifyHostedWindows", "confirmHostedReadbackAsync",
-    "wz-springboard-mirror",
+    "wz-springboard-mirror", "CoreSetFloatingSceneManager",
+    'rcinit(process: "SpringBoard"', "rebuildHostedWindows(process:",
 ):
     assert forbidden not in owner, forbidden
-for token in ("prepareSpringBoardHosting", 'rcinit(process: "SpringBoard"',
-              "rebuildHostedWindows(process:"):
-    assert token in owner, token
+assert "prepareCoreHosting" in owner
 for token in (
     "touchesBegan:", "touchesMoved:", "touchesEnded:", "touchesCancelled:",
 ):

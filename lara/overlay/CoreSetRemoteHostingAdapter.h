@@ -1,20 +1,16 @@
 #import "CoreSetHUDHost.h"
 
-@class RemoteCall;
 NS_ASSUME_NONNULL_BEGIN
 
-// Core 1.7 path: retain three SBSAccessibilityWindowHostingController objects
-// in SpringBoard and register the source UIWindow context IDs at their exact
-// window levels. Interaction stays in the icon/menu UIKit source scenes.
+// Core 1.7 path: create the three SBS hosting controllers in this application
+// process, then register the draw/icon/menu UIWindow context IDs.
 @interface CoreSetRemoteHostingAdapter : NSObject <CoreSetHUDHostingAdapter>
 @property(nonatomic, readonly) BOOL cleanupPending;
 @property(nonatomic, readonly) BOOL sessionIdentityReady;
 @property(nonatomic, copy, readonly, nullable) NSString *sessionIdentityFailureReason;
 @property(nonatomic, readonly) uint64_t hostGeneration;
 - (NSString *)hostingDiagnosticSnapshot;
-- (instancetype)initWithRemoteCall:(RemoteCall *)remoteCall
-    NS_DESIGNATED_INITIALIZER NS_SWIFT_NAME(init(remoteCall:));
-- (instancetype)init NS_UNAVAILABLE;
+- (instancetype)init NS_DESIGNATED_INITIALIZER;
 - (void)prepareForHostGeneration:(uint64_t)generation;
 @end
 

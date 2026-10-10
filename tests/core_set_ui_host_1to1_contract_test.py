@@ -80,11 +80,11 @@ def test_aim_recoil_controls_and_cross_window_share_live_receipts():
     resume = function_body(MENU, "func resumeActionConsumers(")
     assert "featureState.aim.resume()" in resume
     assert "featureState.recoil.resume()" in resume
-    for signature in ("private func rebuildHostedWindows(", "func deactivate()"):
+    for signature in ("private func prepareCoreHosting(", "func deactivate()"):
         body = function_body(COORDINATOR, signature)
         assert "suspendActionConsumers" in body
     host_changed = function_body(COORDINATOR, "private func hostChanged()")
-    assert "!retainActionsForRemoteInactive" in host_changed
+    assert "!retainActionsForHostedInactive" in host_changed
     assert "suspendActionConsumers" in host_changed
     assert "case .aimControl:" in STATE and "case .recoilControl:" in STATE
 

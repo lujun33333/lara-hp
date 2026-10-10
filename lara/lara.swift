@@ -27,14 +27,6 @@ final class LaraAppDelegate: UIResponder, UIApplicationDelegate {
         configurationForConnecting connectingSceneSession: UISceneSession,
         options: UIScene.ConnectionOptions
     ) -> UISceneConfiguration {
-        if CoreSetFloatingSceneManager.isFloating(identifier: connectingSceneSession.persistentIdentifier) {
-            let configuration = UISceneConfiguration(
-                name: "Core Floating Configuration",
-                sessionRole: connectingSceneSession.role
-            )
-            configuration.delegateClass = CoreSetFloatingSceneDelegate.self
-            return configuration
-        }
         let configuration = UISceneConfiguration(
             name: "Default Configuration",
             sessionRole: connectingSceneSession.role
@@ -65,26 +57,6 @@ final class LaraAppDelegate: UIResponder, UIApplicationDelegate {
         while !finished { CFRunLoopRun() }
         CoreSetBackgroundAudio.shared.stop()
         NSLog("Core-SET: shutdown stage=complete")
-    }
-}
-
-@objc(QxF1)
-final class CoreSetFloatingSceneDelegate: UIResponder, UIWindowSceneDelegate {
-    func scene(
-        _ scene: UIScene,
-        willConnectTo session: UISceneSession,
-        options connectionOptions: UIScene.ConnectionOptions
-    ) {
-        guard let windowScene = scene as? UIWindowScene else { return }
-        CoreSetFloatingSceneManager.shared().connect(
-            scene: windowScene,
-            identifier: session.persistentIdentifier
-        )
-    }
-
-    func sceneDidDisconnect(_ scene: UIScene) {
-        guard let windowScene = scene as? UIWindowScene else { return }
-        CoreSetFloatingSceneManager.shared().disconnect(scene: windowScene)
     }
 }
 

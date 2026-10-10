@@ -1159,7 +1159,7 @@ final class CoreSetLauncherViewController: UIViewController, AVAudioPlayerDelega
     @objc private func launchApplication() {
         if cleanupRetryRequired {
             guard let coreSetRuntime else { presentNotice("悬浮宿主未接入"); return }
-            coreSetRuntime.retryRemoteCleanup { [weak self] error in
+            coreSetRuntime.retryHostingCleanup { [weak self] error in
                 if let error { self?.presentNotice(error) }
             }
             return
