@@ -216,11 +216,6 @@ typedef NS_ENUM(NSInteger, CoreSetWarningYawSource) {
 @property(nonatomic, readonly) float recoilFirstBindingScale;
 @property(nonatomic, readonly) float recoilSecondWeight;
 @property(nonatomic, readonly) float recoilSecondBindingScale;
-// c2e24 predecessor authority is unresolved. Never infer the current slot
-// from localFiringRaw.
-@property(nonatomic, readonly) BOOL routeAuthorityResolved;
-// 1 = controller +0x620, 2 = controller +0x828; -1 while unresolved.
-@property(nonatomic, readonly) NSInteger resolvedActionSlotRaw;
 + (nullable instancetype)authorityWithSnapshot:(CoreSetPlayerSnapshot *)snapshot
     NS_SWIFT_NAME(authority(with:));
 @end

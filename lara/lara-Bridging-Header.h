@@ -6,6 +6,7 @@
 @import UIKit;
 #import <Foundation/Foundation.h>
 #import "overlay/CoreSetHUDHost.h"
+#import "overlay/CoreSetImGuiMenuSurface.h"
 
 #import "darksword.h"
 #import "offsets.h"

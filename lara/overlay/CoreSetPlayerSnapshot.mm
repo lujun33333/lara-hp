@@ -903,8 +903,6 @@ static void CSPublishAimAnchors(CoreSetPlayerMark *mark, const CSBoneState &stat
 @property(nonatomic) float recoilFirstBindingScale;
 @property(nonatomic) float recoilSecondWeight;
 @property(nonatomic) float recoilSecondBindingScale;
-@property(nonatomic) BOOL routeAuthorityResolved;
-@property(nonatomic) NSInteger resolvedActionSlotRaw;
 @end
 
 @implementation CoreSetActionInputAuthority
@@ -933,8 +931,6 @@ static void CSPublishAimAnchors(CoreSetPlayerMark *mark, const CSBoneState &stat
     value.recoilFirstBindingScale = snapshot.recoilFirstBindingScale;
     value.recoilSecondWeight = snapshot.recoilSecondWeight;
     value.recoilSecondBindingScale = snapshot.recoilSecondBindingScale;
-    value.routeAuthorityResolved = NO;
-    value.resolvedActionSlotRaw = -1;
     CoreSetActionInputAuthorityRawRecord raw = {};
     raw.processID = snapshot.processID; raw.imageBase = snapshot.imageBase;
     raw.sessionGeneration = snapshot.sessionGeneration;
@@ -945,8 +941,6 @@ static void CSPublishAimAnchors(CoreSetPlayerMark *mark, const CSBoneState &stat
     raw.localADS = snapshot.localADS ? 1 : 0; raw.localFiring = snapshot.localFiring ? 1 : 0;
     raw.localFiringRaw = snapshot.localFiringRaw;
     raw.recoilInputsPresent = snapshot.recoilInputsPresent ? 1 : 0;
-    raw.routeAuthorityResolved = 0;
-    raw.resolvedActionSlot = -1;
     raw.controlPitchDegrees = snapshot.controlPitchDegrees; raw.controlYawDegrees = snapshot.controlYawDegrees;
     raw.rotationInputPitch = snapshot.rotationInputPitch; raw.rotationInputYaw = snapshot.rotationInputYaw;
     raw.recoilBinding = snapshot.recoilBinding;

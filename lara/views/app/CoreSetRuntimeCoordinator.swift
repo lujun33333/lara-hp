@@ -468,6 +468,10 @@ final class CoreSetRuntimeCoordinator {
     private weak var scene: UIWindowScene?
     private weak var launcher: CoreSetLauncherViewController?
     private let menu = CoreSetMenuViewController()
+    private lazy var menuSurface: CoreSetImGuiMenuViewController = {
+        menu.enableImGuiRuntime()
+        return CoreSetImGuiMenuViewController(model: menu)
+    }()
     private let host = CoreSetHUDHost(hostingAdapter: nil)
     private let metalAdapter = CoreSetMetalRenderAdapter()
     private var remoteHostingAdapter: CoreSetRemoteHostingAdapter?
@@ -721,8 +725,10 @@ final class CoreSetRuntimeCoordinator {
         // The host retains this generic renderer; availability is still
         // decided by an attached drawable and observed Metal scheduler.
         _ = host.installLocalMetalConsumer(metalAdapter)
-        host.contentOwnsLayout = true
-        host.contentHitRegions = { [weak menu = self.menu] in menu?.localHostHitRegions ?? [] }
+        // Core's menu is an 838x535 ImGui surface.  Let the host scale/center
+        // that one surface; no UIKit child-control regions participate.
+        host.contentOwnsLayout = false
+        host.contentHitRegions = nil
         consumer = CoreSetLocalHostConsumer(host: host)
         _ = menu.bindMenuHostConsumer(consumer)
         playerConsumer = CoreSetPlayerConsumer(coordinator: self, battleProducer: battleProducer)
@@ -822,7 +828,7 @@ final class CoreSetRuntimeCoordinator {
                 }
                 remoteHostingAdapter = nil
             }
-            if !host.startLocal(in: scene, menuController: menu) {
+            if !host.startLocal(in: scene, menuController: menuSurface) {
                 publishStatus(); return
             }
             // Loads the existing, verified local palette before observing it.
@@ -968,7 +974,7 @@ final class CoreSetRuntimeCoordinator {
             finishGameLaunch(epoch: epoch, error: "场景已失活，已取消 Core 跨应用托管", completion: completion)
             return
         }
-        if !host.localSurfacesReady, !host.startLocal(in: scene, menuController: menu) {
+        if !host.localSurfacesReady, !host.startLocal(in: scene, menuController: menuSurface) {
             finishGameLaunch(epoch: epoch, error: "Core 三窗口源创建失败", completion: completion)
             return
         }
@@ -1079,7 +1085,7 @@ final class CoreSetRuntimeCoordinator {
             return
         }
         if !host.localSurfacesReady,
-           !host.startLocal(in: scene, menuController: menu) {
+           !host.startLocal(in: scene, menuController: menuSurface) {
             finishGameLaunch(epoch: epoch, error: "王者双窗口源创建失败", completion: completion)
             return
         }
@@ -1194,7 +1200,7 @@ final class CoreSetRuntimeCoordinator {
                 self.menu.setHostedExitAvailable(false)
                 if self.host.installRemoteHostingAdapter(nil), let scene = self.scene,
                    scene.activationState == .foregroundActive,
-                   self.host.startLocal(in: scene, menuController: self.menu) {
+                   self.host.startLocal(in: scene, menuController: self.menuSurface) {
                     self.host.setApplicationActive(true)
                     self.hostChanged()
                     self.menu.requestMenuVisibility(false) { [weak self] _ in self?.publishStatus() }
@@ -1228,7 +1234,7 @@ final class CoreSetRuntimeCoordinator {
                 self.remoteHostingAdapter = nil
                 guard self.host.installRemoteHostingAdapter(nil), let scene = self.scene,
                       scene.activationState == .foregroundActive,
-                      self.host.startLocal(in: scene, menuController: self.menu) else {
+                      self.host.startLocal(in: scene, menuController: self.menuSurface) else {
                     self.publishStatus()
                     completion("context 已清理，但本应用窗口恢复失败")
                     return

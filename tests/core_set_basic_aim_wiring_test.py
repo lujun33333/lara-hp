@@ -17,7 +17,7 @@ manifest = read("scripts/build_ipa_pe.sh")
 
 for token in (
     "CoreSetIsolatedWriteProbe", "battleProducer.requestAim(", "battleProducer.copyAction(",
-    "triggerState.update(", "dynamics.permitsTakeover(",
+    "triggerState.update(", "routeProducer.resolveAim(",
     "dynamics.plan(candidate:", "persistentActionWorker(input:",
     "guard result.committed, isLive(", "submitMergedAction(input:",
     "applyRecoil(", "tickRecoilOnly(",

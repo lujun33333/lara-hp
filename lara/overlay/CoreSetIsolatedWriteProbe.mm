@@ -202,12 +202,11 @@ private:
 @interface CoreSetV17AimDynamics () {
     CoreSet::ActionCandidateMotionState _motion;
     CoreSet::ActionGeometryClockState _geometry;
-    CoreSet::ActionTakeoverState _takeover;
     CSAimDropoutHold _dropout;
 }
 @end
 @implementation CoreSetV17AimDynamics
-- (void)reset { _motion = {}; _geometry = {}; _takeover = {}; _dropout.reset(); }
+- (void)reset { _motion = {}; _geometry = {}; _dropout.reset(); }
 - (BOOL)rememberTarget:(CoreSetWorldPoint *)target actor:(uint64_t)actor
     generation:(uint64_t)generation now:(double)now {
     return target && _dropout.publish(actor, generation, {target.x, target.y, target.z}, now);
@@ -221,9 +220,12 @@ private:
 - (BOOL)permitsTakeoverPitch:(float)pitch yaw:(float)yaw
     configuration:(CoreSetV17AimConfiguration *)configuration now:(double)now {
     if (!configuration) return NO;
+    // Compatibility helper for older callers. The production route owner is
+    // CoreSetV17ActionRouteProducer below.
+    CoreSet::ActionTakeoverState state;
     CoreSet::ActionTakeoverObservation observed;
     const float magnitude = std::hypot(pitch, yaw);
-    return CoreSet::referenceActionTakeover(_takeover, true, false, magnitude,
+    return CoreSet::referenceActionTakeover(state, true, false, magnitude,
         configuration.lockThreshold, (int)configuration.confirmationFrames,
         (int)std::lround(configuration.takeoverPauseSeconds * 1000.0), now, &observed) &&
         observed.aimAllowed && observed.mergePredecessor == CoreSet::ActionMergePredecessor::inputDirect;
@@ -325,6 +327,48 @@ private:
             y:observed.numerical[12] z:observed.numerical[13]];
     }
     return result;
+}
+@end
+
+@interface CoreSetV17ActionRouteDecision ()
+@property(nonatomic) BOOL resolved;
+@property(nonatomic) BOOL aimAllowed;
+@property(nonatomic) NSInteger slotRaw;
+@property(nonatomic) NSInteger predecessorRaw;
+@end
+@implementation CoreSetV17ActionRouteDecision @end
+
+@interface CoreSetV17ActionRouteProducer () {
+    CoreSet::ActionTakeoverState _takeover;
+}
+@end
+@implementation CoreSetV17ActionRouteProducer
+- (void)reset { _takeover = {}; }
+- (CoreSetV17ActionRouteDecision *)decision:(CoreSet::ActionTakeoverObservation)observation {
+    CoreSet::ActionMergeRouteObservation route;
+    if (!CoreSet::referenceActionMergeRoute(observation.mergePredecessor, &route)) return nil;
+    CoreSetV17ActionRouteDecision *decision = [CoreSetV17ActionRouteDecision new];
+    decision.resolved = true;
+    decision.aimAllowed = observation.aimAllowed;
+    decision.slotRaw = route.slot == CoreSet::TargetActionSlot::controlRotation ? 1 : 2;
+    decision.predecessorRaw = (NSInteger)observation.mergePredecessor;
+    return decision;
+}
+- (CoreSetV17ActionRouteDecision *)resolveAimPitch:(float)pitch yaw:(float)yaw
+    configuration:(CoreSetV17AimConfiguration *)configuration now:(double)now {
+    if (!configuration) return nil;
+    CoreSet::ActionTakeoverObservation observation;
+    const float magnitude = std::hypot(pitch, yaw);
+    if (!CoreSet::referenceActionTakeover(_takeover, true, false, magnitude,
+        configuration.lockThreshold, (int)configuration.confirmationFrames,
+        (int)std::lround(configuration.takeoverPauseSeconds * 1000.0), now, &observation)) return nil;
+    return [self decision:observation];
+}
+- (CoreSetV17ActionRouteDecision *)resolveRecoilOnly {
+    CoreSet::ActionTakeoverObservation observation;
+    observation.aimAllowed = false;
+    observation.mergePredecessor = CoreSet::ActionMergePredecessor::inputDirect;
+    return [self decision:observation];
 }
 @end
 

@@ -85,7 +85,7 @@ def test_recoil_and_aim_use_one_serial_worker_without_fire_slot_route():
     menu = (ROOT / "lara/views/app/CoreSetMenuViewController.swift").read_text(encoding="utf-8")
     for token in (
         "CoreSetV17RecoilDynamics", "submitMergedAction", "tickRecoilOnly",
-        "routeAuthorityResolved", "resolvedActionSlotRaw", "lane: lane",
+        "CoreSetV17ActionRouteProducer", "route.slotRaw", "lane: lane",
         "pendingRecoilCompletion", "stopRecoil(",
         "merged.recoilPitch", "merged.recoilYaw", "recoilContributed",
         "aimContributed", "recoilConfiguration(", "configuration: recoil",

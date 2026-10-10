@@ -93,8 +93,8 @@ class CompensationContracts(unittest.TestCase):
         self.assertIn("CoreSetAimConsumer", recoil)
         self.assertIn("actionConsumer.applyRecoil", recoil)
         self.assertNotIn("supportedFields: Set<CoreSetField> { [] }", recoil)
-        for marker in ("CoreSetV17RecoilDynamics", "submitMergedAction", "routeAuthorityResolved",
-                       "resolvedActionSlotRaw", "tickRecoilOnly"):
+        for marker in ("CoreSetV17RecoilDynamics", "submitMergedAction", "CoreSetV17ActionRouteProducer",
+                       "route.slotRaw", "tickRecoilOnly"):
             self.assertIn(marker, aim)
         self.assertNotIn("routeDynamics.slot(firingSample:", aim)
         bridge = (ROOT / "lara/overlay/CoreSetIsolatedWriteProbe.mm").read_text(encoding="utf-8")

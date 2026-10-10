@@ -78,13 +78,14 @@ assert start_host.index("_drawWindow.hidden = NO; _menuWindow.hidden = NO; _icon
 def validate_owner(text):
     owner = text.split("private final class CoreSetLocalHostConsumer:")[0]
     need(owner, "private static var retained: [UUID: CoreSetRuntimeCoordinator] = [:]", "private let menu = CoreSetMenuViewController()",
+         "private lazy var menuSurface: CoreSetImGuiMenuViewController",
          "private let host = CoreSetHUDHost(hostingAdapter: nil)", "private var consumer: CoreSetLocalHostConsumer!",
          "var featureState: CoreSetFeatureState { menu.featureState }", "Self.retained[identity] = self", "menu.bindMenuHostConsumer(consumer)")
     assert owner.count("CoreSetMenuViewController()") == 1
     assert owner.count("menu.bindGameConsumer(playerConsumer, to: \\.player)") == 1
     assert "CoreSetPlayerConsumer(coordinator: self, battleProducer: battleProducer)" in owner
     assert "playerConsumer?.consumed(receipt)" in owner
-    need(swift(owner, "activate"), "guard !stopping, let scene", "host.startLocal(in: scene, menuController: menu)")
+    need(swift(owner, "activate"), "guard !stopping, let scene", "host.startLocal(in: scene, menuController: menuSurface)")
     need(swift(owner, "hostChanged"), "submittedGeneration != host.renderGeneration", "generation: host.renderGeneration, sequence: 1", "commands: []")
     need(swift(owner, "publishStatus"), "host.lastConsumedSequence > 0", "跨应用 unavailable")
     stop = swift(owner, "stop")
@@ -196,15 +197,17 @@ assert "CoreSetMenuViewController()" not in launcher and "present(menu" not in l
 need(swift(launcher, "updateRuntimePresentation"), "menuRequestedVisible = menuVisible", "if !menuVisible { presentPendingNotices() }")
 need(swift(launcher, "presentPendingNotices"), "!menuRequestedVisible")
 
-# Content owns full-window layout: only its real panel/close button and the
-# floating button accept hits. Hidden ancestors reject stale regions; local
-# UIKit modals are separately allowed. No game touch dispatch is introduced.
-need(coordinator, "host.contentOwnsLayout = true", "host.contentHitRegions = { [weak menu = self.menu]", "menu?.localHostHitRegions ?? []")
-need(menu, "var localHostHitRegions: [UIView] { [panel, closeButton] }")
+# The production menu is one fixed 838x535 ImGui/Metal surface. The host owns
+# scaling and the ImGui controller owns its semantic hit map; no UIKit control
+# regions are exported to the cross-window input path.
+need(coordinator, "host.contentOwnsLayout = false", "host.contentHitRegions = nil",
+     "private lazy var menuSurface: CoreSetImGuiMenuViewController")
+need(menu, "extension CoreSetMenuViewController: CoreSetImGuiMenuModel",
+     "func imguiMenuSnapshot()", "func performImGuiMenuAction(")
 layout = objc(host, "layoutSurfaces")
-content_branch = re.search(r"if \(self.contentOwnsLayout\) \{([\s\S]*?)\} else", layout).group(1)
-need(content_branch, "_panel.transform = CGAffineTransformIdentity", "_panel.frame = root.bounds")
-assert "MakeScale" not in content_branch
+fixed_branch = re.search(r"\} else \{([\s\S]*?)\n    \}", layout).group(1)
+need(fixed_branch, "_panel.bounds = CGRectMake(0, 0, 838, 535)",
+     "_panel.transform = CGAffineTransformMakeScale(scale, scale)")
 window = host.split("@implementation CoreSetMenuWindow")[1].split("@end")[0]
 need(window, "controller.presentedViewController", "self.contentHitRegions()", "[region isDescendantOfView:self]",
      "ancestor.hidden || ancestor.alpha <= 0.01 || !ancestor.userInteractionEnabled", "[region convertPoint:point fromView:self]")

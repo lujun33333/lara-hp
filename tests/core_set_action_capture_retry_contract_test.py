@@ -55,9 +55,11 @@ class ActionCaptureRetryContractTest(unittest.TestCase):
         self.assertNotIn("rosterSession", AIM)
 
     def test_route_authority_is_not_inferred_from_fire(self):
-        self.assertIn("guard input.routeAuthorityResolved", AIM)
-        self.assertIn("switch input.resolvedActionSlotRaw", AIM)
-        self.assertIn("拒绝用 firing 字节猜测 +0x620/+0x828", AIM)
+        self.assertIn("private let routeProducer = CoreSetV17ActionRouteProducer()", AIM)
+        self.assertIn("guard route.resolved", AIM)
+        self.assertIn("switch route.slotRaw", AIM)
+        self.assertIn("routeProducer.resolveAim(", AIM)
+        self.assertIn("routeProducer.resolveRecoilOnly()", AIM)
         self.assertNotIn("routeDynamics.slot(firingSample:", AIM)
 
 

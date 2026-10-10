@@ -34,9 +34,7 @@ typedef struct CoreSetActionInputAuthorityRawRecord {
     uint8_t localFiring;
     uint8_t localFiringRaw;
     uint8_t recoilInputsPresent;
-    uint8_t routeAuthorityResolved;
-    int8_t resolvedActionSlot;
-    uint8_t reserved56[2];
+    uint8_t reserved54[4];
     float controlPitchDegrees;
     float controlYawDegrees;
     float rotationInputPitch;

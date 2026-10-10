@@ -39,7 +39,7 @@ for token in (
     "excludeKnocked:",
     "dynamics.plan(candidate: candidate, input: input", "CoreSetV17AimConfiguration",
     "configuration: configuration", "CoreSetBasicAimDelta.circleRadius",
-    "guard input.routeAuthorityResolved", "switch input.resolvedActionSlotRaw",
+    "routeProducer.resolveAim(", "guard route.resolved", "switch route.slotRaw",
     "slot == .rotationInput", "CoreSetV17RecoilDynamics",
 ):
     assert token in aim, token

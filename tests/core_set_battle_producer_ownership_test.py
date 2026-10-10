@@ -66,15 +66,16 @@ for token in (
     "float controlPitchDegrees",
     "float rotationInputPitch",
     "uint64_t recoilOwnerToken",
-    "uint8_t routeAuthorityResolved",
-    "int8_t resolvedActionSlot",
+    "uint8_t reserved54[4]",
 ):
     assert token in publication_h, token
 
-assert "@property(nonatomic, readonly) BOOL routeAuthorityResolved;" in snapshot_h
-assert "@property(nonatomic, readonly) NSInteger resolvedActionSlotRaw;" in snapshot_h
+assert "routeAuthorityResolved" not in snapshot_h
+assert "resolvedActionSlotRaw" not in snapshot_h
 assert "NS_SWIFT_NAME(authority(with:));" in snapshot_h
-assert "拒绝用 firing 字节猜测 +0x620/+0x828" in aim
+assert "CoreSetV17ActionRouteProducer" in aim
+assert "guard route.resolved" in aim
+assert "switch route.slotRaw" in aim
 assert "routeDynamics.slot(firingSample:" not in aim
 
 stop = coordinator.split("group.notify(queue: .main)", 1)[1]

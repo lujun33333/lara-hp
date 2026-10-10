@@ -6,6 +6,406 @@ struct CoreSetMenuHostSettings: Equatable {
     var floatingPalette: CoreSetFloatingPalette?
 }
 
+// MARK: - Core v1.7 ImGui model
+
+extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
+    var imguiMenuModelRevision: UInt64 { hostedMenuRevision }
+
+    private func imguiItem(_ type: String, _ title: String, _ action: String = "",
+                           value: Any? = nil, minimum: Double? = nil, maximum: Double? = nil,
+                           options: [String]? = nil, enabled: Bool = true) -> [String: Any] {
+        var result: [String: Any] = ["type": type, "title": title, "action": action,
+                                     "enabled": enabled]
+        if let value { result["value"] = value }
+        if let minimum { result["minimum"] = minimum }
+        if let maximum { result["maximum"] = maximum }
+        if let options { result["options"] = options }
+        if type == "choice" {
+            let color = featureState.home.desired.accent ?? CoreSetReferenceMenuAppearance.preset(6)
+            result["accent"] = [color.red, color.green, color.blue, color.alpha]
+        }
+        return result
+    }
+
+    private func imguiSection(_ title: String, _ items: [[String: Any]]) -> [String: Any] {
+        ["title": title, "items": items]
+    }
+
+    private func imguiChannelReady<Value: Equatable>(_ channel: CoreSetFeatureChannel<Value>) -> Bool {
+        canStage(channel) && channel.pendingApply == nil && channel.pendingStop == nil
+    }
+
+    private func imguiStatus(_ title: String, _ text: String?) -> [String: Any] {
+        ["type": "status", "title": title, "text": textValue(text), "action": "", "enabled": true]
+    }
+
+    private func imguiPresetIndex(_ color: CoreSetRGBA?) -> Int {
+        guard let color else { return 6 }
+        return (0..<7).first { CoreSetReferenceMenuAppearance.preset($0) == color.referenceOpaque } ?? 6
+    }
+
+    func imguiMenuSnapshot() -> [String: Any] {
+        precondition(Thread.isMainThread)
+        updateConsumerAvailability()
+        let home = featureState.home.desired
+        let accentValue = home.accent ?? CoreSetReferenceMenuAppearance.preset(6)
+        let accent = [accentValue.red, accentValue.green, accentValue.blue, accentValue.alpha]
+        let homeSnapshot = featureState.homeSnapshot
+        let runValues: [CoreSetRunMode] = [.safe, .efficiency]
+        let coverValues: [CoreSetCoverMode] = [.global, .inGame, .off]
+        let homeItems: [[String: Any]] = [
+            imguiItem("choice", "运行模式", "home.run", value: runValues.firstIndex(of: home.runMode ?? .safe) ?? 0,
+                      options: ["安全", "效率"]),
+            imguiItem("choice", "掩体判断", "home.cover", value: coverValues.firstIndex(of: home.coverMode ?? .off) ?? 2,
+                      options: ["全局", "局内", "关闭"]),
+            imguiItem("choice", "界面主题", "home.theme", value: home.theme == .light ? 1 : 0,
+                      options: ["暗黑", "纯白"]),
+            imguiItem("slider", "FPS 调节", "home.fps", value: featureState.frameRate.desired.framesPerSecond.value ?? 60,
+                      minimum: 30, maximum: 144, enabled: imguiChannelReady(featureState.frameRate)),
+            imguiItem("button", "内核利用", "home.kernel", enabled: !homeActionsInFlight.contains(.kernelAction)),
+            imguiItem("button", "获取信息", "home.information", enabled: !homeActionsInFlight.contains(.informationAction))
+        ]
+        var statusItems: [[String: Any]] = []
+        for item in [("内核状态", homeSnapshot?.kernel), ("运行环境", homeSnapshot?.environment),
+                     ("获取信息状态", homeSnapshot?.information), ("当前阶段", homeSnapshot?.stage),
+                     ("悬浮菜单", homeSnapshot?.floating)] {
+            statusItems.append(imguiStatus(item.0, item.1))
+        }
+
+        let player = featureState.player.desired
+        func actorItems(_ scope: CoreSetActorScope, _ state: CoreSetActorDisplay) -> [[String: Any]] {
+            let prefix = scope == .player ? "player.player" : "player.bot"
+            return [
+                imguiItem("choice", "显示手持", "\(prefix).weapon", value: state.weapon.mode?.rawValue ?? 0,
+                          options: ["图片", "文字"]),
+                imguiItem("choice", "玩家数量", "\(prefix).count", value: state.count.mode == .detailed ? 0 : 1,
+                          options: ["详细", "简洁"]),
+                imguiItem("choice", "显示信息", "\(prefix).information", value: state.information.mode?.rawValue ?? 0,
+                          options: ["现代", "精简"]),
+                imguiItem("toggle", "显示射线", "\(prefix).ray", value: state.ray == true),
+                imguiItem("toggle", "显示方框", "\(prefix).box", value: state.box == true),
+                imguiItem("toggle", "显示距离", "\(prefix).distance", value: state.distance == true),
+                imguiItem("toggle", "显示骨骼", "\(prefix).bones", value: state.bones == true)
+            ]
+        }
+        let playerAdvanced: [[String: Any]] = [
+            imguiItem("toggle", "隐藏人机", "player.hideBots", value: player.hideBots == true),
+            imguiItem("toggle", "手雷预警", "player.grenade", value: player.grenadeWarning == true),
+            imguiItem("choice", "背敌指示", "player.back", value: player.backIndicator?.rawValue ?? 2,
+                      options: ["指示+距离", "指示", "关闭"]),
+            imguiItem("slider", "绘制显示距离", "player.drawDistance", value: player.drawingDistance.value ?? 1,
+                      minimum: 1, maximum: 1000),
+            imguiItem("slider", "骨骼显示距离", "player.boneDistance", value: player.boneDistance.value ?? 1,
+                      minimum: 1, maximum: 500),
+            imguiItem("slider", "背敌指示大小", "player.backSize", value: player.backSize.value ?? 40,
+                      minimum: 40, maximum: 160)
+        ]
+
+        let material = featureState.materials.desired
+        let category = CoreSetMaterialCategory(rawValue: previewMaterialCategory) ?? .vehicles
+        let materialState = material.categories[category.rawValue]
+        var materialGroups = materialState.groups.enumerated().map { index, group in
+            imguiItem("toggle", group.displayName, "material.group.\(index)", value: group.selection == .all)
+        }
+        materialGroups.insert(imguiItem("button", "本类全开", "material.allOn"), at: 0)
+        materialGroups.insert(imguiItem("button", "本类全关", "material.allOff"), at: 1)
+        let materialGeneral: [[String: Any]] = [
+            imguiItem("toggle", "显示物资", "material.enabled", value: material.enabled == true),
+            imguiItem("toggle", "持枪屏蔽物资", "material.hideArmed", value: material.hideWhileArmed == true),
+            imguiItem("toggle", "地铁头甲", "material.metro", value: material.metroArmor == true),
+            imguiItem("toggle", "隐藏已开启地铁箱子", "material.hideOpened", value: material.hideOpenedCrates == true),
+            imguiItem("toggle", "显示地铁箱子等级", "material.crateLevel", value: material.showCrateLevel == true),
+            imguiItem("toggle", "显示载具油量血量", "material.vehicle", value: material.vehicleStatus == true),
+            imguiItem("choice", "物资分类", "material.category", value: category.rawValue,
+                      options: CoreSetMaterialCategory.allCases.map(\.displayName)),
+            imguiItem("slider", "最小距离", "material.minimum", value: materialState.distance.minimum ?? 0,
+                      minimum: 0, maximum: 2000),
+            imguiItem("slider", "最大距离", "material.maximum", value: materialState.distance.maximum ?? 2000,
+                      minimum: 0, maximum: 2000),
+            imguiItem("choice", "分类颜色", "material.color", value: imguiPresetIndex(materialState.color),
+                      options: ["1", "2", "3", "4", "5", "6", "7"])
+        ]
+
+        let adjustment = featureState.adjustments.desired
+        func colorItems(_ scope: CoreSetActorScope) -> [[String: Any]] {
+            let prefix = scope == .player ? "adjust.player" : "adjust.bot"
+            let colors = scope == .player ? adjustment.player : adjustment.bot
+            let values = [colors.name, colors.ray, colors.distance, colors.bone, colors.team]
+            return ["name", "ray", "distance", "bone", "team"].enumerated().map { index, field in
+                imguiItem("choice", ["名称颜色", "射线颜色", "距离颜色", "骨骼颜色", "队伍颜色"][index],
+                          "\(prefix).\(field)", value: imguiPresetIndex(values[index]),
+                          options: ["1", "2", "3", "4", "5", "6", "7"])
+            }
+        }
+        let adjustmentSizes: [[String: Any]] = [
+            imguiItem("slider", "射线粗细", "adjust.rayThickness", value: adjustment.rayThickness.value ?? 1, minimum: 1, maximum: 10),
+            imguiItem("slider", "骨骼粗细", "adjust.boneThickness", value: adjustment.boneThickness.value ?? 1, minimum: 1, maximum: 10),
+            imguiItem("slider", "物资字体", "adjust.materialFont", value: adjustment.materialFontSize.value ?? 5, minimum: 5, maximum: 30)
+        ]
+
+        let radar = featureState.radar.desired
+        let radarItems: [[String: Any]] = [
+            imguiItem("toggle", "雷达", "radar.enabled", value: radar.enabled == true),
+            imguiItem("toggle", "显示距离米数", "radar.distance", value: radar.showDistance == true),
+            imguiItem("slider", "探测距离", "radar.detect", value: radar.detectionDistance.value ?? 100, minimum: 100, maximum: 1000),
+            imguiItem("slider", "雷达半径", "radar.radius", value: radar.placement.radius ?? 80, minimum: 50, maximum: 300),
+            imguiItem("slider", "雷达 X", "radar.x", value: radar.placement.x ?? 100, minimum: 0, maximum: Double(radar.placement.canvas?.width ?? 390)),
+            imguiItem("slider", "雷达 Y", "radar.y", value: radar.placement.y ?? 100, minimum: 0, maximum: Double(radar.placement.canvas?.height ?? 844)),
+            imguiItem("toggle", "被瞄预警", "radar.warning", value: radar.warningEnabled == true),
+            imguiItem("toggle", "忽略人机", "radar.ignoreBots", value: radar.ignoreBots == true),
+            imguiItem("slider", "被瞄预警范围", "radar.warningRange", value: radar.warningRange.value ?? 20, minimum: 20, maximum: 300),
+            imguiItem("slider", "预警文字调节", "radar.warningText", value: radar.warningTextSize.value ?? 10, minimum: 10, maximum: 200)
+        ]
+
+        let aim = featureState.aim.desired
+        let aimEditable = featureState.aim.phase != .applying && featureState.aim.phase != .active
+        let aimMain: [[String: Any]] = [
+            imguiItem("toggle", "自瞄总开关", "aim.enabled", value: aim.enabled == true, enabled: featureState.aim.restoration != .pending),
+            imguiItem("toggle", "预瞄标记圈", "aim.preaim", value: aim.preaimCircle == true, enabled: aimEditable),
+            imguiItem("toggle", "动态自瞄圈", "aim.dynamic", value: aim.dynamicCircle.enabled == true, enabled: aimEditable),
+            imguiItem("toggle", "显示自瞄圈", "aim.circle", value: aim.showCircle == true, enabled: aimEditable),
+            imguiItem("toggle", "自瞄连接线", "aim.line", value: aim.connectionLine == true, enabled: aimEditable),
+            imguiItem("choice", "瞄准部位", "aim.point", value: aim.point?.rawValue ?? 0, options: ["头部", "胸部", "屁股"], enabled: aimEditable),
+            imguiItem("choice", "触发模式", "aim.trigger", value: [CoreSetAimTrigger.scopeOnly, .fireOnly, .either, .both].firstIndex(of: aim.trigger ?? .either) ?? 2,
+                      options: ["仅开镜", "仅开火", "开镜或开火", "开镜且开火"], enabled: aimEditable),
+            imguiItem("slider", "自瞄圈大小", "aim.circleSize", value: aim.circleSize.value ?? 30, minimum: 30, maximum: 525, enabled: aimEditable),
+            imguiItem("toggle", "倒地不瞄", "aim.knocked", value: aim.excludeKnocked == true, enabled: aimEditable),
+            imguiItem("toggle", "瞄准人机", "aim.bots", value: aim.includeBots == true, enabled: aimEditable),
+            imguiItem("toggle", "锁定同目标", "aim.lock", value: aim.lockSameTarget == true, enabled: aimEditable),
+            imguiItem("choice", "场景", "aim.scene", value: [CoreSetAimScene.far, .general, .close, .custom].firstIndex(of: aim.scene ?? .far) ?? 0,
+                      options: ["远距离", "通用", "近距离", "自定义"], enabled: aimEditable)
+        ]
+        var aimTuning: [[String: Any]] = []
+        if aim.scene == .custom {
+            aimTuning = [
+                imguiItem("slider", "最大距离", "aim.maximum", value: aim.custom.maximumDistance.value ?? 10, minimum: 10, maximum: 500, enabled: aimEditable),
+                imguiItem("slider", "自瞄强度", "aim.strength", value: aim.custom.strength.value ?? 5, minimum: 5, maximum: 100, enabled: aimEditable),
+                imguiItem("slider", "转动平滑", "aim.smoothing", value: aim.custom.smoothing.value ?? 1, minimum: 1, maximum: 10, enabled: aimEditable),
+                imguiItem("slider", "水平速度", "aim.horizontal", value: aim.custom.horizontalSpeed.value ?? 30, minimum: 30, maximum: 720, enabled: aimEditable),
+                imguiItem("slider", "垂直速度", "aim.vertical", value: aim.custom.verticalSpeed.value ?? 30, minimum: 30, maximum: 720, enabled: aimEditable),
+                imguiItem("slider", "预判提前", "aim.prediction", value: aim.custom.predictionMilliseconds.value ?? 0, minimum: 0, maximum: 300, enabled: aimEditable),
+                imguiItem("slider", "锁定门槛", "aim.threshold", value: aim.custom.lockThreshold.value ?? 5, minimum: 5, maximum: 500, enabled: aimEditable),
+                imguiItem("slider", "接管确认帧数", "aim.confirmation", value: aim.custom.confirmationFrames.value ?? 1, minimum: 1, maximum: 6, enabled: aimEditable),
+                imguiItem("slider", "接管暂停", "aim.pause", value: aim.custom.takeoverPauseMilliseconds.value ?? 50, minimum: 50, maximum: 1000, enabled: aimEditable)
+            ]
+        } else {
+            aimTuning = [imguiItem("choice", "锁定强度", "aim.lockStrength",
+                value: [CoreSetLockStrength.strong, .medium, .light].firstIndex(of: aim.lockStrength ?? .light) ?? 2,
+                options: ["强锁定", "中锁定", "轻锁定"], enabled: aimEditable)]
+        }
+
+        let recoil = featureState.recoil.desired
+        let recoilItems: [[String: Any]] = [
+            imguiItem("toggle", "启用压枪", "recoil.enabled", value: recoil.enabled == true),
+            imguiItem("toggle", "停火不压", "recoil.stop", value: recoil.stopWhenNotFiring.enabled == true),
+            imguiItem("toggle", "垂直补偿", "recoil.vertical", value: recoil.verticalEnabled == true),
+            imguiItem("slider", "垂直补偿强度", "recoil.verticalStrength", value: recoil.verticalStrength.value ?? 0, minimum: 0, maximum: 100),
+            imguiItem("toggle", "水平补偿", "recoil.horizontal", value: recoil.horizontalEnabled == true),
+            imguiItem("slider", "水平补偿强度", "recoil.horizontalStrength", value: recoil.horizontalStrength.value ?? 0, minimum: 0, maximum: 100),
+            imguiStatus("说明", "压枪并非无后坐力，是纯模拟压枪，远距离效果请实测")
+        ]
+
+        let pages: [[String: Any]] = [
+            ["title": "主页", "sections": [imguiSection("内核管理", homeItems), imguiSection("状态", statusItems)]],
+            ["title": "玩家", "sections": [imguiSection("玩家绘制", actorItems(.player, player.player)), imguiSection("人机绘制", actorItems(.bot, player.bot)), imguiSection("进阶设置", playerAdvanced)]],
+            ["title": "物资", "sections": [imguiSection("物资管理", materialGeneral), imguiSection("物资筛选", materialGroups)]],
+            ["title": "调整", "sections": [imguiSection("玩家颜色", colorItems(.player)), imguiSection("人机颜色", colorItems(.bot)), imguiSection("粗细调节", adjustmentSizes)]],
+            ["title": "雷达", "sections": [imguiSection("雷达与预警", radarItems)]],
+            ["title": "自瞄", "sections": [imguiSection("Core 稳定自瞄", aimMain), imguiSection("场景参数", aimTuning)]],
+            ["title": "压枪", "sections": [imguiSection("Core 智能压枪【非无后坐力】", recoilItems)]]
+        ]
+        return ["selectedPage": selectedPage, "theme": home.theme?.rawValue ?? "dark",
+                "accent": accent, "pages": pages]
+    }
+
+    private func textValue(_ value: String?) -> String { value ?? "unavailable" }
+
+    private func performHomeActionFromImGui(_ point: CoreSetHomeProbePoint) -> Bool {
+        guard !homeActionsInFlight.contains(point), let onHomeAction else { return false }
+        homeActionsInFlight.insert(point); hostedMenuRevision &+= 1
+        onHomeAction(point) { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.homeActionsInFlight.remove(point)
+                self.showConfigurationFeedback(error ?? "动作生产者已返回")
+                self.rebuildMenu()
+            }
+        }
+        return true
+    }
+
+    private func setActorField(_ scope: CoreSetActorScope, field: String, value: Double) {
+        editGame(\.player) { state in
+            func edit(_ actor: inout CoreSetActorDisplay) {
+                switch field {
+                case "weapon": if let mode = CoreSetWeaponMode(rawValue: Int(value)) { actor.weapon.select(mode) }
+                case "count": actor.count.select(Int(value) == 0 ? .detailed : .compact)
+                case "information": if let mode = CoreSetInformationMode(rawValue: Int(value)) { actor.information.select(mode) }
+                case "ray": actor.ray = value != 0
+                case "box": actor.box = value != 0
+                case "distance": actor.distance = value != 0
+                case "bones": actor.bones = value != 0
+                default: break
+                }
+            }
+            if scope == .player { edit(&state.player) } else { edit(&state.bot) }
+        }
+    }
+
+    private func stopAimFromImGui() -> Bool {
+        if featureState.aim.restoration.stopComplete {
+            featureState.aim.updateDesired { $0.enabled = false }
+            stagedConfigurationPaths.insert(\CoreSetFeatureState.aim)
+            rebuildMenu()
+            return true
+        }
+        guard let consumer = gameConsumers[\CoreSetFeatureState.aim] as? CoreSetMenuConsumer<CoreSetAimSettings>,
+              let token = featureState.aim.prepareStop() else { return false }
+        let source = interactionControlIdentifier
+        consumer.stop(token) { [weak self] token, outcome in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let received = self.featureState.aim.receiveStop(token, outcome: outcome)
+                if received && self.featureState.aim.restoration.stopComplete {
+                    self.featureState.aim.updateDesired { $0.enabled = false }
+                }
+                NSLog("Core-SET: ImGui action stage=actual control=%@ capability=aimStop confirmed=%d",
+                      source, received && self.featureState.aim.restoration.stopComplete ? 1 : 0)
+                self.rebuildMenu()
+            }
+        }
+        return true
+    }
+
+    func performImGuiMenuAction(_ action: String, value: Double) -> Bool {
+        precondition(Thread.isMainThread)
+        guard value.isFinite else { return false }
+        interactionControlIdentifier = "ImGui.\(action)"
+        if action == "page" {
+            let page = Int(value.rounded())
+            guard pageTitles.indices.contains(page) else { return false }
+            selectedPage = page; rebuildMenu(); return true
+        }
+        if action == "close" {
+            requestMenuVisibility(false) { [weak self] confirmed in
+                if confirmed { self?.onClose?() }
+            }
+            return true
+        }
+        if action == "exit" { onExitHUD?(); return true }
+        switch action {
+        case "home.run":
+            let values: [CoreSetRunMode] = [.safe, .efficiency]; guard values.indices.contains(Int(value)) else { return false }
+            featureState.home.updateDesired { $0.runMode = values[Int(value)] }
+        case "home.cover":
+            let values: [CoreSetCoverMode] = [.global, .inGame, .off]; guard values.indices.contains(Int(value)) else { return false }
+            featureState.home.updateDesired { $0.selectCoverMode(values[Int(value)]) }; onHomeProbeRefusal?(.coverMode, Int(value))
+        case "home.theme":
+            featureState.home.updateDesired { $0.theme = Int(value) == 1 ? .light : .dark }; applyLocalAppearance()
+        case "home.fps": editGame(\.frameRate) { $0.framesPerSecond.set(Int(value.rounded())) }
+        case "home.kernel": return performHomeActionFromImGui(.kernelAction)
+        case "home.information": return performHomeActionFromImGui(.informationAction)
+        case let key where key.hasPrefix("player.player."):
+            setActorField(.player, field: String(key.dropFirst("player.player.".count)), value: value)
+        case let key where key.hasPrefix("player.bot."):
+            setActorField(.bot, field: String(key.dropFirst("player.bot.".count)), value: value)
+        case "player.hideBots": editGame(\.player) { $0.hideBots = value != 0 }
+        case "player.grenade": editGame(\.player) { $0.grenadeWarning = value != 0 }
+        case "player.back": editGame(\.player) { $0.backIndicator = CoreSetBackIndicator(rawValue: Int(value)) }
+        case "player.drawDistance": editGame(\.player) { $0.drawingDistance.set(Int(value.rounded())) }
+        case "player.boneDistance": editGame(\.player) { $0.boneDistance.set(Int(value.rounded())) }
+        case "player.backSize": editGame(\.player) { $0.backSize.set(Int(value.rounded())) }
+        case "material.enabled": editGame(\.materials) { $0.enabled = value != 0 }
+        case "material.hideArmed": editGame(\.materials) { $0.hideWhileArmed = value != 0 }
+        case "material.metro": editGame(\.materials) { $0.metroArmor = value != 0 }
+        case "material.hideOpened": editGame(\.materials) { $0.hideOpenedCrates = value != 0 }
+        case "material.crateLevel": editGame(\.materials) { $0.showCrateLevel = value != 0 }
+        case "material.vehicle": editGame(\.materials) { $0.vehicleStatus = value != 0 }
+        case "material.category":
+            guard CoreSetMaterialCategory(rawValue: Int(value)) != nil else { return false }
+            previewMaterialCategory = Int(value); rebuildMenu()
+        case "material.minimum": editGame(\.materials) { $0.editCategory(CoreSetMaterialCategory(rawValue: previewMaterialCategory) ?? .vehicles) { $0.distance.setMinimum(Int(value.rounded())) } }
+        case "material.maximum": editGame(\.materials) { $0.editCategory(CoreSetMaterialCategory(rawValue: previewMaterialCategory) ?? .vehicles) { $0.distance.setMaximum(Int(value.rounded())) } }
+        case "material.color": editGame(\.materials) { $0.editCategory(CoreSetMaterialCategory(rawValue: previewMaterialCategory) ?? .vehicles) { $0.color = CoreSetReferenceMenuAppearance.preset(max(0, min(6, Int(value)))) } }
+        case "material.allOn", "material.allOff": editGame(\.materials) { $0.editCategory(CoreSetMaterialCategory(rawValue: previewMaterialCategory) ?? .vehicles) { $0.setAll(action == "material.allOn") } }
+        case let key where key.hasPrefix("material.group."):
+            guard let index = Int(key.dropFirst("material.group.".count)) else { return false }
+            editGame(\.materials) { $0.editCategory(CoreSetMaterialCategory(rawValue: previewMaterialCategory) ?? .vehicles) { _ = $0.editGroup(at: index) { $0.toggle() } } }
+        case "adjust.rayThickness": editGame(\.adjustments) { $0.rayThickness.set(Int(value.rounded())) }
+        case "adjust.boneThickness": editGame(\.adjustments) { $0.boneThickness.set(Int(value.rounded())) }
+        case "adjust.materialFont": editGame(\.adjustments) { $0.materialFontSize.set(Int(value.rounded())) }
+        case let key where key.hasPrefix("adjust."):
+            let parts = key.split(separator: "."); guard parts.count == 3 else { return false }
+            let color = CoreSetReferenceMenuAppearance.preset(max(0, min(6, Int(value))))
+            editGame(\.adjustments) { state in
+                func set(_ target: inout CoreSetActorColors) {
+                    switch parts[2] { case "name": target.name = color; case "ray": target.ray = color
+                    case "distance": target.distance = color; case "bone": target.bone = color
+                    case "team": target.team = color; default: break }
+                }
+                if parts[1] == "player" { set(&state.player) } else { set(&state.bot) }
+            }
+        case "radar.enabled": editGame(\.radar) { $0.enabled = value != 0 }
+        case "radar.distance": editGame(\.radar) { $0.showDistance = value != 0 }
+        case "radar.detect": editGame(\.radar) { $0.detectionDistance.set(Int(value.rounded())) }
+        case "radar.warning": editGame(\.radar) { $0.warningEnabled = value != 0 }
+        case "radar.ignoreBots": editGame(\.radar) { $0.ignoreBots = value != 0 }
+        case "radar.warningRange": editGame(\.radar) { $0.warningRange.set(Int(value.rounded())) }
+        case "radar.warningText": editGame(\.radar) { $0.warningTextSize.set(Int(value.rounded())) }
+        case "radar.radius", "radar.x", "radar.y":
+            editGame(\.radar) { state in
+                if state.placement.canvas == nil { state.placement.refreshCanvas(CoreSetRadarCanvas(nativeWidth: 390, nativeHeight: 844, displayWidth: 390, displayHeight: 844)) }
+                if action == "radar.radius" { state.placement.setRadius(Int(value.rounded())) }
+                else if action == "radar.x" { state.placement.setX(Int(value.rounded())) }
+                else { state.placement.setY(Int(value.rounded())) }
+            }
+        case "aim.enabled":
+            if featureState.aim.desired.enabled == true { return stopAimFromImGui() }
+            else { editGame(\.aim) { $0.enabled = true } }
+        case "aim.preaim": featureState.aim.updateDesired { $0.preaimCircle = value != 0 }
+        case "aim.dynamic": featureState.aim.updateDesired { $0.dynamicCircle.enabled = value != 0 }
+        case "aim.circle": featureState.aim.updateDesired { $0.showCircle = value != 0 }
+        case "aim.line": featureState.aim.updateDesired { $0.connectionLine = value != 0 }
+        case "aim.point": featureState.aim.updateDesired { $0.point = CoreSetAimPoint(rawValue: Int(value)) }
+        case "aim.trigger":
+            let values: [CoreSetAimTrigger] = [.scopeOnly, .fireOnly, .either, .both]; guard values.indices.contains(Int(value)) else { return false }
+            featureState.aim.updateDesired { $0.trigger = values[Int(value)] }
+        case "aim.circleSize": featureState.aim.updateDesired { $0.circleSize.set(Int(value.rounded())) }
+        case "aim.knocked": featureState.aim.updateDesired { $0.excludeKnocked = value != 0 }
+        case "aim.bots": featureState.aim.updateDesired { $0.includeBots = value != 0 }
+        case "aim.lock": featureState.aim.updateDesired { $0.lockSameTarget = value != 0 }
+        case "aim.scene":
+            let values: [CoreSetAimScene] = [.far, .general, .close, .custom]; guard values.indices.contains(Int(value)) else { return false }
+            featureState.aim.updateDesired { $0.scene = values[Int(value)] }
+        case "aim.lockStrength":
+            let values: [CoreSetLockStrength] = [.strong, .medium, .light]; guard values.indices.contains(Int(value)) else { return false }
+            featureState.aim.updateDesired { $0.lockStrength = values[Int(value)] }
+        case "aim.maximum": featureState.aim.updateDesired { $0.custom.maximumDistance.set(Int(value.rounded())) }
+        case "aim.strength": featureState.aim.updateDesired { $0.custom.strength.set(Int(value.rounded())) }
+        case "aim.smoothing": featureState.aim.updateDesired { $0.custom.smoothing.set(Int(value.rounded())) }
+        case "aim.horizontal": featureState.aim.updateDesired { $0.custom.horizontalSpeed.set(Int(value.rounded())) }
+        case "aim.vertical": featureState.aim.updateDesired { $0.custom.verticalSpeed.set(Int(value.rounded())) }
+        case "aim.prediction": featureState.aim.updateDesired { $0.custom.predictionMilliseconds.set(Int(value.rounded())) }
+        case "aim.threshold": featureState.aim.updateDesired { $0.custom.lockThreshold.set(Int(value.rounded())) }
+        case "aim.confirmation": featureState.aim.updateDesired { $0.custom.confirmationFrames.set(Int(value.rounded())) }
+        case "aim.pause": featureState.aim.updateDesired { $0.custom.takeoverPauseMilliseconds.set(Int(value.rounded())) }
+        case "recoil.enabled": editGame(\.recoil) { $0.enabled = value != 0 }
+        case "recoil.stop": editGame(\.recoil) { $0.stopWhenNotFiring.enabled = value != 0 }
+        case "recoil.vertical": editGame(\.recoil) { $0.verticalEnabled = value != 0 }
+        case "recoil.verticalStrength": editGame(\.recoil) { $0.verticalStrength.set(Int(value.rounded())) }
+        case "recoil.horizontal": editGame(\.recoil) { $0.horizontalEnabled = value != 0 }
+        case "recoil.horizontalStrength": editGame(\.recoil) { $0.horizontalStrength.set(Int(value.rounded())) }
+        default: return false
+        }
+        if action.hasPrefix("aim.") && action != "aim.enabled" {
+            stagedConfigurationPaths.insert(\CoreSetFeatureState.aim)
+            configurationSources[\CoreSetFeatureState.aim] = interactionControlIdentifier
+        }
+        rebuildMenu()
+        return true
+    }
+}
+
 private struct CoreSetMenuAppearance: Equatable {
     var theme: CoreSetTheme
     var accent: CoreSetRGBA
@@ -59,6 +459,15 @@ private final class CoreSetMenuConsumer<Value: Equatable>: CoreSetFeatureConsume
 
 // Local presentation only. Reference geometry does not establish device pixel parity.
 final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapConsumer, UIGestureRecognizerDelegate {
+    // The production menu surface is a dedicated ImGui/Metal controller. This
+    // object remains the typed feature-state owner only; when enabled it never
+    // constructs or hit-tests the legacy UIKit menu tree.
+    private var imguiRuntimeEnabled = false
+    func enableImGuiRuntime() {
+        precondition(Thread.isMainThread)
+        imguiRuntimeEnabled = true
+        hostedMenuRevision &+= 1
+    }
     private weak var basicAimStatusLabel: UILabel?
     private var basicAimStatus = "基础模式待启动"
     func updateBasicAimStatus(_ status: String) {
@@ -519,6 +928,11 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     }
 
     private func rebuildMenu(preservingCurrentOffset: Bool = true) {
+        if imguiRuntimeEnabled {
+            hostedMenuRevision &+= 1
+            homeStatusNeedsRebuild = false
+            return
+        }
         if hostedPointerID != nil || hostedDispatchControlID != nil || trackingUIKitSlider != nil {
             homeStatusNeedsRebuild = true
             return
@@ -617,6 +1031,11 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     }
 
     private func rebuildCurrentPage() {
+        if imguiRuntimeEnabled {
+            hostedMenuRevision &+= 1
+            homeStatusNeedsRebuild = false
+            return
+        }
         guard hostedPointerID == nil, hostedDispatchControlID == nil,
               trackingUIKitSlider == nil else {
             homeStatusNeedsRebuild = true

@@ -147,8 +147,10 @@ assert ".unavailable(reason:" in body(recoil_consumer, "var availability:")
 
 # An unrelated observation cannot destroy the pointer between down and up.
 rebuild = body(menu, "private func rebuildMenu(")
+assert "if imguiRuntimeEnabled" in rebuild
+assert rebuild.index("if imguiRuntimeEnabled") < rebuild.index("hostedPointerID != nil")
 for gate in ("hostedPointerID != nil", "hostedDispatchControlID != nil", "trackingUIKitSlider != nil"):
-    assert rebuild.index(gate) < rebuild.index("hostedMenuRevision &+= 1")
+    assert rebuild.index(gate) < rebuild.rindex("hostedMenuRevision &+= 1")
 register = body(menu, "private func registerHosted(")
 assert "slider.isContinuous = false" in register
 assert "beginUIKitSliderTracking" in register and "endUIKitSliderTracking" in register

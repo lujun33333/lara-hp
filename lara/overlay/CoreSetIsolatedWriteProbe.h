@@ -80,6 +80,26 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetActionInputAuthority *captured,
     NS_SWIFT_NAME(plan(candidate:input:configuration:));
 @end
 
+// Core-local route publication.  The authority is derived from the exact
+// c3018/c38c8 takeover predecessor, never from a target firing byte.
+@interface CoreSetV17ActionRouteDecision : NSObject
+@property(nonatomic, readonly) BOOL resolved;
+@property(nonatomic, readonly) BOOL aimAllowed;
+// 1 = c2e20 control fallthrough/+0x620; 2 = c3918/c3990 input route/+0x828.
+@property(nonatomic, readonly) NSInteger slotRaw;
+@property(nonatomic, readonly) NSInteger predecessorRaw;
+@end
+
+@interface CoreSetV17ActionRouteProducer : NSObject
+- (void)reset;
+- (nullable CoreSetV17ActionRouteDecision *)resolveAimPitch:(float)pitch yaw:(float)yaw
+    configuration:(CoreSetV17AimConfiguration *)configuration now:(double)now
+    NS_SWIFT_NAME(resolveAim(pitch:yaw:configuration:now:));
+// Inactive Aim enters the closed input-direct predecessor used by recoil-only
+// operation. It does not claim the separate control-fallthrough route.
+- (CoreSetV17ActionRouteDecision *)resolveRecoilOnly;
+@end
+
 @interface CoreSetV17ActionDelta : NSObject
 @property(nonatomic, readonly) float pitch;
 @property(nonatomic, readonly) float yaw;

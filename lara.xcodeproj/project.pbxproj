@@ -13,6 +13,7 @@
 		C05E71000000000000000008 /* CoreSetRenderCommands.mm in Sources */ = {isa = PBXBuildFile; fileRef = C05E71000000000000000007; };
 		C05E72000000000000000002 /* CoreSetMetalRenderAdapter.mm in Sources */ = {isa = PBXBuildFile; fileRef = C05E72000000000000000001; };
 		C05E72000000000000000005 /* CoreSetRemoteHostingAdapter.mm in Sources */ = {isa = PBXBuildFile; fileRef = C05E72000000000000000004; };
+		C05E76000000000000000002 /* CoreSetImGuiMenuSurface.mm in Sources */ = {isa = PBXBuildFile; fileRef = C05E76000000000000000001; };
 		C05E74000000000000000002 /* CoreSetFloatingSceneManager.mm in Sources */ = {isa = PBXBuildFile; fileRef = C05E74000000000000000001; };
 		C05E74000000000000000012 /* imgui.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C05E74000000000000000011; };
 		C05E74000000000000000014 /* imgui_draw.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C05E74000000000000000013; };
@@ -57,6 +58,8 @@
 		C05E72000000000000000003 /* CoreSetMetalRenderAdapter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = CoreSetMetalRenderAdapter.h; path = lara/overlay/CoreSetMetalRenderAdapter.h; sourceTree = SOURCE_ROOT; };
 		C05E72000000000000000004 /* CoreSetRemoteHostingAdapter.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = CoreSetRemoteHostingAdapter.mm; path = lara/overlay/CoreSetRemoteHostingAdapter.mm; sourceTree = SOURCE_ROOT; };
 		C05E72000000000000000006 /* CoreSetRemoteHostingAdapter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = CoreSetRemoteHostingAdapter.h; path = lara/overlay/CoreSetRemoteHostingAdapter.h; sourceTree = SOURCE_ROOT; };
+		C05E76000000000000000001 /* CoreSetImGuiMenuSurface.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = CoreSetImGuiMenuSurface.mm; path = lara/overlay/CoreSetImGuiMenuSurface.mm; sourceTree = SOURCE_ROOT; };
+		C05E76000000000000000003 /* CoreSetImGuiMenuSurface.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = CoreSetImGuiMenuSurface.h; path = lara/overlay/CoreSetImGuiMenuSurface.h; sourceTree = SOURCE_ROOT; };
 		C05E74000000000000000001 /* CoreSetFloatingSceneManager.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = CoreSetFloatingSceneManager.mm; path = lara/overlay/CoreSetFloatingSceneManager.mm; sourceTree = SOURCE_ROOT; };
 		C05E74000000000000000003 /* CoreSetFloatingSceneManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = CoreSetFloatingSceneManager.h; path = lara/overlay/CoreSetFloatingSceneManager.h; sourceTree = SOURCE_ROOT; };
 		C05E74000000000000000011 /* imgui.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = imgui.cpp; path = lara/third_party/imgui/imgui.cpp; sourceTree = SOURCE_ROOT; };
@@ -117,6 +120,8 @@
 				overlay/CoreSetMetalRenderAdapter.h,
 				overlay/CoreSetRemoteHostingAdapter.mm,
 				overlay/CoreSetRemoteHostingAdapter.h,
+				overlay/CoreSetImGuiMenuSurface.mm,
+				overlay/CoreSetImGuiMenuSurface.h,
 				overlay/CoreSetFloatingSceneManager.mm,
 				overlay/CoreSetFloatingSceneManager.h,
 				third_party,
@@ -185,6 +190,8 @@
 				C05E72000000000000000003 /* CoreSetMetalRenderAdapter.h */,
 				C05E72000000000000000004 /* CoreSetRemoteHostingAdapter.mm */,
 				C05E72000000000000000006 /* CoreSetRemoteHostingAdapter.h */,
+				C05E76000000000000000001 /* CoreSetImGuiMenuSurface.mm */,
+				C05E76000000000000000003 /* CoreSetImGuiMenuSurface.h */,
 				C05E74000000000000000001 /* CoreSetFloatingSceneManager.mm */,
 				C05E74000000000000000003 /* CoreSetFloatingSceneManager.h */,
 				C05E74000000000000000010 /* Dear ImGui 1.92.8 */,
@@ -434,6 +441,7 @@
 				C05E71000000000000000008 /* CoreSetRenderCommands.mm in Sources */,
 				C05E72000000000000000002 /* CoreSetMetalRenderAdapter.mm in Sources */,
 				C05E72000000000000000005 /* CoreSetRemoteHostingAdapter.mm in Sources */,
+				C05E76000000000000000002 /* CoreSetImGuiMenuSurface.mm in Sources */,
 				C05E74000000000000000002 /* CoreSetFloatingSceneManager.mm in Sources */,
 				C05E74000000000000000012 /* imgui.cpp in Sources */,
 				C05E74000000000000000014 /* imgui_draw.cpp in Sources */,
