@@ -82,7 +82,6 @@ assert start_host.index("_drawWindow.hidden = NO; _menuWindow.hidden = NO; _icon
 def validate_owner(text):
     owner = text.split("private final class CoreSetHostPresentationOwner:")[0]
     need(owner, "private static var retained: [UUID: CoreSetRuntimeCoordinator] = [:]", "private let menu = CoreSetMenuViewController()",
-         "private lazy var menuSurface: CoreSetImGuiMenuViewController",
          "private let host = CoreSetHUDHost(hostingAdapter: nil)", "private var hostPresentationOwner: CoreSetHostPresentationOwner!",
          "var featureState: CoreSetFeatureState { menu.featureState }", "Self.retained[identity] = self",
          "menu.bindMenuHostPresentationOwner(hostPresentationOwner)")
@@ -90,7 +89,7 @@ def validate_owner(text):
     assert owner.count("menu.bindGameConsumer(playerConsumer, to: \\.player)") == 1
     assert "CoreSetPlayerConsumer(coordinator: self, battleProducer: battleProducer)" in owner
     assert "playerConsumer?.consumed(receipt)" in owner
-    need(swift(owner, "activate"), "guard !stopping, let scene", "host.startLocal(in: scene, menuController: menuSurface)")
+    need(swift(owner, "activate"), "guard !stopping, let scene", "host.startLocal(in: scene, menuController: menu)")
     need(swift(owner, "hostChanged"), "menu.reconcileMenuHostPresentation", "submittedGeneration != host.renderGeneration",
          "generation: host.renderGeneration, sequence: 1", "commands: []")
     need(swift(owner, "publishStatus"), "host.lastConsumedSequence > 0", "跨应用 unavailable")
@@ -206,13 +205,13 @@ assert "CoreSetMenuViewController()" not in launcher and "present(menu" not in l
 need(swift(launcher, "updateRuntimePresentation"), "menuRequestedVisible = menuVisible", "if !menuVisible { presentPendingNotices() }")
 need(swift(launcher, "presentPendingNotices"), "!menuRequestedVisible")
 
-# The production menu is one fixed 838x535 ImGui/Metal surface. The host owns
-# scaling and the ImGui controller owns its semantic hit map; no UIKit control
-# regions are exported to the cross-window input path.
-need(coordinator, "host.contentOwnsLayout = false", "host.contentHitRegions = nil",
-     "private lazy var menuSurface: CoreSetImGuiMenuViewController")
-need(menu, "extension CoreSetMenuViewController: CoreSetImGuiMenuModel",
-     "func imguiMenuSnapshot()", "func performImGuiMenuAction(")
+# Production uses the complete UIKit/CoreAnimation menu. CALayerHost transports
+# its layer tree and the existing HID chain dispatches to the real controls.
+need(coordinator, "host.contentOwnsLayout = true", "menu?.localHostHitRegions ?? []",
+     "menu runtime backend=UIKit-CoreAnimation", "menuController: self.menu")
+assert "menuSurface" not in coordinator
+need(menu, "var localHostHitRegions: [UIView]", "func hostedControlID(at point: CGPoint)",
+     "func handleHostedControl(", "private func backStylePreview", "private func showHostedColorEditor")
 layout = objc(host, "layoutSurfaces")
 fixed_branch = re.search(r"\} else \{([\s\S]*?)\n    \}", layout).group(1)
 need(fixed_branch, "_panel.bounds = CGRectMake(0, 0, 838, 535)",

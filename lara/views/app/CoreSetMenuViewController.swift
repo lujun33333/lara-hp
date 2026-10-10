@@ -1,4 +1,5 @@
 import UIKit
+import QuartzCore
 import Darwin
 
 struct CoreSetMenuHostSettings: Equatable {
@@ -582,9 +583,8 @@ private final class CoreSetMenuConsumer<Value: Equatable>: CoreSetFeatureConsume
 
 // Local presentation only. Reference geometry does not establish device pixel parity.
 final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapConsumer, UIGestureRecognizerDelegate {
-    // The production menu surface is a dedicated ImGui/Metal controller. This
-    // object remains the typed feature-state owner only; when enabled it never
-    // constructs or hit-tests the legacy UIKit menu tree.
+    // Production uses this complete UIKit/CoreAnimation tree. The dormant
+    // ImGui model remains only as a compatibility surface for old builds.
     private var imguiRuntimeEnabled = false
     func enableImGuiRuntime() {
         precondition(Thread.isMainThread)
@@ -817,6 +817,9 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     }
     private var hostedEntries: [HostedEntry] = []
     private(set) var hostedMenuRevision: UInt64 = 0
+    private var appliedContentScale: CGFloat = 0
+    private var appliedContentScaleRevision: UInt64 = .max
+    private var committedHostedMenuRevision: UInt64 = .max
     private var hostedScrollID: String?
     private var hostedScrollStart = CGPoint.zero
     private var hostedScrollOffset = CGPoint.zero
@@ -983,6 +986,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        let displayScale = view.window?.screen.scale ?? UIScreen.main.scale
+        if appliedContentScale != displayScale ||
+            appliedContentScaleRevision != hostedMenuRevision {
+            applyHostedContentScale(displayScale, to: view)
+            appliedContentScale = displayScale
+            appliedContentScaleRevision = hostedMenuRevision
+        }
         // Core draws the 838x535 reference window from the hosted surface's
         // display bounds.  A controller first lays out in the launcher's
         // portrait scene, then receives the game's landscape bounds.  Keeping
@@ -1011,6 +1021,26 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         hostedColorOverlay?.frame = view.bounds
         hostedColorCard?.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
         if selectedPage == 4 { refreshRadarRangeRows() }
+    }
+
+    private func applyHostedContentScale(_ scale: CGFloat, to root: UIView) {
+        guard scale.isFinite, scale > 0 else { return }
+        root.contentScaleFactor = scale
+        root.layer.contentsScale = scale
+        root.layer.sublayers?.forEach { $0.contentsScale = scale }
+        root.subviews.forEach { applyHostedContentScale(scale, to: $0) }
+    }
+
+    private func commitHostedMenuUpdate() {
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        CATransaction.flush()
+        if UIApplication.shared.applicationState != .active,
+           committedHostedMenuRevision != hostedMenuRevision {
+            committedHostedMenuRevision = hostedMenuRevision
+            NSLog("Core-SET: menu presentation stage=uikit-ca committed=1 revision=%llu scale=%.2f",
+                  hostedMenuRevision, appliedContentScale)
+        }
     }
 
     private func clampedPanelCenter(_ proposed: CGPoint, in safe: CGRect, scale: CGFloat) -> CGPoint {
@@ -1138,6 +1168,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             y: min(max(0, offset.y), max(0, content.contentSize.height - content.bounds.height)))
         registerHostedColorEditor()
         installUnavailableFeedback(in: panel)
+        commitHostedMenuUpdate()
     }
 
     private func addReferenceBrand(to sidebar: UIView) {
@@ -1205,6 +1236,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             y: min(max(0, offset.y), max(0, content.contentSize.height - content.bounds.height)))
         registerHostedColorEditor()
         installUnavailableFeedback(in: panel)
+        commitHostedMenuUpdate()
     }
 
     @objc private func selectPage(_ sender: UIButton) {
@@ -1267,6 +1299,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                              at point: CGPoint) -> Bool {
         precondition(Thread.isMainThread)
         defer {
+            if phase == .ended { commitHostedMenuUpdate() }
             if phase == .ended || phase == .cancelled {
                 if hostedPointerID == identifier { hostedPointerID = nil }
                 if homeStatusNeedsRebuild && hostedPointerID == nil {

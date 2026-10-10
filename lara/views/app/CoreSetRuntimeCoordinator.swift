@@ -468,10 +468,6 @@ final class CoreSetRuntimeCoordinator {
     private weak var scene: UIWindowScene?
     private weak var launcher: CoreSetLauncherViewController?
     private let menu = CoreSetMenuViewController()
-    private lazy var menuSurface: CoreSetImGuiMenuViewController = {
-        menu.enableImGuiRuntime()
-        return CoreSetImGuiMenuViewController(model: menu)
-    }()
     private let host = CoreSetHUDHost(hostingAdapter: nil)
     private let metalAdapter = CoreSetMetalRenderAdapter()
     private var coreHostingAdapter: CoreSetRemoteHostingAdapter?
@@ -725,10 +721,14 @@ final class CoreSetRuntimeCoordinator {
         // The host retains this generic renderer; availability is still
         // decided by an attached drawable and observed Metal scheduler.
         _ = host.installLocalMetalConsumer(metalAdapter)
-        // Core's menu is an 838x535 ImGui surface.  Let the host scale/center
-        // that one surface; no UIKit child-control regions participate.
-        host.contentOwnsLayout = false
-        host.contentHitRegions = nil
+        // UIKit/CoreAnimation owns the complete seven-page menu. The iOS 26
+        // CALayerHost/HID transport remains responsible only for cross-app
+        // presentation and pointer delivery.
+        host.contentOwnsLayout = true
+        host.contentHitRegions = { [weak menu = self.menu] in
+            menu?.localHostHitRegions ?? []
+        }
+        NSLog("Core-SET: menu runtime backend=UIKit-CoreAnimation hosting=CALayerHost input=HID")
         hostPresentationOwner = CoreSetHostPresentationOwner(host: host)
         _ = menu.bindMenuHostPresentationOwner(hostPresentationOwner)
         playerConsumer = CoreSetPlayerConsumer(coordinator: self, battleProducer: battleProducer)
@@ -828,7 +828,7 @@ final class CoreSetRuntimeCoordinator {
                 }
                 coreHostingAdapter = nil
             }
-            if !host.startLocal(in: scene, menuController: menuSurface) {
+            if !host.startLocal(in: scene, menuController: menu) {
                 publishStatus(); return
             }
             // Loads the existing, verified local palette before observing it.
@@ -1076,7 +1076,7 @@ final class CoreSetRuntimeCoordinator {
             }
             self.coreHostingAdapter = adapter
             self.hostingCleanupFailed = false
-            guard self.host.startHosted(in: scene, menuController: self.menuSurface,
+            guard self.host.startHosted(in: scene, menuController: self.menu,
                 completion: { [weak self] registered in
                 guard let self, self.gameLaunchCurrent(epoch) else { return }
                 guard registered else {
@@ -1141,7 +1141,7 @@ final class CoreSetRuntimeCoordinator {
                 self.menu.setHostedExitAvailable(false)
                 if self.host.installRemoteHostingAdapter(nil), let scene = self.scene,
                    scene.activationState == .foregroundActive,
-                   self.host.startLocal(in: scene, menuController: self.menuSurface) {
+                   self.host.startLocal(in: scene, menuController: self.menu) {
                     self.host.setApplicationActive(true)
                     self.hostChanged()
                     self.menu.requestMenuVisibility(false) { [weak self] _ in self?.publishStatus() }
@@ -1175,7 +1175,7 @@ final class CoreSetRuntimeCoordinator {
                 self.coreHostingAdapter = nil
                 guard self.host.installRemoteHostingAdapter(nil), let scene = self.scene,
                       scene.activationState == .foregroundActive,
-                      self.host.startLocal(in: scene, menuController: self.menuSurface) else {
+                      self.host.startLocal(in: scene, menuController: self.menu) else {
                     self.publishStatus()
                     completion("context 已清理，但本应用窗口恢复失败")
                     return
