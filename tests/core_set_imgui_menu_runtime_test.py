@@ -15,15 +15,18 @@ for token in ("CoreSetImGuiMenuModel", "CoreSetImGuiMenuViewController",
 for token in ("ImGui::CreateContext", "ImGui_ImplMetal_Init", "ImGui::NewFrame",
               "ImGui::Begin(\"Dear Core\"", "ImGui::InvisibleButton", "ImGui::SliderInt",
               "hostedControlIDAtPoint", "handleHostedControlID",
-              "revision != _renderedRevision", "!self.view.superview.hidden"):
+              "revision != _renderedRevision", "!self.view.superview.hidden",
+              "CAMetalLayer", "nextDrawable", "fallbackTexture"):
     assert token in surface, token
 for token in ("AddMousePosEvent", "AddMouseButtonEvent", "ClearEventsQueue", "ClearInputMouse"):
     assert token in pointer, token
 assert "return _pointer.layoutRevision();" in surface
 assert "if (ImGui::SliderInt" in surface and "&& enabled)" in surface
-for token in ("io.ConfigInputTrickleEventQueue = false", "[_metalView draw]",
-              "_frameSerial > beforeFrame", "ImGui input stage=frame",
-              "ImGui action stage=widget", "actionChanged", "core17-imgui-v13"):
+for token in ("io.ConfigInputTrickleEventQueue = false", "renderFrameAttemptPresentation",
+              "_frameSerial > beforeFrame", "_scheduledPresentationSerial > beforeScheduled",
+              "ImGui input stage=frame", "processed=%d", "presentationQueued=1",
+              "ImGui presentation stage=hosted-frame", "presentScheduled=%d",
+              "ImGui action stage=widget", "actionChanged", "core17-imgui-v14"):
     assert token in surface, token
 for token in ("ImVec2(838,535)", "ImVec2(170,38)", '"初始化"', '"视觉"', '"战斗"',
               "ImVec2(132, 32)", "ImVec2(24,24)"):
@@ -37,8 +40,19 @@ for removed in ("addHit:", "hitForIdentifier:", "_hits", "Commit sliders once on
 input_body = surface[surface.index("- (BOOL)handleHostedControlID:"):surface.index("- (BOOL)dispatchLocalPoint:", surface.index("- (BOOL)handleHostedControlID:"))]
 assert "performImGuiMenuAction" not in input_body
 assert "_model.imguiMenuModelRevision != _renderedRevision" not in input_body
-assert input_body.index("_pointer.begin") < input_body.index("[_metalView draw]")
-assert input_body.index("_pointer.end") < input_body.index("[_metalView draw]")
+assert input_body.index("_pointer.begin") < input_body.index("renderFrameAttemptPresentation:NO")
+assert input_body.index("_pointer.end") < input_body.index("renderFrameAttemptPresentation:NO")
+assert "if (!processed)" in input_body
+assert "if (!presentScheduled)" not in input_body
+assert "MTKView" not in surface
+assert "currentDrawable" not in surface
+render = surface[surface.index("- (CoreSetImGuiFrameResult)renderFrameAttemptPresentation:"):
+                 surface.index("- (uint64_t)hostedMenuRevision")]
+assert "attemptPresentation ? [layer nextDrawable] : nil" in render
+assert "drawable ? drawable.texture : [self fallbackTexture]" in render
+assert render.index("ImGui::Render()") < render.index("result.processed = YES")
+assert "if (drawable)" in render and "result.presentScheduled = YES" in render
+assert "dispatch_async(dispatch_get_main_queue()" in render
 for token in ("extension CoreSetMenuViewController: CoreSetImGuiMenuModel",
               "enableImGuiRuntime()", "imguiMenuSnapshot()", "performImGuiMenuAction"):
     assert token in menu, token

@@ -1,5 +1,6 @@
 #import "CoreSetImGuiMenuSurface.h"
-#import <MetalKit/MetalKit.h>
+#import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
 #include "../third_party/imgui/imgui.h"
 #include "../third_party/imgui/backends/imgui_impl_metal.h"
 #include "CoreSetImGuiMenuPointer.h"
@@ -8,15 +9,26 @@
 
 @class CoreSetImGuiMenuViewController;
 
-@interface CoreSetImGuiTouchView : MTKView
+typedef struct CoreSetImGuiFrameResult {
+    BOOL processed;
+    BOOL presentScheduled;
+} CoreSetImGuiFrameResult;
+
+@interface CoreSetImGuiTouchView : UIView
 @property(nonatomic, weak) CoreSetImGuiMenuViewController *menuOwner;
+@property(nonatomic, readonly) CAMetalLayer *metalLayer;
 @end
 
-@interface CoreSetImGuiMenuViewController () <MTKViewDelegate>
+@interface CoreSetImGuiMenuViewController ()
 - (BOOL)dispatchLocalPoint:(CGPoint)point phase:(CoreSetHostedPointerPhase)phase;
+- (void)updateDrawableGeometry;
+- (CoreSetImGuiFrameResult)renderFrameAttemptPresentation:(BOOL)attemptPresentation;
+- (void)schedulePresentation;
 @end
 
 @implementation CoreSetImGuiTouchView
++ (Class)layerClass { return CAMetalLayer.class; }
+- (CAMetalLayer *)metalLayer { return (CAMetalLayer *)self.layer; }
 - (void)dispatchTouches:(NSSet<UITouch *> *)touches phase:(CoreSetHostedPointerPhase)phase {
     UITouch *touch = touches.anyObject;
     if (touch) [self.menuOwner dispatchLocalPoint:[touch locationInView:self] phase:phase];
@@ -53,8 +65,11 @@ static NSString *CSString(id value) {
 
 @implementation CoreSetImGuiMenuViewController {
     __weak id<CoreSetImGuiMenuModel> _model;
-    CoreSetImGuiTouchView *_metalView;
+    CoreSetImGuiTouchView *_surfaceView;
+    id<MTLDevice> _device;
     id<MTLCommandQueue> _queue;
+    MTLRenderPassDescriptor *_renderPass;
+    id<MTLTexture> _fallbackTexture;
     ImGuiContext *_imgui;
     ImFont *_bodyFont;
     ImFont *_titleFont;
@@ -65,7 +80,9 @@ static NSString *CSString(id value) {
     CoreSet::ImGuiMenuPointer _pointer;
     CGRect _inputBounds;
     uint64_t _frameSerial;
+    uint64_t _scheduledPresentationSerial;
     uint64_t _widgetActionSerial;
+    BOOL _presentationQueued;
 }
 
 - (instancetype)initWithModel:(id<CoreSetImGuiMenuModel>)model {
@@ -76,28 +93,35 @@ static NSString *CSString(id value) {
 - (id<CoreSetImGuiMenuModel>)model { return _model; }
 
 - (void)loadView {
-    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    _device = MTLCreateSystemDefaultDevice();
     UIView *fallback = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 838, 535)];
     fallback.backgroundColor = UIColor.clearColor;
     self.view = fallback;
-    if (!device) return;
-    _queue = [device newCommandQueue];
-    _metalView = [[CoreSetImGuiTouchView alloc] initWithFrame:fallback.bounds device:device];
-    _metalView.menuOwner = self;
-    _metalView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    _metalView.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
-    _metalView.depthStencilPixelFormat = MTLPixelFormatInvalid;
-    _metalView.framebufferOnly = YES;
-    _metalView.opaque = NO; _metalView.layer.opaque = NO;
-    _metalView.clearColor = MTLClearColorMake(0, 0, 0, 0);
-    _metalView.paused = YES; _metalView.enableSetNeedsDisplay = YES;
-    _metalView.delegate = self;
-    [fallback addSubview:_metalView];
+    if (!_device) return;
+    _queue = [_device newCommandQueue];
+    _surfaceView = [[CoreSetImGuiTouchView alloc] initWithFrame:fallback.bounds];
+    _surfaceView.menuOwner = self;
+    _surfaceView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _surfaceView.backgroundColor = UIColor.clearColor;
+    _surfaceView.opaque = NO; _surfaceView.layer.opaque = NO;
+    CAMetalLayer *layer = _surfaceView.metalLayer;
+    layer.device = _device;
+    layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    layer.framebufferOnly = YES;
+    layer.opaque = NO;
+    layer.maximumDrawableCount = 3;
+    layer.allowsNextDrawableTimeout = YES;
+    layer.displaySyncEnabled = NO;
+    [fallback addSubview:_surfaceView];
+    _renderPass = [MTLRenderPassDescriptor renderPassDescriptor];
+    _renderPass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    _renderPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    _renderPass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    if (!_metalView || !_queue) return;
+    if (!_surfaceView || !_device || !_queue || !_renderPass) return;
     _imgui = ImGui::CreateContext();
     if (!_imgui) return;
     ImGui::SetCurrentContext(_imgui);
@@ -117,10 +141,10 @@ static NSString *CSString(id value) {
     if (!_bodyFont) _bodyFont = io.Fonts->AddFontDefault();
     if (!_titleFont) _titleFont = _bodyFont;
     if (!_brandFont) _brandFont = _bodyFont;
-    if (!ImGui_ImplMetal_Init(_metalView.device)) {
+    if (!ImGui_ImplMetal_Init(_device)) {
         ImGui::DestroyContext(_imgui); _imgui = nullptr; return;
     }
-    NSLog(@"Core-SET: ImGui runtime contract=core17-imgui-v13 size=838x535 contentOrigin=170,38 inputFrame=phase-driven semanticReceipt=widget-action");
+    NSLog(@"Core-SET: ImGui runtime contract=core17-imgui-v14 surface=CAMetalLayer/nextDrawable size=838x535 contentOrigin=170,38 inputFrame=phase-driven semanticReceipt=cpu-frame widgetReceipt=action gpuReceipt=present-scheduled");
     [self startDisplayLink];
 }
 
@@ -132,9 +156,9 @@ static NSString *CSString(id value) {
 }
 
 - (void)displayTick:(CADisplayLink *)link {
-    if (_metalView.window && !self.view.hidden && !self.view.superview.hidden &&
+    if (_surfaceView.window && !self.view.hidden && !self.view.superview.hidden &&
         self.view.alpha > 0.01 && self.view.superview.alpha > 0.01) {
-        [_metalView draw];
+        [self renderFrameAttemptPresentation:YES];
     } else if (_imgui && _pointer.down()) {
         ImGui::SetCurrentContext(_imgui);
         _pointer.cancel(ImGui::GetIO());
@@ -143,11 +167,42 @@ static NSString *CSString(id value) {
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
+    [self updateDrawableGeometry];
     if (_imgui && !CGRectEqualToRect(_inputBounds, self.view.bounds)) {
         ImGui::SetCurrentContext(_imgui);
         _pointer.layoutChanged(ImGui::GetIO());
         _inputBounds = self.view.bounds;
     }
+}
+
+- (void)updateDrawableGeometry {
+    if (!_surfaceView) return;
+    const CGFloat scale = self.view.window.screen.scale ?: UIScreen.mainScreen.scale;
+    const CGSize bounds = _surfaceView.bounds.size;
+    const CGSize drawableSize = CGSizeMake(MAX(1, round(bounds.width * scale)),
+                                           MAX(1, round(bounds.height * scale)));
+    CAMetalLayer *layer = _surfaceView.metalLayer;
+    layer.contentsScale = scale;
+    if (!CGSizeEqualToSize(layer.drawableSize, drawableSize)) {
+        layer.drawableSize = drawableSize;
+        _fallbackTexture = nil;
+    }
+}
+
+- (id<MTLTexture>)fallbackTexture {
+    [self updateDrawableGeometry];
+    const CGSize size = _surfaceView.metalLayer.drawableSize;
+    const NSUInteger width = MAX((NSUInteger)1, (NSUInteger)llround(size.width));
+    const NSUInteger height = MAX((NSUInteger)1, (NSUInteger)llround(size.height));
+    if (_fallbackTexture && _fallbackTexture.width == width && _fallbackTexture.height == height)
+        return _fallbackTexture;
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                     width:width height:height mipmapped:NO];
+    descriptor.storageMode = MTLStorageModePrivate;
+    descriptor.usage = MTLTextureUsageRenderTarget;
+    _fallbackTexture = [_device newTextureWithDescriptor:descriptor];
+    return _fallbackTexture;
 }
 
 - (void)dealloc {
@@ -421,14 +476,23 @@ static NSString *CSString(id value) {
     ImGui::EndChild(); ImGui::End();
 }
 
-- (void)drawInMTKView:(MTKView *)view {
-    if (!_imgui || !_queue || !view.currentRenderPassDescriptor || !view.currentDrawable) return;
+- (CoreSetImGuiFrameResult)renderFrameAttemptPresentation:(BOOL)attemptPresentation {
+    CoreSetImGuiFrameResult result = { NO, NO };
+    if (!NSThread.isMainThread || !_imgui || !_device || !_queue || !_surfaceView || !_renderPass)
+        return result;
+    [self updateDrawableGeometry];
+    CAMetalLayer *layer = _surfaceView.metalLayer;
+    id<CAMetalDrawable> drawable = attemptPresentation ? [layer nextDrawable] : nil;
+    id<MTLTexture> texture = drawable ? drawable.texture : [self fallbackTexture];
+    if (!texture) return result;
+    _renderPass.colorAttachments[0].texture = texture;
     ImGui::SetCurrentContext(_imgui);
     ImGuiIO &io = ImGui::GetIO();
-    io.DisplaySize = ImVec2((float)view.bounds.size.width, (float)view.bounds.size.height);
-    io.DisplayFramebufferScale = ImVec2((float)(view.drawableSize.width/MAX(1.0,view.bounds.size.width)),
-                                         (float)(view.drawableSize.height/MAX(1.0,view.bounds.size.height)));
-    ImGui_ImplMetal_NewFrame(view.currentRenderPassDescriptor); ImGui::NewFrame();
+    const CGSize bounds = _surfaceView.bounds.size;
+    io.DisplaySize = ImVec2((float)bounds.width, (float)bounds.height);
+    io.DisplayFramebufferScale = ImVec2((float)(texture.width / MAX(1.0, bounds.width)),
+                                         (float)(texture.height / MAX(1.0, bounds.height)));
+    ImGui_ImplMetal_NewFrame(_renderPass); ImGui::NewFrame();
     const uint64_t revision = _model.imguiMenuModelRevision;
     if (!_snapshot || revision != _renderedRevision) {
         _snapshot = [[_model imguiMenuSnapshot] copy] ?: @{};
@@ -436,13 +500,36 @@ static NSString *CSString(id value) {
     }
     ImGui::PushFont(_bodyFont); [self drawMenu:_snapshot]; ImGui::PopFont();
     ImGui::Render();
-    id<MTLCommandBuffer> buffer = [_queue commandBuffer];
-    id<MTLRenderCommandEncoder> encoder = [buffer renderCommandEncoderWithDescriptor:view.currentRenderPassDescriptor];
-    ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), buffer, encoder);
-    [encoder endEncoding]; [buffer presentDrawable:view.currentDrawable]; [buffer commit];
     ++_frameSerial;
+    result.processed = YES;
+    id<MTLCommandBuffer> buffer = [_queue commandBuffer];
+    if (!buffer) return result;
+    id<MTLRenderCommandEncoder> encoder = [buffer renderCommandEncoderWithDescriptor:_renderPass];
+    if (!encoder) return result;
+    ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), buffer, encoder);
+    [encoder endEncoding];
+    if (drawable) {
+        [buffer presentDrawable:drawable];
+        ++_scheduledPresentationSerial;
+        result.presentScheduled = YES;
+    }
+    [buffer commit];
+    return result;
 }
-- (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {}
+
+- (void)schedulePresentation {
+    if (_presentationQueued || !_imgui || !_surfaceView) return;
+    _presentationQueued = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_presentationQueued = NO;
+        if (!self->_imgui || !self->_surfaceView.window || self.view.hidden || self.view.superview.hidden)
+            return;
+        CoreSetImGuiFrameResult result = [self renderFrameAttemptPresentation:YES];
+        NSLog(@"Core-SET: ImGui presentation stage=hosted-frame processed=%d presentScheduled=%d frame=%llu scheduledFrame=%llu",
+              result.processed, result.presentScheduled, (unsigned long long)self->_frameSerial,
+              (unsigned long long)self->_scheduledPresentationSerial);
+    });
+}
 
 - (uint64_t)hostedMenuRevision { return _pointer.layoutRevision(); }
 - (NSString *)hostedControlIDAtPoint:(CGPoint)point {
@@ -468,28 +555,33 @@ static NSString *CSString(id value) {
         queued = _pointer.move(io, (float)point.x, (float)point.y);
     else if (phase == CoreSetHostedPointerPhaseEnded)
         queued = _pointer.end(io, (float)point.x, (float)point.y);
-    if (!queued || !_metalView) return NO;
+    if (!queued || !_surfaceView) return NO;
     const uint64_t beforeFrame = _frameSerial;
+    const uint64_t beforeScheduled = _scheduledPresentationSerial;
     const uint64_t beforeAction = _widgetActionSerial;
-    // A hosted source keeps its last pixels while the owner app is backgrounded,
-    // but CADisplayLink may tick seconds late. Drive the exact ImGui context now
-    // so Down/Move/Up and widget behavior share a deterministic frame sequence.
-    [_metalView draw];
-    const BOOL rendered = _frameSerial > beforeFrame;
+    // Core drives the ImGui frame and the CAMetalLayer presentation as separate
+    // receipts.  A backgrounded source can temporarily have no drawable; the
+    // pointer must still advance through the real ImGui widget state machine.
+    CoreSetImGuiFrameResult frame = [self renderFrameAttemptPresentation:NO];
+    const BOOL processed = frame.processed && _frameSerial > beforeFrame;
+    BOOL presentScheduled = frame.presentScheduled && _scheduledPresentationSerial > beforeScheduled;
     const BOOL actionChanged = _widgetActionSerial > beforeAction;
     BOOL refreshed = !actionChanged;
     // The changed widget publishes a new immutable model revision during the
     // first frame. Render that revision immediately as well; otherwise a
     // backgrounded CADisplayLink could leave the old page/value visible.
-    if (rendered && actionChanged) {
+    if (processed && actionChanged) {
         const uint64_t actionFrame = _frameSerial;
-        [_metalView draw];
-        refreshed = _frameSerial > actionFrame;
+        CoreSetImGuiFrameResult refresh = [self renderFrameAttemptPresentation:NO];
+        refreshed = refresh.processed && _frameSerial > actionFrame;
+        presentScheduled = presentScheduled || refresh.presentScheduled;
     }
-    NSLog(@"Core-SET: ImGui input stage=frame phase=%ld queued=1 rendered=%d refreshed=%d frame=%llu actionChanged=%d actionSerial=%llu",
-          (long)phase, rendered, refreshed, (unsigned long long)_frameSerial, actionChanged,
+    [self schedulePresentation];
+    NSLog(@"Core-SET: ImGui input stage=frame phase=%ld queued=1 processed=%d presentationQueued=1 presentScheduled=%d refreshed=%d frame=%llu scheduledFrame=%llu actionChanged=%d actionSerial=%llu",
+          (long)phase, processed, presentScheduled, refreshed, (unsigned long long)_frameSerial,
+          (unsigned long long)_scheduledPresentationSerial, actionChanged,
           (unsigned long long)_widgetActionSerial);
-    if (!rendered) {
+    if (!processed) {
         _pointer.cancel(io);
         return NO;
     }
