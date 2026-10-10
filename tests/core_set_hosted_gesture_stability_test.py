@@ -57,6 +57,18 @@ project = read("lara.xcodeproj/project.pbxproj")
 packaging = read("scripts/build_ipa_pe.sh")
 frontboard_stub = read("Config/PrivateFrameworkStubs/FrontBoard.framework/FrontBoard.tbd")
 fbs_stub = read("Config/PrivateFrameworkStubs/FrontBoardServices.framework/FrontBoardServices.tbd")
+required_dependency_stubs = {
+    "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit":
+        read("Config/PrivateFrameworkStubs/IOKit.framework/IOKit.tbd"),
+    "/System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/IOMobileFramebuffer":
+        read("Config/PrivateFrameworkStubs/IOMobileFramebuffer.framework/IOMobileFramebuffer.tbd"),
+    "/System/Library/PrivateFrameworks/RunningBoardServices.framework/RunningBoardServices":
+        read("Config/PrivateFrameworkStubs/RunningBoardServices.framework/RunningBoardServices.tbd"),
+    "/System/Library/PrivateFrameworks/BoardServices.framework/BoardServices":
+        read("Config/PrivateFrameworkStubs/BoardServices.framework/BoardServices.tbd"),
+    "/System/Library/PrivateFrameworks/BaseBoard.framework/BaseBoard":
+        read("Config/PrivateFrameworkStubs/BaseBoard.framework/BaseBoard.tbd"),
+}
 metal = read("lara/overlay/CoreSetMetalRenderAdapter.mm")
 imgui = read("lara/third_party/imgui/imgui.h")
 
@@ -124,7 +136,7 @@ for token in (
     "doRemoteCallCheckedWithTimeout:10000",
     "remoteSideObserved",
     "localSideObserved",
-    '@"core-three-surface-sbs-or-remote-v5"',
+    '@"core-three-surface-sbs-or-remote-v6-hit-snapshot"',
 ):
     assert token in adapter, token
 hosting_class = adapter[adapter.index("static void CSLoadCoreHostingFrameworks"):
@@ -173,15 +185,27 @@ assert unregister_three.index("removeSide:draw") < unregister_three.index("remov
 for role in ("Draw", "Icon", "Menu"):
     assert f'NSSelectorFromString(@"darkswordOverlay{role}HostController")' in register_three
 for token in (
+    '"-Wl,-needed_framework,IOKit"',
+    '"-Wl,-needed_framework,IOMobileFramebuffer"',
     '"-Wl,-needed_framework,FrontBoard"',
     '"-Wl,-needed_framework,FrontBoardServices"',
+    '"-Wl,-needed_framework,RunningBoardServices"',
+    '"-Wl,-needed_framework,BoardServices"',
+    '"-Wl,-needed_framework,BaseBoard"',
     '"-F$(SRCROOT)/Config/PrivateFrameworkStubs"',
+    "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+    "/System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/IOMobileFramebuffer",
     "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard",
     "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices",
+    "/System/Library/PrivateFrameworks/RunningBoardServices.framework/RunningBoardServices",
+    "/System/Library/PrivateFrameworks/BoardServices.framework/BoardServices",
+    "/System/Library/PrivateFrameworks/BaseBoard.framework/BaseBoard",
 ):
     assert token in project + packaging, token
 assert "/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard" in frontboard_stub
 assert "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices" in fbs_stub
+for install_name, stub in required_dependency_stubs.items():
+    assert install_name in stub, install_name
 assert project.count("CURRENT_PROJECT_VERSION = 5;") == 2
 
 for token in (

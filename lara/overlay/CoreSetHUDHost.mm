@@ -1,4 +1,5 @@
 #import "CoreSetHUDHost.h"
+#include "CoreSetHostedHitOwnership.h"
 #include "CoreSetPendingTouchQueue.h"
 #import <QuartzCore/QuartzCore.h>
 #import <objc/message.h>
@@ -274,6 +275,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     std::atomic<double> _panelHitMinX, _panelHitMinY, _panelHitMaxX, _panelHitMaxY;
     std::atomic<double> _floatingHitMinX, _floatingHitMinY, _floatingHitMaxX, _floatingHitMaxY;
     std::atomic_bool _panelHitEnabled;
+    std::atomic_bool _floatingHitEnabled;
+    std::atomic_uint_fast64_t _hitGeometryEpoch;
     std::atomic_uint_fast64_t _hidCallbacks;
     std::atomic_uint_fast64_t _hidTypeVendor;
     std::atomic_uint_fast64_t _hidTypeDigitizer;
@@ -318,6 +321,8 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         _inputArmed.store(false);
         _queuedInputPointer.store(-1);
         _panelHitEnabled.store(false);
+        _floatingHitEnabled.store(false);
+        _hitGeometryEpoch.store(0);
         _panelHitMinX.store(NAN); _panelHitMinY.store(NAN);
         _panelHitMaxX.store(NAN); _panelHitMaxY.store(NAN);
         _floatingHitMinX.store(NAN); _floatingHitMinY.store(NAN);
@@ -780,32 +785,64 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     return [root convertPoint:windowPoint fromView:window];
 }
 - (void)updateHostedInteractionBounds {
-    if (!NSThread.isMainThread || !_menuWindow || !_panel || !_floating ||
-        !_menuWindow.windowScene.screen) return;
+    if (!NSThread.isMainThread) return;
+    if (!_menuWindow || !_panel || !_floating || !_menuWindow.windowScene.screen) {
+        _hitGeometryEpoch.fetch_add(1, std::memory_order_acq_rel);
+        _panelHitEnabled.store(false, std::memory_order_relaxed);
+        _floatingHitEnabled.store(false, std::memory_order_relaxed);
+        _hitGeometryEpoch.fetch_add(1, std::memory_order_release);
+        return;
+    }
     id<UICoordinateSpace> fixed = _menuWindow.windowScene.screen.fixedCoordinateSpace;
     CGRect panel = [_panel convertRect:_panel.bounds toCoordinateSpace:fixed];
     CGRect floating = [_floating convertRect:_floating.bounds toCoordinateSpace:fixed];
     floating = CGRectInset(floating, -6, -6);
     const BOOL panelValid = _panelVisible && !_panel.hidden &&
         !CGRectIsNull(panel) && !CGRectIsEmpty(panel);
-    _panelHitEnabled.store(panelValid);
-    _panelHitMinX.store(CGRectGetMinX(panel)); _panelHitMinY.store(CGRectGetMinY(panel));
-    _panelHitMaxX.store(CGRectGetMaxX(panel)); _panelHitMaxY.store(CGRectGetMaxY(panel));
-    _floatingHitMinX.store(CGRectGetMinX(floating)); _floatingHitMinY.store(CGRectGetMinY(floating));
-    _floatingHitMaxX.store(CGRectGetMaxX(floating)); _floatingHitMaxY.store(CGRectGetMaxY(floating));
+    const BOOL floatingValid = !_floating.hidden && _floating.alpha > 0.01 &&
+        _floating.userInteractionEnabled &&
+        !CGRectIsNull(floating) && !CGRectIsEmpty(floating);
+    _hitGeometryEpoch.fetch_add(1, std::memory_order_acq_rel);
+    _panelHitMinX.store(CGRectGetMinX(panel), std::memory_order_relaxed);
+    _panelHitMinY.store(CGRectGetMinY(panel), std::memory_order_relaxed);
+    _panelHitMaxX.store(CGRectGetMaxX(panel), std::memory_order_relaxed);
+    _panelHitMaxY.store(CGRectGetMaxY(panel), std::memory_order_relaxed);
+    _floatingHitMinX.store(CGRectGetMinX(floating), std::memory_order_relaxed);
+    _floatingHitMinY.store(CGRectGetMinY(floating), std::memory_order_relaxed);
+    _floatingHitMaxX.store(CGRectGetMaxX(floating), std::memory_order_relaxed);
+    _floatingHitMaxY.store(CGRectGetMaxY(floating), std::memory_order_relaxed);
+    _panelHitEnabled.store(panelValid, std::memory_order_relaxed);
+    _floatingHitEnabled.store(floatingValid, std::memory_order_relaxed);
+    _hitGeometryEpoch.fetch_add(1, std::memory_order_release);
+}
+- (coreset_hosted_hit::Owner)hostedHitOwnerAtSurfacePoint:(CGPoint)point {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y))
+        return coreset_hosted_hit::Owner::None;
+    for (NSUInteger attempt = 0; attempt < 4; ++attempt) {
+        const uint64_t before = _hitGeometryEpoch.load(std::memory_order_acquire);
+        if (before & 1) continue;
+        const coreset_hosted_hit::Bounds floating{
+            _floatingHitMinX.load(std::memory_order_relaxed),
+            _floatingHitMinY.load(std::memory_order_relaxed),
+            _floatingHitMaxX.load(std::memory_order_relaxed),
+            _floatingHitMaxY.load(std::memory_order_relaxed),
+            _floatingHitEnabled.load(std::memory_order_relaxed)
+        };
+        const coreset_hosted_hit::Bounds panel{
+            _panelHitMinX.load(std::memory_order_relaxed),
+            _panelHitMinY.load(std::memory_order_relaxed),
+            _panelHitMaxX.load(std::memory_order_relaxed),
+            _panelHitMaxY.load(std::memory_order_relaxed),
+            _panelHitEnabled.load(std::memory_order_relaxed)
+        };
+        const uint64_t after = _hitGeometryEpoch.load(std::memory_order_acquire);
+        if (before == after)
+            return coreset_hosted_hit::ownerAtPoint(floating, panel, point.x, point.y);
+    }
+    return coreset_hosted_hit::Owner::None;
 }
 - (BOOL)surfacePointMayHitHostedInteraction:(CGPoint)point {
-    if (!std::isfinite(point.x) || !std::isfinite(point.y)) return NO;
-    const double fx0 = _floatingHitMinX.load(), fy0 = _floatingHitMinY.load();
-    const double fx1 = _floatingHitMaxX.load(), fy1 = _floatingHitMaxY.load();
-    const BOOL floating = std::isfinite(fx0) && std::isfinite(fy0) &&
-        point.x >= fx0 && point.x <= fx1 && point.y >= fy0 && point.y <= fy1;
-    if (floating) return YES;
-    if (!_panelHitEnabled.load()) return NO;
-    const double px0 = _panelHitMinX.load(), py0 = _panelHitMinY.load();
-    const double px1 = _panelHitMaxX.load(), py1 = _panelHitMaxY.load();
-    return std::isfinite(px0) && std::isfinite(py0) &&
-        point.x >= px0 && point.x <= px1 && point.y >= py0 && point.y <= py1;
+    return [self hostedHitOwnerAtSurfacePoint:point] != coreset_hosted_hit::Owner::None;
 }
 - (NSString *)hostedControlIDAtSurfacePoint:(CGPoint)point missReason:(const char **)missReason {
     if (missReason) *missReason = "no-eligible-control";
@@ -820,12 +857,12 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         if (missReason) *missReason = "outside-fixed-surface";
         return nil;
     }
-    UIWindow *floatingWindow = _floating.window ?: _menuWindow;
-    CGPoint floatingWindowPoint = [floatingWindow convertPoint:point
-        fromCoordinateSpace:floatingWindow.windowScene.screen.fixedCoordinateSpace];
-    CGPoint floatPoint = [_floating convertPoint:floatingWindowPoint fromView:floatingWindow];
-    if (!_floating.hidden && _floating.alpha > 0.01 && _floating.userInteractionEnabled &&
-        [_floating pointInside:floatPoint withEvent:nil]) return @"host.floating";
+    const coreset_hosted_hit::Owner owner = [self hostedHitOwnerAtSurfacePoint:point];
+    if (owner == coreset_hosted_hit::Owner::Floating) return @"host.floating";
+    if (owner != coreset_hosted_hit::Owner::Panel) {
+        if (missReason) *missReason = "outside-interaction-bounds";
+        return nil;
+    }
     if (!_panelVisible || _panel.hidden ||
         ![_menuController conformsToProtocol:@protocol(CoreSetHostedMenuTapConsumer)]) {
         if (missReason) *missReason = "panel-hidden-or-consumer-unavailable";
@@ -1824,6 +1861,10 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     [self stopHostedOrientationObserver];
     (void)[self restoreRenderFPS];
     _running = NO; _panelVisible = NO;
+    _hitGeometryEpoch.fetch_add(1, std::memory_order_acq_rel);
+    _panelHitEnabled.store(false, std::memory_order_relaxed);
+    _floatingHitEnabled.store(false, std::memory_order_relaxed);
+    _hitGeometryEpoch.fetch_add(1, std::memory_order_release);
     [self invalidateFrames];
     for (id token in _observers) [NSNotificationCenter.defaultCenter removeObserver:token];
     [_observers removeAllObjects];

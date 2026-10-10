@@ -15,7 +15,7 @@ extern "C" int proc_name(int pid, void *buffer, uint32_t buffersize);
 static const double kCoreSetCoreDrawLevel = 999998.0;
 static const double kCoreSetCoreMenuLevel = 999999.0;
 static const double kCoreSetCoreIconLevel = 1000000.0;
-static NSString *const CSHostBuildMarker = @"core-three-surface-sbs-or-remote-v5";
+static NSString *const CSHostBuildMarker = @"core-three-surface-sbs-or-remote-v6-hit-snapshot";
 
 static void CSLoadCoreHostingFrameworks(void) {
     // Core 1.7 resolves the hosting class again for every registration attempt.

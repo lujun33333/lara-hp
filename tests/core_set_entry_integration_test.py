@@ -293,7 +293,7 @@ need(remote_adapter_header,
      "- (nullable instancetype)initWithCoreHosting:(BOOL)coreHosting")
 need(remote_adapter, "CALayerHost", "SBMainWorkspace", "mainWindowScene", "setContextId:",
      "kCoreSetCoreMenuLevel", "kCoreSetCoreIconLevel", "kCoreSetCoreDrawLevel", "RemoteCall",
-     "doRemoteCallCheckedWithTimeout", '@"core-three-surface-sbs-or-remote-v5"',
+     "doRemoteCallCheckedWithTimeout", '@"core-three-surface-sbs-or-remote-v6-hit-snapshot"',
      "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
      "unregisterWindowWithContextID:", "registerThreeSurfacesAsync",
      "kCoreSetCoreDrawLevel = 999998.0", "kCoreSetCoreMenuLevel = 999999.0",

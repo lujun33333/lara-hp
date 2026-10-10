@@ -640,8 +640,13 @@ if grep -Fxq -- /usr/lib/swift <<<"$MAIN_RPATHS_BEFORE"; then
 fi
 MAIN_DYLIB_LOADS="$(xcrun otool -L "$BIN" | tail -n +2 | awk '{print $1}')"
 for required_private_framework in \
+    /System/Library/Frameworks/IOKit.framework/Versions/A/IOKit \
+    /System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/IOMobileFramebuffer \
     /System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard \
-    /System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices; do
+    /System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices \
+    /System/Library/PrivateFrameworks/RunningBoardServices.framework/RunningBoardServices \
+    /System/Library/PrivateFrameworks/BoardServices.framework/BoardServices \
+    /System/Library/PrivateFrameworks/BaseBoard.framework/BaseBoard; do
     grep -Fxq -- "$required_private_framework" <<<"$MAIN_DYLIB_LOADS" \
         || die "最终主 Mach-O 缺少王者兼容浮窗固定依赖：$required_private_framework"
 done
