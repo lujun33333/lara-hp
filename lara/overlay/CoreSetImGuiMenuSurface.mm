@@ -541,8 +541,8 @@ static NSString *CSString(id value) {
             CGDataProviderRef provider = CGDataProviderCreateWithCFData(
                 (__bridge CFDataRef)pixels);
             CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-            CGBitmapInfo bitmap = (CGBitmapInfo)(kCGBitmapByteOrder32Little |
-                                                 kCGImageAlphaPremultipliedFirst);
+            CGBitmapInfo bitmap = (CGBitmapInfo)kCGBitmapByteOrder32Little |
+                (CGBitmapInfo)kCGImageAlphaPremultipliedFirst;
             CGImageRef image = provider && colorSpace
                 ? CGImageCreate(width, height, 8, 32, rowBytes, colorSpace, bitmap,
                                 provider, nullptr, false, kCGRenderingIntentDefault)
