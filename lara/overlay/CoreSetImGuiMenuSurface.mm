@@ -198,7 +198,7 @@ static NSString *CSString(id value) {
         const ImVec2 low(start.x + width - 41, start.y + 3.5f), high(low.x + 21, low.y + 21);
         const ImU32 border = ImGui::GetColorU32(ImGui::IsItemHovered() ? accent :
             ImGui::GetStyleColorVec4(ImGuiCol_Border));
-        draw->AddRect(low, high, border, 3, 0, 1.5f);
+        draw->AddRect(low, high, border, 3.0f, ImDrawFlags_None, 1.5f);
         if (selected) {
             draw->AddRectFilled(low, high, ImGui::GetColorU32(accent), 3);
             draw->AddLine(ImVec2(low.x + 5, low.y + 11), ImVec2(low.x + 9, low.y + 15),
@@ -281,7 +281,7 @@ static NSString *CSString(id value) {
                 ImDrawList *draw = ImGui::GetWindowDrawList();
                 const ImVec2 low = ImGui::GetItemRectMin(), high = ImGui::GetItemRectMax();
                 draw->AddRect(ImVec2(low.x - 2, low.y - 2), ImVec2(high.x + 2, high.y + 2),
-                              ImGui::GetColorU32(ImGuiCol_Text), 6, 0, 2);
+                              ImGui::GetColorU32(ImGuiCol_Text), 6.0f, ImDrawFlags_None, 2.0f);
             }
             ImGui::PopStyleColor(3);
         }
