@@ -64,12 +64,10 @@ class HomeInputResponsivenessContract(unittest.TestCase):
         require_responsive_contract(self.coordinator, self.telemetry, self.menu)
         self.assertIn("UIControlEventTouchUpInside", self.host)
         self.assertIn("UIPanGestureRecognizer", self.host)
-        self.assertIn("IOHIDEventSystemClient", self.host)
-        self.assertIn("BKSHID", self.host)
-        self.assertIn("if (ready) (void)[host armHostedInput]", self.host)
-        self.assertIn("if (!active && !_inputArmed.load()) (void)[self armHostedInput]", self.host)
-        self.assertIn("const BOOL hidOwnsBackground = !active && self.hostedInputMonitorArmed", self.host)
-        self.assertIn("_menuWindow.userInteractionEnabled = !hidOwnsBackground", self.host)
+        self.assertIn("_menuWindow.userInteractionEnabled = YES", self.host)
+        self.assertNotIn("IOHIDEventSystemClient", self.host)
+        self.assertNotIn("BKSHID", self.host)
+        self.assertNotIn("AXEventRepresentation", self.host)
 
     def test_negative_mutants_fail_contract(self):
         mutants = (

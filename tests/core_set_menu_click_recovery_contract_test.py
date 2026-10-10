@@ -117,9 +117,9 @@ class MenuClickRecoveryContract(unittest.TestCase):
         toggle = body(self.coordinator, "private func requestVisibility(")
         self.assertIn("panel-request-receipt", toggle)
         launch = body(self.coordinator, "private func showHostedMenuAndOpenGame(")
-        self.assertIn("guard confirmed else", launch)
-        self.assertIn("rollbackGameLaunch", launch)
-        self.assertLess(launch.index("guard confirmed else"),
+        self.assertIn("requestMenuVisibility(true)", launch)
+        self.assertNotIn("guard confirmed else", launch)
+        self.assertLess(launch.index("requestMenuVisibility(true)"),
                         launch.index("CoreSetGameTarget.openApplication"))
 
     def test_category_navigation_is_local_even_when_directory_receipts_are_unavailable(self):

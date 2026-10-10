@@ -1,4 +1,4 @@
-"""WZ SpringBoard mirror/hosted-input source contract; no device-effect claim."""
+"""Core 1.7 SBS/UIKit hosting source contract; no device-effect claim."""
 
 from hashlib import sha256
 from pathlib import Path
@@ -46,6 +46,12 @@ assert [struct.unpack_from("<I", reference_image, offset)[0]
         for offset in (0x56108, 0x5611C, 0x56130)] == [0xF9476900, 0xF9477100, 0xF9477D00]
 assert [struct.unpack_from("<I", reference_image, offset)[0]
         for offset in (0x56114, 0x56128, 0x5613C)] == [0xB90FC660, 0xB90FCE80, 0xB90FD500]
+for forbidden in (
+    b"BKSHIDEventRegisterEventCallback", b"IOHIDEventSystemClient",
+    b"AXEventRepresentation", b"UIApplicationEvents",
+    b"CALayerHost", b"SBMainWorkspace", b"setContextId:",
+):
+    assert forbidden not in reference_image, forbidden
 
 manager = read("lara/overlay/CoreSetFloatingSceneManager.mm")
 adapter = read("lara/overlay/CoreSetRemoteHostingAdapter.mm")
@@ -71,6 +77,7 @@ required_dependency_stubs = {
 }
 metal = read("lara/overlay/CoreSetMetalRenderAdapter.mm")
 imgui = read("lara/third_party/imgui/imgui.h")
+imgui_surface = read("lara/overlay/CoreSetImGuiMenuSurface.mm")
 
 for token in (
     'CSClassObject(@"FBSceneManager")',
@@ -101,89 +108,27 @@ for token in (
     assert token in app, token
 
 for token in (
-    "SBSAccessibilityWindowHostingController",
-    "registerWindowWithContextID:atLevel:",
-    "unregisterWindowWithContextID:",
-    "kCoreSetCoreDrawLevel = 999998.0",
-    "kCoreSetCoreMenuLevel = 999999.0",
-    "kCoreSetCoreIconLevel = 1000000.0",
-    "initWithCoreHosting",
-    'CSClass(_process, "CALayerHost")',
-    'CSClass(_process, "SBMainWorkspace")',
-    'CSSel(_process, "setContextId:")',
-    "kCoreSetCoreMenuLevel",
-    "kCoreSetCoreDrawLevel",
-    "drawReady && iconReady && menuReady",
-    "registerThreeSurfacesAsync",
-    "unregisterThreeSurfacesAsync",
-    "objc_setAssociatedObject(UIApplication.sharedApplication, side.associationKey",
-    "OBJC_ASSOCIATION_RETAIN_NONATOMIC",
+    'CSClass(_process, "SBSAccessibilityWindowHostingController")',
+    'CSSel(_process, "registerWindowWithContextID:atLevel:")',
+    'CSSel(_process, "unregisterWindowWithContextID:")',
+    "draw.level = 999998.0", "icon.level = 1000000.0",
+    "menu.level = 999999.0", "drawReady && iconReady && menuReady",
     '@"darkswordOverlayDrawHostController"',
     '@"darkswordOverlayIconHostController"',
     '@"darkswordOverlayMenuHostController"',
-    '@"darkswordOverlayDrawLockInvocation"',
-    '@"darkswordOverlayIconLockInvocation"',
-    '@"darkswordOverlayMenuLockInvocation"',
-    '@"darkswordOverlayDrawUnlockInvocation"',
-    '@"darkswordOverlayIconUnlockInvocation"',
-    '@"darkswordOverlayMenuUnlockInvocation"',
-    "UIApplicationProtectedDataWillBecomeUnavailable",
-    "UIApplicationProtectedDataDidBecomeAvailable",
-    "NSInvocation", "retainArguments", "addObserver:invocation",
-    "removeObserver:invocation", "installCoreLifecycleForDraw",
-    "RemoteCall *_process",
-    "remote_getClass(process, name)",
+    "RemoteCall *_process", "remote_getClass(process, name)",
     "doRemoteCallCheckedWithTimeout:10000",
-    "remoteSideObserved",
-    "localSideObserved",
-    '@"core-three-surface-sbs-or-remote-v6-hit-snapshot"',
+    'NSSelectorFromString(@"_contextId")', '[window.layer valueForKey:@"contextId"]',
+    "stage=context-capture draw=%u icon=%u menu=%u",
+    '@"core17-sbs-only-v3"', "stage=remote-class", "stage=remote-registered",
 ):
     assert token in adapter, token
-hosting_class = adapter[adapter.index("static void CSLoadCoreHostingFrameworks"):
-                        adapter.index("static BOOL CSChecked")]
-for framework in (
-    "FrontBoard.framework/FrontBoard",
-    "FrontBoardServices.framework/FrontBoardServices",
-    "RunningBoardServices.framework/RunningBoardServices",
-    "BoardServices.framework/BoardServices",
-    "BaseBoard.framework/BaseBoard",
-    "AccessibilityUtilities.framework/AccessibilityUtilities",
-    "SpringBoardServices.framework/SpringBoardServices",
+for forbidden in (
+    "CALayerHost", "SBMainWorkspace", "setContextId:",
+    "initWithCoreHosting", "isCoreHostingAvailable", "CSLoadCoreHostingFrameworks",
 ):
-    assert framework in hosting_class, framework
-assert "RTLD_LAZY | RTLD_LOCAL" in hosting_class
-assert "dispatch_once" not in hosting_class
-assert "static Class hostingClass" not in hosting_class
-assert hosting_class.count('NSClassFromString(@"SBSAccessibilityWindowHostingController")') == 2
-assert 'core-sbs probe build=%@ class=%d selector=%d' in adapter
-register_three = adapter[adapter.index("- (void)registerThreeSurfacesAsync:"):
-                         adapter.index("- (void)unregisterBothSurfacesAsync:")]
-assert "!NSThread.isMainThread" in register_three
-assert register_three.index("createSide:draw level:kCoreSetCoreDrawLevel") < \
-       register_three.index("createSide:icon level:kCoreSetCoreIconLevel") < \
-       register_three.index("createSide:menu level:kCoreSetCoreMenuLevel")
-assert register_three.index("createSide:menu level:kCoreSetCoreMenuLevel") < \
-       register_three.index("installCoreLifecycleForDraw:draw icon:icon menu:menu")
-assert "if (_coreHosting)" in register_three
-assert "dispatch_async(_readbackQueue" in register_three
-assert "[self remoteSideObserved:icon]" in adapter
-requires_icon = adapter[adapter.index("- (BOOL)requiresDedicatedIconSurface"):
-                        adapter.index("- (NSString *)hostingDiagnosticSnapshot")]
-assert "return YES;" in requires_icon and "return _coreHosting" not in requires_icon
-lifecycle = adapter[adapter.index("- (BOOL)installCoreLifecycleForDraw:"):
-                    adapter.index("- (void)observeBothSurfacesAsync:")]
-assert lifecycle.index("UIApplicationProtectedDataWillBecomeUnavailable") < \
-       lifecycle.index("UIApplicationProtectedDataDidBecomeAvailable")
-assert "const double levels[] = {kCoreSetCoreDrawLevel, kCoreSetCoreIconLevel," in lifecycle
-unregister_three = adapter[adapter.index("- (void)unregisterThreeSurfacesAsync:"):
-                           adapter.index("@end", adapter.index("- (void)unregisterThreeSurfacesAsync:"))]
-assert "!NSThread.isMainThread" in unregister_three
-assert unregister_three.index("removeCoreLifecycleForSides:sides") < \
-       unregister_three.index("removeSide:draw")
-assert unregister_three.index("removeSide:draw") < unregister_three.index("removeSide:icon") < \
-       unregister_three.index("removeSide:menu")
-for role in ("Draw", "Icon", "Menu"):
-    assert f'NSSelectorFromString(@"darkswordOverlay{role}HostController")' in register_three
+    assert forbidden not in adapter, forbidden
+
 for token in (
     '"-Wl,-needed_framework,IOKit"',
     '"-Wl,-needed_framework,IOMobileFramebuffer"',
@@ -210,51 +155,39 @@ assert project.count("CURRENT_PROJECT_VERSION = 5;") == 2
 
 for token in (
     "UIButton buttonWithType:UIButtonTypeCustom",
-    "CGRectMake(0, 0, 44, 44)",
+    "CGRectMake(0, 0, 44, 44)", "CAGradientLayer",
     "UIControlEventTouchUpInside", "UIPanGestureRecognizer",
-    "IOHIDEventSystemClient", "BKSHIDEventRegisterEventCallback",
-    "confirmHostedReadbackAsync",
-    "if (ready) (void)[host armHostedInput]",
-    "if (ready) (void)[current armHostedInput]",
-    "if (!active && !_inputArmed.load()) (void)[self armHostedInput]",
-    "const BOOL hidOwnsBackground = !active && self.hostedInputMonitorArmed",
-    "_menuWindow.backgroundPassThrough = hidOwnsBackground",
-    "_menuWindow.userInteractionEnabled = !hidOwnsBackground",
-    "_iconWindow.backgroundPassThrough = hidOwnsBackground",
-    "_iconWindow.userInteractionEnabled = !hidOwnsBackground",
-    "CoreSetIconWindow",
-    "registerThreeSurfacesAsync:menu iconWindow:icon drawWindow:draw",
+):
+    assert token in host, token
+for forbidden in (
+    "BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation",
+    "UIApplicationEvents", "CoreSetPendingTouchQueue",
     "surfacePointMayHitHostedInteraction",
-    "outside-interaction-bounds",
-    "unowned-game-pointer",
-    "_queuedInputPointer.compare_exchange_strong",
-    "background-landscape-lock",
-    "ignored=hid-owner",
 ):
+    assert forbidden not in host, forbidden
+for token in ("CoreSetDrawWindow", "CoreSetIconWindow", "CoreSetMenuWindow",
+              "registerThreeSurfacesAsync:menuWindow iconWindow:iconWindow drawWindow:drawWindow"):
     assert token in host, token
 for token in (
-    "_iconWindow = [[CoreSetIconWindow alloc] initWithWindowScene:scene]",
-    "_iconWindow.hidden = YES",
-    "_iconWindow.rootViewController = nil",
-    "if (!_iconCleanupNeeded) _iconWindow = nil",
-):
-    assert token in host, token
-
-for token in (
-    "CoreSetRemoteHostingAdapter.isCoreHostingAvailable()",
-    "CoreSetRemoteHostingAdapter(coreHosting: true)",
-    "prepareCoreHosting(epoch:",
-    "hosting mode=core-sbs roles=draw,menu,icon levels=999998,999999,1000000 registered=1",
+    "CoreSetFloatingSceneManager.shared().createScenes",
     "CoreSetRemoteHostingAdapter(remoteCall: process)",
-    "host.attach(adapter)",
-    "verifyHostedWindows",
-    "hosting mode=wz-springboard-mirror registered=1",
-    "confirmHostedReadbackAsync",
+    "host.startHosted(menuScene: touchScene, drawScene: drawScene",
+    "hosting mode=core17-springboard-sbs roles=draw,icon,menu levels=999998,1000000,999999 registered=1",
 ):
     assert token in owner, token
+for forbidden in (
+    "prepareCoreHosting", "isCoreHostingAvailable", "coreHosting: true",
+    "host.attach(adapter)", "verifyHostedWindows", "confirmHostedReadbackAsync",
+    "wz-springboard-mirror",
+):
+    assert forbidden not in owner, forbidden
 for token in ("prepareSpringBoardHosting", 'rcinit(process: "SpringBoard"',
               "rebuildHostedWindows(process:"):
     assert token in owner, token
+for token in (
+    "touchesBegan:", "touchesMoved:", "touchesEnded:", "touchesCancelled:",
+):
+    assert token in imgui_surface, token
 
 assert '#define IMGUI_VERSION       "1.92.8"' in imgui
 for token in (
@@ -266,4 +199,4 @@ for token in (
 for forbidden in ("CIContext", "CoreSetCoreAnimationConsumer", "renderInContext"):
     assert forbidden not in metal, forbidden
 
-print("PASS: Core three-surface SBS/RemoteCall host, hosted input and ImGui/Metal path; source only")
+print("PASS: Core SBS contexts and UIKit/ImGui input are the only host path; source only")

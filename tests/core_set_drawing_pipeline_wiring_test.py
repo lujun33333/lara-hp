@@ -38,7 +38,11 @@ def test_all_reference_drawing_consumers_share_one_composer_and_receipt_path():
 
 def test_draw_surface_uses_retained_ca_when_remotely_hosted():
     assert "return foreground && metalAvailable && !crossApplicationHosted" in LIFECYCLE
+    assert "CoreSetCoreAnimationConsumer *_layers" in HOST
+    assert "[_layers attachToView:_drawCanvas]" in HOST
+    assert "[_layers setVisible:_activeBackend == CoreSetHUDBackendCoreAnimation]" in HOST
     assert "id<CoreSetFrameConsumer> consumer = host->_activeBackend == CoreSetHUDBackendMetal" in HOST
+    assert "? host->_metal : host->_layers" in HOST
     assert "host.frameDidConsume(frame, YES, nil)" in HOST
     assert "hostedRegistrationReceipt" in HOST
 

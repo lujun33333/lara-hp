@@ -128,19 +128,19 @@ for result in ("applied", "notApplied:", "unavailable:", "failed:"):
 host = read("lara/overlay/CoreSetHUDHost.mm")
 adapter = read("lara/overlay/CoreSetRemoteHostingAdapter.mm")
 scenes = read("lara/overlay/CoreSetFloatingSceneManager.mm")
-for contract in ("BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation"):
-    assert contract in host
+for contract in ("BKSHID", "IOHIDEventSystemClient", "AXEventRepresentation",
+                 "UIApplicationEvents", "CoreSetPendingTouchQueue"):
+    assert contract not in host
 for contract in (
     "SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
-    "unregisterWindowWithContextID:",
-    "kCoreSetCoreDrawLevel = 999998.0", "kCoreSetCoreMenuLevel = 999999.0",
-    "kCoreSetCoreIconLevel = 1000000.0", "registerThreeSurfacesAsync",
-    "CALayerHost", "SBMainWorkspace", "mainWindowScene", "setContextId:",
-    "kCoreSetCoreMenuLevel", "kCoreSetCoreDrawLevel",
-    "RemoteCall", "remote_getClass", "doRemoteCallCheckedWithTimeout",
+    "draw.level = 999998.0", "icon.level = 1000000.0",
+    "menu.level = 999999.0", "RemoteCall", "remote_getClass",
+    "doRemoteCallCheckedWithTimeout", '@"core17-sbs-only-v3"',
 ):
     assert contract in adapter, contract
-assert "initWithCoreHosting" in adapter
+for contract in ("CALayerHost", "SBMainWorkspace", "setContextId:",
+                 "initWithCoreHosting", "isCoreHostingAvailable"):
+    assert contract not in adapter, contract
 for contract in ("FBSceneManager", "-touchFloating", "-noTouchFloating"):
     assert contract in scenes, contract
 
@@ -159,7 +159,7 @@ for missing in ("task-read-denied", "main-image-or-uuid-not-found"):
     combined = session
     assert missing in combined
     assert missing not in combined.replace(missing, "REMOVED", 1)
-assert "CALayerHost" in adapter
+assert "CALayerHost" not in adapter
 
 print("PASS: target read stages, consumer labels, truthful manifest and Core 1.7 scene/SBS diagnostics")
 print("LIMIT: source contract only; requires a fresh device log for runtime closure")
