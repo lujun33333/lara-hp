@@ -105,6 +105,23 @@ class MenuClickRecoveryContract(unittest.TestCase):
                      "!exitHUDRestorationPending", "!remoteCleanupFailed"):
             self.assertIn(gate, retention)
 
+    def test_host_visibility_is_owned_snapshot_replay_not_generic_feature_channel(self):
+        self.assertIn("protocol CoreSetMenuHostPresentationOwner: AnyObject", self.menu)
+        self.assertNotIn("hostChannel", self.menu)
+        start = self.menu.index("func requestMenuVisibility(")
+        request = self.menu[start:self.menu.index("func stopMenuHostPresentation", start)]
+        self.assertIn("desiredHostPresentation.menuVisible = visible", request)
+        self.assertIn("applyHostSettings", request)
+        changed = body(self.coordinator, "private func hostChanged()")
+        self.assertIn("menu.reconcileMenuHostPresentation", changed)
+        toggle = body(self.coordinator, "private func requestVisibility(")
+        self.assertIn("panel-request-receipt", toggle)
+        launch = body(self.coordinator, "private func showHostedMenuAndOpenGame(")
+        self.assertIn("guard confirmed else", launch)
+        self.assertIn("rollbackGameLaunch", launch)
+        self.assertLess(launch.index("guard confirmed else"),
+                        launch.index("CoreSetGameTarget.openApplication"))
+
     def test_category_navigation_is_local_even_when_directory_receipts_are_unavailable(self):
         tabs = body(self.menu, "private func categoryTabs(")
         select = body(self.menu, "@objc private func selectMaterialCategory(")

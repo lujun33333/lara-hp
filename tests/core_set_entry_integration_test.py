@@ -76,21 +76,23 @@ assert start_host.index("_drawWindow.hidden = NO; _menuWindow.hidden = NO; _icon
 
 
 def validate_owner(text):
-    owner = text.split("private final class CoreSetLocalHostConsumer:")[0]
+    owner = text.split("private final class CoreSetHostPresentationOwner:")[0]
     need(owner, "private static var retained: [UUID: CoreSetRuntimeCoordinator] = [:]", "private let menu = CoreSetMenuViewController()",
          "private lazy var menuSurface: CoreSetImGuiMenuViewController",
-         "private let host = CoreSetHUDHost(hostingAdapter: nil)", "private var consumer: CoreSetLocalHostConsumer!",
-         "var featureState: CoreSetFeatureState { menu.featureState }", "Self.retained[identity] = self", "menu.bindMenuHostConsumer(consumer)")
+         "private let host = CoreSetHUDHost(hostingAdapter: nil)", "private var hostPresentationOwner: CoreSetHostPresentationOwner!",
+         "var featureState: CoreSetFeatureState { menu.featureState }", "Self.retained[identity] = self",
+         "menu.bindMenuHostPresentationOwner(hostPresentationOwner)")
     assert owner.count("CoreSetMenuViewController()") == 1
     assert owner.count("menu.bindGameConsumer(playerConsumer, to: \\.player)") == 1
     assert "CoreSetPlayerConsumer(coordinator: self, battleProducer: battleProducer)" in owner
     assert "playerConsumer?.consumed(receipt)" in owner
     need(swift(owner, "activate"), "guard !stopping, let scene", "host.startLocal(in: scene, menuController: menuSurface)")
-    need(swift(owner, "hostChanged"), "submittedGeneration != host.renderGeneration", "generation: host.renderGeneration, sequence: 1", "commands: []")
+    need(swift(owner, "hostChanged"), "menu.reconcileMenuHostPresentation", "submittedGeneration != host.renderGeneration",
+         "generation: host.renderGeneration, sequence: 1", "commands: []")
     need(swift(owner, "publishStatus"), "host.lastConsumedSequence > 0", "跨应用 unavailable")
     stop = swift(owner, "stop")
     need(stop, "precondition(Thread.isMainThread)", "if stopping, let result = lastStopResult", "stopReceiptsPending = true",
-         "let result = host.stop()", "menu.suspendGameConsumers", "menu.suspendMenuHostConsumer", "self.stopReceiptsPending = false",
+         "let result = host.stop()", "menu.suspendGameConsumers", "menu.stopMenuHostPresentation", "self.stopReceiptsPending = false",
          "host.hostedCleanupInFlight", "self.stopChannelsConfirmed = channelsRestored",
          "self.releaseStoppedOwnerIfReady()")
     release = swift(owner, "releaseStoppedOwnerIfReady")
@@ -103,42 +105,45 @@ def validate_owner(text):
     drain = swift(owner, "pollTerminationDrain")
     need(drain, "$0.stopping", "!$0.stopReceiptsPending", "!$0.host.hostedCleanupInFlight",
          ".milliseconds(10)", "waiters.forEach { $0() }")
-    consumer = text.split("private final class CoreSetLocalHostConsumer:")[1]
-    apply = swift(consumer, "apply")
+    host_owner = text.split("private final class CoreSetHostPresentationOwner:")[1]
+    apply = swift(host_owner, "apply")
     need(apply, "precondition(Thread.isMainThread)", "guard availability == .ready",
-         "let generation = host.generation", "host.applyLocalMenu(visible:",
-         "guard matches(request.desired, generation: generation) else", "appliedGeneration = generation",
-         "appliedState = request.desired", "appliedToken = request.token",
-         ".applied(observed: State(menuVisible: host.panelVisible, floatingPalette: palette))")
+         "host.applyLocalMenu(visible:", "let generation = host.generation",
+         "guard matches(state, generation: generation) else", "appliedGeneration = generation",
+         "appliedState = CoreSetMenuHostSettings(menuVisible: host.panelVisible, floatingPalette: palette)",
+         "scope=core-style-host-snapshot-replay", "return true")
     # apply delegates the same real full-palette readback to matches. Verify
     # that helper's data source and full UIColor (RGBA) equality, not merely
     # the presence of a helper name or requested palette/configuration state.
-    match = swift(consumer, "matches")
+    match = swift(host_owner, "matches")
     need(match, "host.generation == generation", "host.floatingControlReady",
          "host.panelVisible == state.menuVisible", "let palette = state.floatingPalette",
          "let expected = colors(for: palette), observed = host.observedFloatingColors",
          "func rgba(_ color: UIColor)", "epsilon = CGFloat(1.0 / 255.0)",
          "return observed.count == expected.count && zip(observed, expected).allSatisfy")
     assert ".isEqual(" not in match
-    assert apply.index("host.applyLocalMenu(visible:") < apply.index("guard matches(request.desired")
-    assert apply.index("guard matches(request.desired") < apply.index("appliedToken = request.token") < apply.index(".applied(observed:")
-    stop = swift(consumer, "stop")
+    assert apply.index("host.applyLocalMenu(visible:") < apply.index("guard matches(state")
+    assert apply.index("guard matches(state") < apply.index("appliedGeneration = generation") < apply.index("return true")
+    reconcile = swift(host_owner, "reconcile")
+    need(reconcile, "appliedState == state", "matches(state, generation: generation)", "return apply(state, source: source)")
+    stop = swift(host_owner, "stop")
     need(stop, "let result = host.stop()", "host.hostedCleanupInFlight", "host.stopHostedAsync", "finish(result)", "finish(final)")
-    finish = swift(consumer, "finish")
+    finish = swift(host_owner, "finish")
     need(finish, "result.complete.boolValue && !host.localSurfacesReady && !host.floatingControlReady && host.observedFloatingColors.isEmpty",
-         "appliedGeneration = nil; appliedState = nil; appliedToken = nil",
-         "completion(token, stopped ? .restored : .failed")
-    assert "crossApplicationHosted" not in consumer
+         "appliedGeneration = nil; appliedState = nil; observationFailureReason = nil",
+         "completion(stopped)")
+    assert "CoreSetFeatureChannel" not in host_owner
+    assert "crossApplicationHosted" not in host_owner
 
 
 validate_owner(coordinator)
 for old in ["stopWindowsConfirmed", "host.observedFloatingColors",
             "submittedGeneration != host.renderGeneration", "CoreSetHUDHost(hostingAdapter: nil)",
-            "guard matches(request.desired, generation: generation) else",
+            "guard matches(state, generation: generation) else",
             "host.generation == generation", "host.floatingControlReady",
             "observed.count == expected.count", "zip(observed, expected)",
             "epsilon = CGFloat(1.0 / 255.0)",
-            "appliedToken = request.token", "finish(final)"]:
+            "menu.reconcileMenuHostPresentation", "return apply(state, source: source)", "finish(final)"]:
     try:
         validate_owner(coordinator.replace(old, "REMOVED_GATE"))
     except AssertionError:
@@ -262,16 +267,17 @@ need(transition, "unregisterAdapter:previousAdapter menu:menu icon:icon draw:dra
 assert transition.index("unregisterAdapter:") < transition.index("registerAdapter:")
 assert "alloc] initWithWindowScene" not in transition
 need(swift(coordinator, "showHostedMenuAndOpenGame"),
-     "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication")
+     "requestMenuVisibility(true)", "guard confirmed else", "rollbackGameLaunch",
+     "宿主菜单快照未确认，已取消打开游戏", "CoreSetGameTarget.openApplication")
 exit_hud = swift(coordinator, "exitHostedHUD")
 need(exit_hud, "returnToLocalPending = true", "if gameLaunchPending",
      "gameLaunchEpoch &+= 1", "gameLaunchPending = false",
      "pendingLaunchCompletion = nil", "pendingCompletion?(gameLaunchStatus)",
      "gameLaunchStatus = Self.userCancelledLaunchReason",
-     "suspendGameConsumers", "suspendMenuHostConsumer", "host.stopHostedAsync",
+     "suspendGameConsumers", "stopMenuHostPresentation", "host.stopHostedAsync",
      "result.complete.boolValue", "host.installRemoteHostingAdapter(nil)")
 assert exit_hud.index("returnToLocalPending = true") < exit_hud.index("pendingCompletion?(gameLaunchStatus)")
-assert exit_hud.index("gameLaunchEpoch &+= 1") < exit_hud.index("suspendMenuHostConsumer")
+assert exit_hud.index("gameLaunchEpoch &+= 1") < exit_hud.index("stopMenuHostPresentation")
 finish_launch = swift(coordinator, "finishGameLaunch")
 need(finish_launch, "guard gameLaunchCurrent(epoch)", "let finishedCompletion = pendingLaunchCompletion",
      "pendingLaunchCompletion = nil", "(finishedCompletion ?? completion)(error)")
@@ -297,7 +303,9 @@ need(core_host, "CoreSetRemoteHostingAdapter(coreHosting: true)", "host.attach(a
      "verifyHostedWindows")
 assert swift(coordinator, "launchGame").index("CoreSetRemoteHostingAdapter.isCoreHostingAvailable()") < swift(coordinator, "launchGame").index("manager.run")
 open_game = swift(coordinator, "showHostedMenuAndOpenGame")
-need(open_game, "requestMenuVisibility(true)", "CoreSetGameTarget.openApplication")
+need(open_game, "requestMenuVisibility(true)", "guard confirmed else", "rollbackGameLaunch",
+     "CoreSetGameTarget.openApplication")
+assert open_game.index("guard confirmed else") < open_game.index("CoreSetGameTarget.openApplication")
 assert "confirmHostedReadbackAsync" in open_game
 assert "CoreSetGameTarget.openApplication" not in swift(launcher, "launchApplication")
 need(swift(launcher, "launchApplication"), "coreSetRuntime.launchGame")

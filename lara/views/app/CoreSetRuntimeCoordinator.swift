@@ -475,7 +475,7 @@ final class CoreSetRuntimeCoordinator {
     private let host = CoreSetHUDHost(hostingAdapter: nil)
     private let metalAdapter = CoreSetMetalRenderAdapter()
     private var remoteHostingAdapter: CoreSetRemoteHostingAdapter?
-    private var consumer: CoreSetLocalHostConsumer!
+    private var hostPresentationOwner: CoreSetHostPresentationOwner!
     private let battleProducer = CoreSetBattleProducer()
     private var playerConsumer: CoreSetPlayerConsumer?
     private var materialConsumer: CoreSetMaterialConsumer?
@@ -729,8 +729,8 @@ final class CoreSetRuntimeCoordinator {
         // that one surface; no UIKit child-control regions participate.
         host.contentOwnsLayout = false
         host.contentHitRegions = nil
-        consumer = CoreSetLocalHostConsumer(host: host)
-        _ = menu.bindMenuHostConsumer(consumer)
+        hostPresentationOwner = CoreSetHostPresentationOwner(host: host)
+        _ = menu.bindMenuHostPresentationOwner(hostPresentationOwner)
         playerConsumer = CoreSetPlayerConsumer(coordinator: self, battleProducer: battleProducer)
         if let playerConsumer { _ = menu.bindGameConsumer(playerConsumer, to: \.player) }
         materialConsumer = CoreSetMaterialConsumer(coordinator: self)
@@ -1152,8 +1152,13 @@ final class CoreSetRuntimeCoordinator {
 
     private func showHostedMenuAndOpenGame(epoch: UInt64, completion: @escaping (String?) -> Void) {
         guard gameLaunchCurrent(epoch) else { return }
-        menu.requestMenuVisibility(true) { [weak self] _ in
+        menu.requestMenuVisibility(true) { [weak self] confirmed in
             guard let self, self.gameLaunchCurrent(epoch) else { return }
+            guard confirmed else {
+                self.rollbackGameLaunch(epoch: epoch,
+                    error: "宿主菜单快照未确认，已取消打开游戏", completion: completion)
+                return
+            }
             if self.aimSuspendedForHost { _ = self.menu.resumeActionConsumers() }
             self.aimSuspendedForHost = false
             NSLog("Core-SET: game launch epoch=%llu stage=open-url targetBundle=%@",
@@ -1243,7 +1248,7 @@ final class CoreSetRuntimeCoordinator {
                 self.hostChanged()
                 if self.exitHUDRestorationPending {
                     let resumed = self.menu.resumeGameConsumers() &&
-                        self.menu.resumeMenuHostConsumer()
+                        self.menu.resumeMenuHostPresentation()
                     self.exitHUDRestorationPending = !resumed
                     self.menu.setHostedExitAvailable(false)
                 }
@@ -1280,7 +1285,7 @@ final class CoreSetRuntimeCoordinator {
         group.enter()
         menu.suspendGameConsumers { confirmed in gameStopped = confirmed; group.leave() }
         group.enter()
-        menu.suspendMenuHostConsumer { confirmed in hostStopped = confirmed; group.leave() }
+        menu.stopMenuHostPresentation { confirmed in hostStopped = confirmed; group.leave() }
         group.notify(queue: .main) { [weak self] in
             guard let self else { return }
             guard !self.stopping else { return }
@@ -1306,7 +1311,7 @@ final class CoreSetRuntimeCoordinator {
                 }
                 self.remoteHostingAdapter = nil
                 let channelsResumed = self.menu.resumeGameConsumers() &&
-                    self.menu.resumeMenuHostConsumer()
+                    self.menu.resumeMenuHostPresentation()
                 self.exitHUDRestorationPending = !channelsResumed
                 self.aimSuspendedForHost = false
                 self.activateAfterAimStop = false
@@ -1356,12 +1361,18 @@ final class CoreSetRuntimeCoordinator {
         guard !stopping else { publishStatus(); return }
         if !host.localSurfacesReady { activate() }
         guard host.localSurfacesReady else { publishStatus(); return }
-        menu.refreshConsumerAvailability()
-        menu.requestMenuVisibility(visible) { [weak self] _ in self?.publishStatus() }
+        menu.requestMenuVisibility(visible) { [weak self] confirmed in
+            NSLog("Core-SET: hosted input stage=panel-request-receipt requested=%d confirmed=%d generation=%llu",
+                  visible ? 1 : 0, confirmed ? 1 : 0, self?.host.generation ?? 0)
+            self?.publishStatus()
+        }
     }
 
     private func hostChanged() {
         if let canvas = playerCanvas { menu.syncRadarCanvas(canvas.size) }
+        if !stopping, host.localSurfacesReady {
+            _ = menu.reconcileMenuHostPresentation(source: "host-generation-\(host.generation)")
+        }
         let canvasSize = host.logicalCanvasSize
         if !stopping, host.localSurfacesReady,
            submittedGeneration != host.renderGeneration {
@@ -1451,9 +1462,6 @@ final class CoreSetRuntimeCoordinator {
     }
 
     private func publishStatus() {
-        consumer.refreshObservation(isCurrent: menu.menuHostRequestIsCurrent,
-                                    canInspect: menu.menuHostObservationMayBeRefreshed,
-                                    invalidate: menu.invalidateMenuHostObservation)
         refreshPeriodicObservations()
         let local = host.localSurfacesReady ? "本应用悬浮可用" : "本应用悬浮未就绪"
         let renderer = host.activeBackend == CoreSetHUDBackendMetal ? "Metal" : "CA"
@@ -1549,7 +1557,7 @@ final class CoreSetRuntimeCoordinator {
         group.enter()
         menu.suspendGameConsumers { restored in channelsRestored = channelsRestored && restored; group.leave() }
         group.enter()
-        menu.suspendMenuHostConsumer { restored in channelsRestored = channelsRestored && restored; group.leave() }
+        menu.stopMenuHostPresentation { restored in channelsRestored = channelsRestored && restored; group.leave() }
         group.notify(queue: .main) { [weak self] in
             guard let self else { return }
             self.stopReceiptsPending = false
@@ -1604,20 +1612,26 @@ final class CoreSetRuntimeCoordinator {
     }
 }
 
-private final class CoreSetLocalHostConsumer: CoreSetFeatureConsumer {
-    typealias State = CoreSetMenuHostSettings
-    let capability = CoreSetCapability.hostWindow
+private final class CoreSetHostPresentationOwner: CoreSetMenuHostPresentationOwner {
     private let host: CoreSetHUDHost
     private var appliedGeneration: UInt64?
-    private var appliedState: State?
-    private var appliedToken: CoreSetRequestToken?
+    private var appliedState: CoreSetMenuHostSettings?
+    private var suspended = false
+    private var applying = false
+    private(set) var observationFailureReason: String?
+
     init(host: CoreSetHUDHost) { self.host = host }
+
     var availability: CoreSetAvailability {
+        guard !suspended else { return .unavailable(reason: "Host presentation owner is suspended") }
         guard host.localSurfacesReady else { return .unavailable(reason: "本应用窗口未就绪；跨应用 unavailable") }
-        if let generation = appliedGeneration, let state = appliedState, !matches(state, generation: generation) {
-            return .unavailable(reason: "Host palette generation/property observation no longer matches")
-        }
         return .ready
+    }
+
+    var observedState: CoreSetMenuHostSettings? {
+        guard let generation = appliedGeneration, let state = appliedState,
+              matches(state, generation: generation) else { return nil }
+        return state
     }
 
     // Same v1.7 palette bytes as the menu, indexed by the typed native enum.
@@ -1640,42 +1654,56 @@ private final class CoreSetLocalHostConsumer: CoreSetFeatureConsumer {
                 abs(lhs.2 - rhs.2) <= epsilon && abs(lhs.3 - rhs.3) <= epsilon
         }
     }
-    func refreshObservation(isCurrent: (CoreSetRequestToken) -> Bool,
-                            canInspect: (CoreSetRequestToken) -> Bool, invalidate: (String) -> Void) {
-        guard let generation = appliedGeneration, let state = appliedState, let token = appliedToken,
-              canInspect(token), !matches(state, generation: generation) else { return }
-        appliedGeneration = nil; appliedState = nil; appliedToken = nil
-        if isCurrent(token) { invalidate("Host generation/floating geometry/gradient/menu visibility no longer matches its exact apply token") }
+    func reconcile(_ state: CoreSetMenuHostSettings, source: String) -> Bool {
+        precondition(Thread.isMainThread)
+        if let generation = appliedGeneration, appliedState == state,
+           matches(state, generation: generation) { return true }
+        return apply(state, source: source)
     }
 
-    func apply(_ request: CoreSetApplyRequest<State>,
-               completion: @escaping (CoreSetRequestToken, CoreSetApplyOutcome<State>) -> Void) {
+    func apply(_ state: CoreSetMenuHostSettings, source: String) -> Bool {
         precondition(Thread.isMainThread)
-        guard availability == .ready, let palette = request.desired.floatingPalette else {
-            completion(request.token, .notApplied(reason: "本地宿主或颜色未就绪")); return
+        guard availability == .ready, let palette = state.floatingPalette else {
+            observationFailureReason = "本地宿主或颜色未就绪"
+            return false
+        }
+        // setPanelVisible publishes state synchronously.  A nested hostChanged
+        // sees the just-written snapshot and must not start a second replay.
+        if applying { return matches(state, generation: host.generation) }
+        applying = true
+        defer { applying = false }
+        let colors = colors(for: palette)
+        guard host.applyLocalMenu(visible: state.menuVisible, colors: colors) else {
+            observationFailureReason = "本地菜单设置失败"
+            return false
         }
         let generation = host.generation
-        let colors = colors(for: palette)
-        guard host.applyLocalMenu(visible: request.desired.menuVisible, colors: colors) else {
-            completion(request.token, .failed(reason: "本地菜单设置失败")); return
+        guard matches(state, generation: generation) else {
+            appliedGeneration = nil; appliedState = nil
+            observationFailureReason = "本地窗口快照读回不匹配"
+            return false
         }
-        guard matches(request.desired, generation: generation) else {
-            completion(request.token, .failed(reason: "本地窗口读回不匹配")); return
-        }
-        appliedGeneration = generation; appliedState = request.desired; appliedToken = request.token
-        NSLog("Core-SET: hosted-palette stage=apply point=v17-014 generation=%llu palette=%d token=%@/%@/%@ confirmed=1 scope=actual-host-floating-gradient-property original-runtime-receipt=0 device-effect-verified=0",
-              generation, palette.rawValue, request.token.generation.uuidString, request.token.consumerID.uuidString, request.token.requestID.uuidString)
-        completion(request.token, .applied(observed: State(menuVisible: host.panelVisible, floatingPalette: palette)))
+        appliedGeneration = generation
+        appliedState = CoreSetMenuHostSettings(menuVisible: host.panelVisible, floatingPalette: palette)
+        observationFailureReason = nil
+        NSLog("Core-SET: host-presentation stage=apply generation=%llu visible=%d palette=%d source=%@ confirmed=1 scope=core-style-host-snapshot-replay",
+              generation, state.menuVisible ? 1 : 0, palette.rawValue, source)
+        return true
     }
 
-    func stop(_ token: CoreSetRequestToken, completion: @escaping (CoreSetRequestToken, CoreSetStopOutcome) -> Void) {
+    func stop(completion: @escaping (Bool) -> Void) {
         precondition(Thread.isMainThread)
+        suspended = true
         func finish(_ result: CoreSetHUDStopResult) {
             let stopped = result.complete.boolValue && !host.localSurfacesReady && !host.floatingControlReady && host.observedFloatingColors.isEmpty
-            if stopped { appliedGeneration = nil; appliedState = nil; appliedToken = nil }
-            NSLog("Core-SET: hosted-palette stage=stop point=v17-014 token=%@/%@/%@ confirmed=%d scope=owned-host-window-and-gradient-removal persisted-palette-retained=1",
-                  token.generation.uuidString, token.consumerID.uuidString, token.requestID.uuidString, stopped ? 1 : 0)
-            completion(token, stopped ? .restored : .failed(reason: "窗口/浮球清理读回未确认"))
+            if stopped {
+                appliedGeneration = nil; appliedState = nil; observationFailureReason = nil
+            } else {
+                observationFailureReason = "窗口/浮球清理读回未确认"
+            }
+            NSLog("Core-SET: host-presentation stage=stop confirmed=%d scope=owned-host-window-snapshot persisted-palette-retained=1",
+                  stopped ? 1 : 0)
+            completion(stopped)
         }
         let result = host.stop()
         if result.complete.boolValue {
@@ -1685,7 +1713,21 @@ private final class CoreSetLocalHostConsumer: CoreSetFeatureConsumer {
                 finish(final)
             }
         } else {
-            completion(token, .failed(reason: "窗口清理未确认"))
+            observationFailureReason = "窗口清理未确认"
+            completion(false)
         }
+    }
+
+    func resume() -> Bool {
+        precondition(Thread.isMainThread)
+        guard !host.cleanupPending else {
+            observationFailureReason = "Host cleanup is still pending"
+            return false
+        }
+        suspended = false
+        appliedGeneration = nil
+        appliedState = nil
+        observationFailureReason = nil
+        return true
     }
 }

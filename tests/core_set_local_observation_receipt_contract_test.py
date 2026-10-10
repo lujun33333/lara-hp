@@ -13,10 +13,11 @@ def body(source, signature):
 
 
 def require_palette_receipt(source):
-    apply = body(source, "func apply(_ request:")
+    apply = body(source, "func apply(_ state:")
     assert "let generation = host.generation" in apply
-    assert "matches(request.desired, generation: generation)" in apply
-    assert "appliedToken = request.token" in apply
+    assert "matches(state, generation: generation)" in apply
+    assert "appliedGeneration = generation" in apply
+    assert "appliedState = CoreSetMenuHostSettings" in apply
     match = body(source, "private func matches(")
     assert "host.generation == generation" in match and "host.floatingControlReady" in match
     assert "zip(observed, expected)" in match and "host.panelVisible == state.menuVisible" in match
@@ -27,7 +28,7 @@ class LocalObservationReceiptContract(unittest.TestCase):
     def setUpClass(cls):
         read = lambda path: (ROOT / path).read_text(encoding="utf-8")
         cls.coordinator = read("lara/views/app/CoreSetRuntimeCoordinator.swift")
-        cls.host_consumer = cls.coordinator.split("private final class CoreSetLocalHostConsumer", 1)[1]
+        cls.host_owner = cls.coordinator.split("private final class CoreSetHostPresentationOwner", 1)[1]
         cls.menu = read("lara/views/app/CoreSetMenuViewController.swift")
         cls.state = read("lara/views/app/CoreSetFeatureState.swift")
         cls.home = read("lara/views/app/CoreSetHomeTelemetrySource.swift")
@@ -36,8 +37,8 @@ class LocalObservationReceiptContract(unittest.TestCase):
         cls.window = read("lara/overlay/CoreSetPresentationCadence.h")
 
     def test_real_palette_float_bits_and_exact_live_owner(self):
-        require_palette_receipt(self.host_consumer)
-        colors = body(self.host_consumer, "private func colors(")
+        require_palette_receipt(self.host_owner)
+        colors = body(self.host_owner, "private func colors(")
         self.assertIn("palette.referenceColors", colors)
         self.assertNotIn("/ 255", colors)
         observe = body(self.host, "- (NSArray<UIColor *> *)observedFloatingColors")
@@ -45,23 +46,19 @@ class LocalObservationReceiptContract(unittest.TestCase):
             self.assertIn(gate, observe)
 
     def test_palette_negative_generation_and_model_only_mutants(self):
-        for marker in ("host.generation == generation", "host.floatingControlReady", "matches(request.desired, generation: generation)"):
+        for marker in ("host.generation == generation", "host.floatingControlReady", "matches(state, generation: generation)"):
             with self.assertRaises(AssertionError):
-                require_palette_receipt(self.host_consumer.replace(marker, "true"))
+                require_palette_receipt(self.host_owner.replace(marker, "true"))
 
-    def test_palette_pending_receipts_and_stop_obligation(self):
+    def test_palette_generation_replay_and_stop_obligation(self):
         self.assertIn("let hostedSource = interactionControlIdentifier", body(self.menu, "func applyHostSettings(completion: @escaping (Bool) -> Void = { _ in })"))
-        current = body(self.menu, "func menuHostRequestIsCurrent(")
-        self.assertIn("lastHostAppliedToken == token", current)
-        inspect = body(self.menu, "func menuHostObservationMayBeRefreshed(")
-        self.assertIn("pendingApply == nil", inspect); self.assertIn("pendingStop == nil", inspect)
-        refresh = body(self.host_consumer, "func refreshObservation(")
-        self.assertIn("canInspect(token)", refresh)
-        invalidation = body(self.state, "func invalidateHostPresentationObservation(")
-        self.assertLess(invalidation.index("actual = nil"), invalidation.index("guard pendingStop == nil"))
-        self.assertNotIn("mayHaveEffects = false", invalidation)
-        self.assertNotIn("restoration =", invalidation)
-        stop = body(self.host_consumer, "func stop(")
+        self.assertNotIn("hostChannel", self.menu)
+        reconcile = body(self.host_owner, "func reconcile(_ state:")
+        self.assertIn("matches(state, generation: generation)", reconcile)
+        self.assertIn("return apply(state, source: source)", reconcile)
+        host_changed = body(self.coordinator, "private func hostChanged()")
+        self.assertIn("menu.reconcileMenuHostPresentation", host_changed)
+        stop = body(self.host_owner, "func stop(")
         self.assertIn("!host.floatingControlReady", stop)
         self.assertIn("host.observedFloatingColors.isEmpty", stop)
         self.assertIn("persisted-palette-retained=1", stop)

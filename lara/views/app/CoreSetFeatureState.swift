@@ -329,14 +329,6 @@ struct CoreSetFeatureChannel<Value: Equatable> {
         phase = mayHaveEffects ? .active : .unknown
         // The underlying scheduler baseline still has to be restored on stop.
     }
-    mutating func invalidateHostPresentationObservation(reason: String) {
-        guard capability == .hostWindow else { return }
-        actual = nil; observationInvalidationReason = reason
-        guard pendingStop == nil else { return }
-        generation = UUID(); pendingApply = nil
-        phase = mayHaveEffects ? .active : .unknown // Window cleanup obligation survives revocation.
-    }
-
     mutating func prepareApply() -> CoreSetApplyRequest<Value>? {
         refreshAvailability()
         guard let binding = binding, binding.owner != nil else { return nil }

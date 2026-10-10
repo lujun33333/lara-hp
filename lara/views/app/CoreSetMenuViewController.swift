@@ -6,6 +6,20 @@ struct CoreSetMenuHostSettings: Equatable {
     var floatingPalette: CoreSetFloatingPalette?
 }
 
+// Core owns menu visibility as part of the hosted window snapshot.  Keep that
+// lifecycle out of the generic feature channel: a new host generation must
+// replay the current snapshot instead of turning a transient observation into
+// a permanent feature failure.
+protocol CoreSetMenuHostPresentationOwner: AnyObject {
+    var availability: CoreSetAvailability { get }
+    var observedState: CoreSetMenuHostSettings? { get }
+    var observationFailureReason: String? { get }
+    func apply(_ state: CoreSetMenuHostSettings, source: String) -> Bool
+    func reconcile(_ state: CoreSetMenuHostSettings, source: String) -> Bool
+    func stop(completion: @escaping (Bool) -> Void)
+    func resume() -> Bool
+}
+
 // MARK: - Core v1.7 ImGui model
 
 extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
@@ -409,8 +423,8 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
                   let palette = CoreSetFloatingPalette(rawValue: floatingThemeValues[index]) else { return false }
             featureState.home.updateDesired { $0.floatingPalette = palette }
             applyLocalAppearance()
-            hostChannel.updateDesired { $0.floatingPalette = palette }
-            if hostConsumer != nil { applyHostSettings() }
+            desiredHostPresentation.floatingPalette = palette
+            if hostPresentationOwner != nil { applyHostSettings() }
         case "home.fps": editGame(\.frameRate) { $0.framesPerSecond.set(Int(value.rounded())) }
         case "home.kernel": return performHomeActionFromImGui(.kernelAction)
         case "home.information": return performHomeActionFromImGui(.informationAction)
@@ -616,9 +630,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private var controlProofCache: [String: String] = [:]
     private let configurationFeedbackLabel = UILabel()
     private var configurationFeedback = "配置选择须等待消费者回执后才生效"
-    private var hostConsumer: CoreSetMenuConsumer<CoreSetMenuHostSettings>?
-    private var hostChannel = CoreSetFeatureChannel(capability: .hostWindow, desired: CoreSetMenuHostSettings())
-    private var lastHostAppliedToken: CoreSetRequestToken?
+    private weak var hostPresentationOwner: CoreSetMenuHostPresentationOwner?
+    private var desiredHostPresentation = CoreSetMenuHostSettings()
     private var appearanceConsumer: CoreSetMenuConsumer<CoreSetMenuAppearance>?
     private var directoryConsumer: CoreSetMenuConsumer<CoreSetDirectoryPresentation>?
     private var appearanceChannel: CoreSetFeatureChannel<CoreSetMenuAppearance>?
@@ -1658,7 +1671,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     @objc private func closeMenu() {
         guard !isClosing else { return }
         isClosing = true
-        if hostConsumer != nil {
+        if hostPresentationOwner != nil {
             requestMenuVisibility(false) { [weak self] confirmed in
                 guard let self else { return }
                 self.isClosing = false
@@ -1698,7 +1711,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
              featureState.adjustments.availability, featureState.radar.availability,
              featureState.aim.availability, featureState.aimDisplay.availability,
              featureState.recoil.availability, appearanceChannel?.availability ?? .unavailable(reason: "No local appearance consumer"),
-             directoryChannel?.availability ?? .unavailable(reason: "No local directory consumer"), hostChannel.availability]
+             directoryChannel?.availability ?? .unavailable(reason: "No local directory consumer"),
+             hostPresentationOwner?.availability ?? .unavailable(reason: "No host presentation owner")]
         }
         let before = values()
         featureState.home.refreshAvailability(); featureState.frameRate.refreshAvailability()
@@ -1706,7 +1720,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         featureState.materials.refreshAvailability(); featureState.adjustments.refreshAvailability()
         featureState.radar.refreshAvailability(); featureState.aim.refreshAvailability()
         featureState.aimDisplay.refreshAvailability(); featureState.recoil.refreshAvailability()
-        appearanceChannel?.refreshAvailability(); directoryChannel?.refreshAvailability(); hostChannel.refreshAvailability()
+        appearanceChannel?.refreshAvailability(); directoryChannel?.refreshAvailability()
         return before != values()
     }
     private func refreshBeforeInteraction(_ sender: UIView? = nil) {
@@ -1987,11 +2001,10 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     }
 
     @discardableResult
-    func bindMenuHostConsumer<C: CoreSetFeatureConsumer>(_ consumer: C) -> Bool where C.State == CoreSetMenuHostSettings {
+    func bindMenuHostPresentationOwner(_ owner: CoreSetMenuHostPresentationOwner) -> Bool {
         precondition(Thread.isMainThread)
-        let box = CoreSetMenuConsumer(consumer)
-        guard hostChannel.bind(box) else { return false }
-        hostConsumer = box
+        guard hostPresentationOwner == nil else { return false }
+        hostPresentationOwner = owner
         return true
     }
 
@@ -1999,7 +2012,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         precondition(Thread.isMainThread)
         loadViewIfNeeded()
         let palette = featureState.home.desired.floatingPalette
-        hostChannel.updateDesired { $0.menuVisible = visible; $0.floatingPalette = palette }
+        desiredHostPresentation.menuVisible = visible
+        desiredHostPresentation.floatingPalette = palette
         applyHostSettings { [weak self] confirmed in
             self?.isClosing = false
             if confirmed && !visible { self?.dismissHostedColorEditor() }
@@ -2007,69 +2021,50 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
         }
     }
 
-    func suspendMenuHostConsumer(completion: @escaping (Bool) -> Void) {
+    func stopMenuHostPresentation(completion: @escaping (Bool) -> Void) {
         precondition(Thread.isMainThread)
-        hostChannel.suspend()
-        guard let token = hostChannel.pendingStop else { completion(hostChannel.restoration.stopComplete); return }
-        guard let consumer = hostConsumer else { completion(false); return }
-        consumer.stop(token) { [weak self] token, outcome in
-            DispatchQueue.main.async {
-                guard let self, self.hostChannel.receiveStop(token, outcome: outcome) else { completion(false); return }
-                if self.hostChannel.restoration.stopComplete { self.lastHostAppliedToken = nil }
-                _ = self.featureState.setInfrastructure(.hostWindow, availability: .unavailable(reason: "Host consumer stopped"))
-                completion(self.hostChannel.restoration.stopComplete)
-            }
+        guard let owner = hostPresentationOwner else { completion(false); return }
+        owner.stop { [weak self] confirmed in
+            guard let self else { completion(false); return }
+            _ = self.featureState.setInfrastructure(.hostWindow, availability: .unavailable(
+                reason: confirmed ? "Host presentation stopped" : "Host presentation cleanup unconfirmed"))
+            completion(confirmed)
         }
     }
     @discardableResult
-    func resumeMenuHostConsumer() -> Bool {
+    func resumeMenuHostPresentation() -> Bool {
         precondition(Thread.isMainThread)
-        let result = hostChannel.resume()
-        if result { lastHostAppliedToken = nil }
+        guard let owner = hostPresentationOwner else { return false }
+        let result = owner.resume()
         refreshConsumerAvailability()
         return result
     }
 
     private func applyHostSettings(completion: @escaping (Bool) -> Void = { _ in }) {
-        guard let consumer = hostConsumer, let request = hostChannel.prepareApply() else { completion(false); return }
+        guard let owner = hostPresentationOwner else { completion(false); return }
         let hostedSource = interactionControlIdentifier
-        consumer.apply(request) { [weak self] token, outcome in
-            DispatchQueue.main.async {
-                guard let self else { completion(false); return }
-                guard self.hostChannel.receive(token, outcome: outcome) else {
-                    if token.generation == self.hostChannel.generation, self.hostChannel.pendingStop == nil {
-                        self.invalidateMenuHostObservation(reason: "Host apply receipt no longer matches its live producer")
-                    }
-                    completion(false); return
-                }
-                if case .applied = outcome { self.lastHostAppliedToken = token }
-                _ = self.featureState.setInfrastructure(.hostWindow, availability: self.hostChannel.isDesiredConfirmed
-                    ? .ready : .unavailable(reason: "Host request has not been confirmed"))
-                NSLog("Core-SET: hosted input stage=actual control=%@ capability=hostWindow confirmed=%d result=%@ scope=actual-host-floating-gradient-property original-runtime-receipt=0 device-effect-verified=0",
-                      hostedSource, self.hostChannel.isDesiredConfirmed ? 1 : 0, String(describing: outcome))
-                completion(self.hostChannel.isDesiredConfirmed)
-                if self.isViewLoaded && self.selectedPage == 0 { self.rebuildMenu() }
-            }
-        }
-    }
-    func menuHostRequestIsCurrent(_ token: CoreSetRequestToken) -> Bool {
-        lastHostAppliedToken == token && hostChannel.generation == token.generation &&
-            hostChannel.pendingApply == nil && hostChannel.pendingStop == nil
-    }
-    func menuHostObservationMayBeRefreshed(_ token: CoreSetRequestToken) -> Bool {
-        hostChannel.pendingApply == nil && hostChannel.pendingStop == nil
-    }
-    func invalidateMenuHostObservation(reason: String) {
-        precondition(Thread.isMainThread)
-        hostChannel.invalidateHostPresentationObservation(reason: reason)
-        lastHostAppliedToken = nil
-        NSLog("Core-SET: hosted-palette stage=invalidated point=v17-014 confirmed=0 scope=actual-host-floating-gradient-property reason=%@", reason)
+        let confirmed = owner.apply(desiredHostPresentation, source: hostedSource)
+        _ = featureState.setInfrastructure(.hostWindow, availability: confirmed
+            ? .ready : .unavailable(reason: owner.observationFailureReason ?? "Host request has not been confirmed"))
+        NSLog("Core-SET: hosted input stage=actual control=%@ capability=hostWindow confirmed=%d result=%@ scope=actual-host-snapshot-replay original-runtime-receipt=0 device-effect-verified=0",
+              hostedSource, confirmed ? 1 : 0, owner.observationFailureReason ?? "applied")
+        completion(confirmed)
         if isViewLoaded && selectedPage == 0 { rebuildMenu() }
     }
+    @discardableResult
+    func reconcileMenuHostPresentation(source: String) -> Bool {
+        precondition(Thread.isMainThread)
+        guard let owner = hostPresentationOwner,
+              desiredHostPresentation.floatingPalette != nil else { return false }
+        let confirmed = owner.reconcile(desiredHostPresentation, source: source)
+        _ = featureState.setInfrastructure(.hostWindow, availability: confirmed
+            ? .ready : .unavailable(reason: owner.observationFailureReason ?? "Host snapshot reconciliation failed"))
+        return confirmed
+    }
     private var hostPaletteReceiptReason: String {
-        if let reason = hostChannel.observationInvalidationReason { return reason }
-        if case .failed(let reason) = hostChannel.phase { return reason }
-        if case .unavailable(let reason) = hostChannel.availability { return reason }
+        if let reason = hostPresentationOwner?.observationFailureReason { return reason }
+        if let availability = hostPresentationOwner?.availability,
+           case .unavailable(let reason) = availability { return reason }
         return "awaiting-matched-host-palette-receipt"
     }
 
@@ -3639,7 +3634,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             swatch.isSelected = selected
             swatch.isEnabled = localAppearanceReady
             swatch.accessibilityLabel = "悬浮颜色 \(index + 1)"
-            let confirmed = selected && hostChannel.isDesiredConfirmed && hostChannel.actual?.floatingPalette == CoreSetFloatingPalette(rawValue: floatingThemeValues[index])
+            let confirmed = selected && hostPresentationOwner?.observedState == desiredHostPresentation &&
+                hostPresentationOwner?.observedState?.floatingPalette == CoreSetFloatingPalette(rawValue: floatingThemeValues[index])
             swatch.accessibilityValue = confirmed ? "宿主浮球颜色属性已回读" : "颜色已配置，等待宿主浮球回执"
             swatch.accessibilityHint = "实际 Host 浮球 gradient 属性/代次回读；不代表原包设备像素或跨应用呈现验收"
             let point = 22 + index
@@ -3672,8 +3668,8 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
               let palette = CoreSetFloatingPalette(rawValue: floatingThemeValues[sender.tag]) else { return }
         featureState.home.updateDesired { $0.floatingPalette = palette }
         applyLocalAppearance()
-        hostChannel.updateDesired { $0.floatingPalette = palette }
-        if hostConsumer != nil { applyHostSettings() }
+        desiredHostPresentation.floatingPalette = palette
+        if hostPresentationOwner != nil { applyHostSettings() }
     }
 
     private func categoryTabs(_ titles: [String], in card: UIView, y: CGFloat, startIndex: Int = 0) {

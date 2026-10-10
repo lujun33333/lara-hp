@@ -58,7 +58,7 @@ def test_host_palette_comparison_and_close_state_are_stable():
     coordinator = read("lara/views/app/CoreSetRuntimeCoordinator.swift")
     close = body(menu, "@objc private func closeMenu()")
     request_start = menu.index("func requestMenuVisibility(")
-    request_end = menu.index("func suspendMenuHostConsumer", request_start)
+    request_end = menu.index("func stopMenuHostPresentation", request_start)
     request = menu[request_start:request_end]
     matches = body(coordinator, "private func matches(_ state: State, generation:")
     assert "self.isClosing = false" in close
