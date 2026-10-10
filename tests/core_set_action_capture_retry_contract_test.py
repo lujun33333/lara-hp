@@ -59,7 +59,7 @@ class ActionCaptureRetryContractTest(unittest.TestCase):
         self.assertIn("guard route.resolved", AIM)
         self.assertIn("switch route.slotRaw", AIM)
         self.assertIn("routeProducer.resolveAim(", AIM)
-        self.assertIn("routeProducer.resolveRecoilOnly()", AIM)
+        self.assertIn("routeProducer.resolveRecoilOnly(nativeInput: nil)", AIM)
         self.assertNotIn("routeDynamics.slot(firingSample:", AIM)
 
 

@@ -8,10 +8,22 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private weak var coordinator: CoreSetRuntimeCoordinator?
     private let battleProducer: CoreSetBattleProducer
     private var session: CoreSetReadSession { battleProducer.readSession }
+    private let geometrySession = CoreSetReadSession()
+    private let presentationSession = CoreSetReadSession()
     private let grenadeMotion = CoreSetGrenadeMotionTracker()
+    private let worker = DispatchQueue(label: "coreset.player.read", qos: .userInitiated)
+    private let geometryWorker = DispatchQueue(label: "coreset.player.geometry", qos: .userInteractive)
+    private let presentationWorker = DispatchQueue(label: "coreset.player.presentation", qos: .userInteractive)
     private var probe: Timer?
     private var refresh: Timer?
+    private var presentationTimer: DispatchSourceTimer?
+    private let presentationTickLock = NSLock()
+    private var presentationTickQueued = false
     private var inFlight = false
+    private var geometryInFlight = false
+    private var presentationInFlight = false
+    private var currentRoster: CoreSetPlayerSnapshot?
+    private var currentGeometry: CoreSetPlayerSnapshot?
     private var lastFullCaptureAttemptEndedAt: Double = 0
     private var lastGeometrySubmittedAt: Double?
     private var lastGeometryReceiptAt: Double?
@@ -39,13 +51,17 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     private var expectedReadSemanticDiagnostic: String?
     private var lastSemanticLogAt: Double = 0
     private var lastSemanticLogRevision: UInt64?
+    private var presentationReceiptWindowStartedAt: Double?
+    private var presentationReceiptCount = 0
     private var pendingInvalidation: (token: CoreSetRequestToken, snapshot: UUID,
         generation: UInt64, revision: UInt64, reason: String)?
 
     init(coordinator: CoreSetRuntimeCoordinator, battleProducer: CoreSetBattleProducer) {
         self.coordinator = coordinator
         self.battleProducer = battleProducer
-        NSLog("Core-SET: player-loop contract=core17-single-frame-v11 interval=0.15 producer=battle capture=actor-bone-camera projection=same-frame publication=one-shot-main configurationApply=immediate renderEvidence=separate")
+        geometrySession.diagnosticLabel = "player-geometry"
+        presentationSession.diagnosticLabel = "player-presentation"
+        NSLog("Core-SET: player-loop contract=core17-latest-frame-v12 rosterRetry=0.15 rosterRefresh=1.0 geometryInterval=0.15 presentationInterval=0.016 presentationClock=dispatch-source producer=battle displayCallback=one-shot projection=current-camera latestOnly=1 configurationApply=immediate renderEvidence=separate")
         probe = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.probeTarget() }
         probeTarget()
     }
@@ -76,10 +92,19 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     }
 
     private func probeTarget() {
-        guard !stopped, !session.ready else { return }
+        guard !stopped, !session.ready || !geometrySession.ready || !presentationSession.ready else { return }
         battleProducer.refreshReadiness { [weak self] _ in
             guard let self, !self.stopped else { return }
             self.coordinator?.refreshPlayerAvailability()
+        }
+        worker.async { [weak self] in
+            guard let self else { return }
+            if !self.geometrySession.ready { _ = self.geometrySession.connect() }
+            if !self.presentationSession.ready { _ = self.presentationSession.connect() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.stopped else { return }
+                self.coordinator?.refreshPlayerAvailability()
+            }
         }
     }
 
@@ -106,6 +131,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             completion(request.token, .notApplied(reason: reason)); return
         }
         refresh?.invalidate(); refresh = nil
+        presentationTimer?.cancel(); presentationTimer = nil
         revision += 1
         settings = request.desired
         if settings.grenadeWarning != true { _ = grenadeMotion.clear() }
@@ -132,6 +158,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         pendingApply = nil
         completion(request.token, .applied(observed: settings))
         armCaptureLoop()
+        armPresentationLoop()
         tick()
     }
 
@@ -143,11 +170,40 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         }
     }
 
+    private func armPresentationLoop() {
+        precondition(Thread.isMainThread)
+        guard !stopped, activeToken != nil, presentationTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: presentationWorker)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(16),
+                       leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in self?.enqueuePresentationTick() }
+        presentationTimer = timer
+        timer.resume()
+    }
+
+    private func enqueuePresentationTick() {
+        presentationTickLock.lock()
+        guard !presentationTickQueued else {
+            presentationTickLock.unlock()
+            return
+        }
+        presentationTickQueued = true
+        presentationTickLock.unlock()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.presentationTickLock.lock()
+            self.presentationTickQueued = false
+            self.presentationTickLock.unlock()
+            self.refreshPresentation()
+        }
+    }
+
     private func tick() {
         precondition(Thread.isMainThread)
         guard !stopped, activeToken != nil else { return }
         expireGeometryIfNeeded()
-        let fullCaptureInterval = 0.15
+        if currentRoster != nil { refreshGeometry() }
+        let fullCaptureInterval = currentRoster == nil ? 0.15 : 1.0
         if !inFlight, CACurrentMediaTime() - lastFullCaptureAttemptEndedAt >= fullCaptureInterval { capture() }
     }
 
@@ -157,15 +213,21 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
     }
 
     private var expectedReadIdentityMatches: Bool {
-        session.ready && session.generation == expectedSessionGeneration &&
-            session.processID == expectedProcessID && session.imageBase == expectedImageBase
+        let matches: (CoreSetReadSession) -> Bool = { candidate in
+            candidate.ready && candidate.generation == self.expectedSessionGeneration &&
+                candidate.processID == self.expectedProcessID &&
+                candidate.imageBase == self.expectedImageBase
+        }
+        return matches(session) || matches(geometrySession) || matches(presentationSession)
     }
 
     private func finishUnavailable(_ reason: String, token: CoreSetRequestToken) {
         precondition(Thread.isMainThread)
         refresh?.invalidate(); refresh = nil
+        presentationTimer?.cancel(); presentationTimer = nil
         awaitingReceipt = false
         awaitingReceiptSince = nil
+        currentRoster = nil; currentGeometry = nil
         lastGeometrySubmittedAt = nil; lastGeometryReceiptAt = nil
         geometryExpired = false
         let pending = pendingApply
@@ -189,13 +251,14 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             NSLog("Core-SET: target-read lane=player stage=capture ready=0 retrying=1 reason=%@", reason)
         }
         if captureFailureStartedAt == nil { captureFailureStartedAt = now }
-        if lastGeometrySubmittedAt == nil, !captureLaneClearedForFailure,
+        if currentRoster == nil, !captureLaneClearedForFailure,
            now - (captureFailureStartedAt ?? now) >= 0.5 {
             captureLaneClearedForFailure = true
             clearStaleLane(token: token, reason: reason,
                            recordInvalidation: false, preserveRefresh: true)
         }
         armCaptureLoop()
+        armPresentationLoop()
         coordinator?.refreshPlayerAvailability()
     }
 
@@ -231,6 +294,82 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             geometryExpired = true
             NSLog("Core-SET: target-read lane=player stage=geometry-expired age=%.3f action=empty-lane",
                   now - freshest)
+        }
+    }
+
+    private func refreshGeometry() {
+        guard !stopped, !geometryInFlight,
+              let roster = currentGeometry ?? currentRoster, let token = activeToken,
+              let canvas = coordinator?.playerCanvas else { return }
+        guard geometrySession.ready,
+              geometrySession.processID == roster.processID,
+              geometrySession.imageBase == roster.imageBase else {
+            probeTarget(); return
+        }
+        geometryInFlight = true
+        let expectedRevision = revision
+        let rosterID = roster.snapshotID
+        let includeOffscreen = settings.backIndicator?.showIndicator == true
+        let maximumDrawDistance = Double(settings.drawingDistance.value ?? 0)
+        geometryWorker.async { [weak self] in
+            guard let self else { return }
+            let snapshot = CoreSetPlayerCollector.refreshGeometry(for: roster,
+                session: self.geometrySession, canvasSize: canvas.size,
+                includeOffscreen: includeOffscreen,
+                maximumDrawDistance: maximumDrawDistance)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.geometryInFlight = false
+                guard !self.stopped, self.activeToken == token,
+                      self.revision == expectedRevision,
+                      (self.currentGeometry ?? self.currentRoster)?.snapshotID == rosterID,
+                      let currentCanvas = self.coordinator?.playerCanvas,
+                      currentCanvas.generation == canvas.generation,
+                      currentCanvas.size == canvas.size,
+                      let snapshot else { return }
+                self.currentGeometry = snapshot
+                if !self.awaitingReceipt {
+                    self.submitGeometry(snapshot, token: token,
+                                        revision: expectedRevision, canvas: currentCanvas)
+                }
+            }
+        }
+    }
+
+    private func refreshPresentation() {
+        precondition(Thread.isMainThread)
+        guard !stopped, !presentationInFlight, !awaitingReceipt,
+              let geometry = currentGeometry ?? currentRoster, let token = activeToken,
+              let canvas = coordinator?.playerCanvas else { return }
+        guard presentationSession.ready,
+              presentationSession.processID == geometry.processID,
+              presentationSession.imageBase == geometry.imageBase else {
+            probeTarget(); return
+        }
+        presentationInFlight = true
+        let expectedRevision = revision
+        let geometryID = geometry.snapshotID
+        let includeOffscreen = settings.backIndicator?.showIndicator == true
+        let maximumDrawDistance = Double(settings.drawingDistance.value ?? 0)
+        presentationWorker.async { [weak self] in
+            guard let self else { return }
+            let snapshot = CoreSetPlayerCollector.reprojectPresentation(for: geometry,
+                session: self.presentationSession, canvasSize: canvas.size,
+                includeOffscreen: includeOffscreen,
+                maximumDrawDistance: maximumDrawDistance)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.presentationInFlight = false
+                guard !self.stopped, !self.awaitingReceipt,
+                      self.activeToken == token, self.revision == expectedRevision,
+                      (self.currentGeometry ?? self.currentRoster)?.snapshotID == geometryID,
+                      let currentCanvas = self.coordinator?.playerCanvas,
+                      currentCanvas.generation == canvas.generation,
+                      currentCanvas.size == canvas.size,
+                      let snapshot else { return }
+                self.submitGeometry(snapshot, token: token,
+                                    revision: expectedRevision, canvas: currentCanvas)
+            }
         }
     }
 
@@ -322,9 +461,13 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
                 self.lastCaptureFailure = nil
                 self.captureFailureStartedAt = nil
                 self.captureLaneClearedForFailure = false
+                self.currentRoster = snapshot
+                self.currentGeometry = snapshot
                 self.geometryExpired = false
-                self.submitGeometry(snapshot, token: token,
-                                    revision: expectedRevision, canvas: currentCanvas)
+                // A full mapped scan is roster production. Never present its
+                // producer-time screen points; first reproject retained world
+                // geometry using a current camera sample.
+                self.refreshPresentation()
             }
         }
 
@@ -334,6 +477,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         guard let canvas = coordinator?.playerCanvas, revision < UInt64.max - 1 else { return }
         if !preserveRefresh {
             refresh?.invalidate(); refresh = nil
+            presentationTimer?.cancel(); presentationTimer = nil
         }
         revision += 1
         let id = UUID()
@@ -769,6 +913,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             } else {
                 pendingApply = nil
                 refresh?.invalidate(); refresh = nil
+                presentationTimer?.cancel(); presentationTimer = nil
                 pending.1(pending.0, .failed(reason: "玩家帧未被本地渲染器消费"))
             }
             return
@@ -794,6 +939,7 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
             } else {
                 lastGeometryReceiptAt = CACurrentMediaTime()
                 geometryExpired = false
+                recordPresentationCadenceIfNeeded()
                 logReadSemanticReceipt(receipt)
             }
         } else if activeToken == receipt.requestToken && availability != .ready {
@@ -807,8 +953,28 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         guard lastSemanticLogRevision != receipt.configRevision || now - lastSemanticLogAt >= 30 else { return }
         lastSemanticLogRevision = receipt.configRevision; lastSemanticLogAt = now
         NSLog("Core-SET: read-semantic lane=player stage=receipt confirmed=1 evidence=local-renderer-frame parity=partial session=%llu pid=%d host=%llu revision=%llu snapshot=%@ scope=%@",
-              session.generation, session.processID, receipt.hostGeneration, receipt.configRevision,
+              expectedSessionGeneration ?? session.generation,
+              expectedProcessID ?? session.processID,
+              receipt.hostGeneration, receipt.configRevision,
               receipt.snapshotID.uuidString, diagnostic)
+    }
+
+    private func recordPresentationCadenceIfNeeded() {
+        guard expectedReadSemanticDiagnostic?.hasPrefix("presentation-reprojection") == true else { return }
+        let now = CACurrentMediaTime()
+        guard let startedAt = presentationReceiptWindowStartedAt else {
+            presentationReceiptWindowStartedAt = now
+            presentationReceiptCount = 1
+            return
+        }
+        presentationReceiptCount += 1
+        let elapsed = now - startedAt
+        guard elapsed >= 2 else { return }
+        let fps = Double(max(0, presentationReceiptCount - 1)) / elapsed
+        NSLog("Core-SET: target-read lane=player stage=presentation-cadence confirmed=1 frames=%d window=%.3f effectiveFPS=%.2f clock=dispatch-source receipt=local-renderer",
+              presentationReceiptCount, elapsed, fps)
+        presentationReceiptWindowStartedAt = now
+        presentationReceiptCount = 1
     }
 
     func stop(_ token: CoreSetRequestToken,
@@ -841,9 +1007,11 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         stopped = true
         probe?.invalidate(); probe = nil
         refresh?.invalidate(); refresh = nil
+        presentationTimer?.cancel(); presentationTimer = nil
         activeToken = nil; pendingApply = nil
         battleProducer.releaseDisplay(requestID: nil)
-        geometryExpired = false
+        currentRoster = nil; currentGeometry = nil
+        geometryInFlight = false; presentationInFlight = false; geometryExpired = false
         lastGeometrySubmittedAt = nil; lastGeometryReceiptAt = nil
         awaitingReceipt = false
         awaitingReceiptSince = nil
@@ -851,8 +1019,12 @@ final class CoreSetPlayerConsumer: CoreSetFeatureConsumer {
         captureFailureStartedAt = nil; captureLaneClearedForFailure = false
         lastFullCaptureAttemptEndedAt = 0
         expectedReadSemanticDiagnostic = nil
+        presentationReceiptWindowStartedAt = nil; presentationReceiptCount = 0
         let motionClean = grenadeMotion.clear()
         CoreSetWeaponImageCatalog.stop()
-        return motionClean
+        worker.sync {}
+        let geometryCleanup = geometryWorker.sync { geometrySession.disconnect() }
+        let presentationCleanup = presentationWorker.sync { presentationSession.disconnect() }
+        return motionClean && geometryCleanup.complete && presentationCleanup.complete
     }
 }

@@ -51,7 +51,7 @@ for token in (
     "@property(nonatomic) float aimPitch;", "@property(nonatomic) float aimYaw;",
     "@property(nonatomic) float recoilPitch;", "@property(nonatomic) float recoilYaw;",
 ):
-    assert token in probe_mm, token
+    assert token in probe_mm + route_state, token
 
 assert "referenceActionSlotForRouteState" in route_state
 assert "referenceActionSlotForFireSample" not in route_state

@@ -236,6 +236,120 @@ static CGRect CSCenteredTextRect(CoreSetRenderCommand *command) {
                       span.width, command.rect.size.height);
 }
 
+static NSString *CSCommandLayerSignature(CoreSetRenderCommand *command) {
+    if (command.kind == CoreSetRenderKindBackGlyph) return @"back-glyph";
+    if (command.kind == CoreSetRenderKindImage) return @"image";
+    if (command.kind == CoreSetRenderKindRectangle && command.gradientLeftColor) return @"gradient";
+    if (command.kind == CoreSetRenderKindText)
+        return command.textBackgroundColor ? @"text-background" : @"text";
+    return @"shape";
+}
+
+static void CSResetCommandContainer(CALayer *container, CoreSetRenderCommand *command) {
+    NSString *signature = CSCommandLayerSignature(command);
+    if ([container.name isEqualToString:signature]) return;
+    container.sublayers = nil;
+    container.contents = nil;
+    container.name = signature;
+    if ([signature isEqualToString:@"back-glyph"]) return;
+    if ([signature isEqualToString:@"gradient"]) {
+        [container addSublayer:[CAGradientLayer layer]];
+    } else if ([signature isEqualToString:@"text-background"]) {
+        [container addSublayer:[CALayer layer]];
+        [container addSublayer:[CATextLayer layer]];
+    } else if ([signature isEqualToString:@"text"]) {
+        [container addSublayer:[CATextLayer layer]];
+    } else if ([signature isEqualToString:@"image"]) {
+        [container addSublayer:[CALayer layer]];
+    } else {
+        [container addSublayer:[CAShapeLayer layer]];
+    }
+}
+
+static BOOL CSConfigureCommandContainer(CALayer *container, CoreSetRenderCommand *command,
+                                        CGSize canvasSize, CGFloat scale) {
+    CSResetCommandContainer(container, command);
+    container.frame = CGRectMake(0, 0, canvasSize.width, canvasSize.height);
+    container.hidden = NO;
+    NSString *signature = container.name;
+    if ([signature isEqualToString:@"back-glyph"]) {
+        CALayer *glyph = CSBackGlyphLayer(command);
+        if (!glyph) return NO;
+        container.sublayers = @[glyph];
+        return YES;
+    }
+    if ([signature isEqualToString:@"image"]) {
+        UIImage *image = command.weaponID != 0
+            ? [CoreSetWeaponImageCatalog imageForWeaponID:command.weaponID]
+            : [UIImage imageNamed:command.localImageName];
+        CALayer *layer = container.sublayers.firstObject;
+        if (!image || !layer) return NO;
+        layer.frame = command.rect;
+        layer.contents = (__bridge id)image.CGImage;
+        layer.contentsGravity = kCAGravityResizeAspect;
+        layer.contentsScale = scale;
+        return YES;
+    }
+    if ([signature isEqualToString:@"gradient"]) {
+        CAGradientLayer *gradient = (CAGradientLayer *)container.sublayers.firstObject;
+        if (![gradient isKindOfClass:CAGradientLayer.class]) return NO;
+        gradient.frame = command.rect;
+        gradient.colors = @[(id)command.gradientLeftColor.CGColor,
+                            (id)command.gradientRightColor.CGColor];
+        gradient.startPoint = CGPointMake(0, 0.5);
+        gradient.endPoint = CGPointMake(1, 0.5);
+        return YES;
+    }
+    if ([signature hasPrefix:@"text"]) {
+        UIFont *font = CSFont(command.fontRole, command.fontSize);
+        CGRect textRect = command.horizontallyCenteredText
+            ? CSCenteredTextRect(command) : command.rect;
+        if (!font || CGRectIsNull(textRect)) return NO;
+        NSUInteger textIndex = 0;
+        if ([signature isEqualToString:@"text-background"]) {
+            CALayer *background = container.sublayers.firstObject;
+            if (!background) return NO;
+            background.frame = CGRectInset(textRect,
+                -command.textBackgroundHorizontalPadding,
+                -command.textBackgroundVerticalPadding);
+            background.backgroundColor = command.textBackgroundColor.CGColor;
+            textIndex = 1;
+        }
+        if (container.sublayers.count <= textIndex) return NO;
+        CATextLayer *text = (CATextLayer *)container.sublayers[textIndex];
+        if (![text isKindOfClass:CATextLayer.class]) return NO;
+        text.frame = textRect;
+        text.string = command.text ?: @"";
+        text.fontSize = command.fontSize;
+        text.font = (__bridge CFTypeRef)font.fontName;
+        text.foregroundColor = command.color.CGColor;
+        text.contentsScale = scale;
+        text.truncationMode = kCATruncationEnd;
+        return YES;
+    }
+    CAShapeLayer *shape = (CAShapeLayer *)container.sublayers.firstObject;
+    if (![shape isKindOfClass:CAShapeLayer.class]) return NO;
+    UIBezierPath *path;
+    if (command.kind == CoreSetRenderKindLine) {
+        path = [UIBezierPath bezierPath];
+        [path moveToPoint:command.rect.origin];
+        [path addLineToPoint:command.endpoint];
+    } else if (command.kind == CoreSetRenderKindEllipse) {
+        path = [UIBezierPath bezierPathWithOvalInRect:command.rect];
+    } else if (command.cornerRadius > 0) {
+        path = [UIBezierPath bezierPathWithRoundedRect:command.rect
+                                         cornerRadius:command.cornerRadius];
+    } else {
+        path = [UIBezierPath bezierPathWithRect:command.rect];
+    }
+    shape.path = path.CGPath;
+    shape.lineWidth = command.lineWidth;
+    shape.strokeColor = command.color.CGColor;
+    shape.fillColor = command.isFilled && command.kind != CoreSetRenderKindLine
+        ? command.color.CGColor : UIColor.clearColor.CGColor;
+    return YES;
+}
+
 static NSString *CSWeaponSHA256(NSData *data) {
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
@@ -345,9 +459,14 @@ static uint64_t CSWeaponEpoch;
 @implementation CoreSetCoreAnimationConsumer {
     CALayer *_root;
     __weak UIView *_view;
+    NSMutableArray<CALayer *> *_commandLayers;
 }
 - (instancetype)init {
-    if ((self = [super init])) { _root = [CALayer layer]; _root.masksToBounds = YES; }
+    if ((self = [super init])) {
+        _root = [CALayer layer];
+        _root.masksToBounds = YES;
+        _commandLayers = [NSMutableArray array];
+    }
     return self;
 }
 - (CoreSetHUDBackend)backend { return CoreSetHUDBackendCoreAnimation; }
@@ -358,7 +477,7 @@ static uint64_t CSWeaponEpoch;
     [view.layer addSublayer:_root];
 }
 - (void)setVisible:(BOOL)visible { _root.hidden = !visible; }
-- (void)clear { _root.sublayers = nil; }
+- (void)clear { _root.sublayers = nil; [_commandLayers removeAllObjects]; }
 - (void)detach { [self clear]; [_root removeFromSuperlayer]; _view = nil; }
 - (BOOL)consumeFrame:(CoreSetRenderFrame *)frame error:(NSError **)error {
     if (!NSThread.isMainThread) {
@@ -418,76 +537,20 @@ static uint64_t CSWeaponEpoch;
             userInfo:@{NSLocalizedDescriptionKey:@"Invalid frame or unavailable canvas"}];
         return NO;
     }
-    NSMutableArray<CALayer *> *layers = [NSMutableArray arrayWithCapacity:frame.commands.count];
     const CGFloat scale = _view.window.screen.scale ?: UIScreen.mainScreen.scale;
+    while (_commandLayers.count < frame.commands.count)
+        [_commandLayers addObject:[CALayer layer]];
+    NSMutableArray<CALayer *> *layers = [NSMutableArray arrayWithCapacity:frame.commands.count];
+    NSUInteger index = 0;
     for (CoreSetRenderCommand *command in frame.commands) {
-        if (command.kind == CoreSetRenderKindBackGlyph) {
-            [layers addObject:CSBackGlyphLayer(command)];
-            continue;
+        CALayer *container = _commandLayers[index++];
+        if (!CSConfigureCommandContainer(container, command, size, scale)) {
+            [self clear];
+            if (error) *error = [NSError errorWithDomain:@"CoreSetRender" code:3
+                userInfo:@{NSLocalizedDescriptionKey:@"Reusable layer update failed"}];
+            return NO;
         }
-        if (command.kind == CoreSetRenderKindImage) {
-            UIImage *image = command.weaponID != 0
-                ? [CoreSetWeaponImageCatalog imageForWeaponID:command.weaponID]
-                : [UIImage imageNamed:command.localImageName];
-            CALayer *layer = [CALayer layer];
-            layer.frame = command.rect;
-            layer.contents = (__bridge id)image.CGImage;
-            layer.contentsGravity = kCAGravityResizeAspect;
-            layer.contentsScale = scale;
-            [layers addObject:layer];
-            continue;
-        }
-        if (command.kind == CoreSetRenderKindRectangle && command.gradientLeftColor) {
-            CAGradientLayer *gradient = [CAGradientLayer layer];
-            gradient.frame = command.rect;
-            gradient.colors = @[(id)command.gradientLeftColor.CGColor,
-                                (id)command.gradientRightColor.CGColor];
-            gradient.startPoint = CGPointMake(0, 0.5);
-            gradient.endPoint = CGPointMake(1, 0.5);
-            [layers addObject:gradient];
-            continue;
-        }
-        if (command.kind == CoreSetRenderKindText) {
-            UIFont *font = CSFont(command.fontRole, command.fontSize);
-            CGRect textRect = command.horizontallyCenteredText
-                ? CSCenteredTextRect(command) : command.rect;
-            if (command.textBackgroundColor) {
-                CALayer *background = [CALayer layer];
-                background.frame = CGRectInset(textRect,
-                    -command.textBackgroundHorizontalPadding,
-                    -command.textBackgroundVerticalPadding);
-                background.backgroundColor = command.textBackgroundColor.CGColor;
-                [layers addObject:background];
-            }
-            CATextLayer *text = [CATextLayer layer];
-            text.frame = textRect;
-            text.string = command.text ?: @"";
-            text.fontSize = command.fontSize;
-            text.font = (__bridge CFTypeRef)font.fontName;
-            text.foregroundColor = command.color.CGColor;
-            text.contentsScale = scale;
-            text.truncationMode = kCATruncationEnd;
-            [layers addObject:text];
-            continue;
-        }
-        UIBezierPath *path;
-        if (command.kind == CoreSetRenderKindLine) {
-            path = [UIBezierPath bezierPath];
-            [path moveToPoint:command.rect.origin];
-            [path addLineToPoint:command.endpoint];
-        } else if (command.kind == CoreSetRenderKindEllipse) {
-            path = [UIBezierPath bezierPathWithOvalInRect:command.rect];
-        } else if (command.cornerRadius > 0) {
-            path = [UIBezierPath bezierPathWithRoundedRect:command.rect
-                                             cornerRadius:command.cornerRadius];
-        } else { path = [UIBezierPath bezierPathWithRect:command.rect]; }
-        CAShapeLayer *shape = [CAShapeLayer layer];
-        shape.path = path.CGPath;
-        shape.lineWidth = command.lineWidth;
-        shape.strokeColor = command.color.CGColor;
-        shape.fillColor = command.isFilled && command.kind != CoreSetRenderKindLine
-            ? command.color.CGColor : UIColor.clearColor.CGColor;
-        [layers addObject:shape];
+        [layers addObject:container];
     }
     [CATransaction begin];
     [CATransaction setDisableActions:YES];

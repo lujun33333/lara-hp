@@ -84,6 +84,9 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     }
     var availability: CoreSetAvailability {
         if let executionFailure { return .unavailable(reason: executionFailure) }
+        guard routeProducer.originalProviderBound else {
+            return .unavailable(reason: routeProducer.unresolvedReason)
+        }
         guard !closed, !cleanupPending, readReady, coordinator?.playerCanvas != nil else {
             return .unavailable(reason: cleanupPending ? "基础自瞄清理待确认" : "基础自瞄目标只读会话或画布未就绪")
         }
@@ -184,6 +187,9 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
             }
             return
         }
+        guard routeProducer.originalProviderBound else {
+            completion(request.token, .unavailable(reason: routeProducer.unresolvedReason)); return
+        }
         guard availability == .ready, let canvas = coordinator?.playerCanvas,
               request.desired.enabled == true, request.desired.trigger != nil,
               request.desired.includeBots != nil, request.desired.circleSize.value != nil,
@@ -270,6 +276,9 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
                 }
             }
             return
+        }
+        guard routeProducer.originalProviderBound else {
+            completion(request.token, .unavailable(reason: routeProducer.unresolvedReason)); return
         }
         guard recoilAvailability == .ready, recoilConfiguration(request.desired) != nil,
               let canvas = coordinator?.playerCanvas else {
@@ -441,9 +450,10 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
     private enum ActionSubmitResult { case idle, committed, failed(String) }
     private func submitMergedAction(input: CoreSetActionInputAuthority, aimStep: CoreSetBasicAimDelta?,
         recoilRequest: CoreSetApplyRequest<CoreSetRecoilSettings>?,
-        route: CoreSetV17ActionRouteDecision,
+        route: CoreSetV17ActionRouteDecision?,
         primaryToken: CoreSetRequestToken, hostGeneration: UInt64, revision: UInt64,
         requireAimTrigger: Bool) -> ActionSubmitResult {
+        guard let route, route.resolved else { return .failed(routeProducer.unresolvedReason) }
         let recoil = recoilRequest.flatMap { recoilConfiguration($0.desired) }
         guard let merged = recoilDynamics.plan(input: input,
             aimPitch: aimStep?.pitch ?? 0, aimYaw: aimStep?.yaw ?? 0,
@@ -522,7 +532,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         prepareRouteProducer(input: capture.input, primaryToken: recoilRequest.token,
             hostGeneration: hostGeneration, revision: revision)
         switch submitMergedAction(input: capture.input, aimStep: nil, recoilRequest: recoilRequest,
-            route: routeProducer.resolveRecoilOnly(),
+            route: routeProducer.resolveRecoilOnly(nativeInput: nil),
             primaryToken: recoilRequest.token,
             hostGeneration: hostGeneration, revision: revision, requireAimTrigger: false) {
         case .idle: publish("压枪状态预热或本帧无补偿")
@@ -536,7 +546,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         hostGeneration: UInt64, revision: UInt64, idleStatus: String) {
         guard let recoilRequest else { publish(idleStatus); return }
         switch submitMergedAction(input: input, aimStep: nil, recoilRequest: recoilRequest,
-            route: routeProducer.resolveRecoilOnly(),
+            route: routeProducer.resolveRecoilOnly(nativeInput: nil),
             primaryToken: aimRequest.token,
             hostGeneration: hostGeneration, revision: revision, requireAimTrigger: false) {
         case .idle: publish(idleStatus + "；压枪本帧预热或无补偿")
@@ -587,7 +597,7 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         if !trigger {
             guard recoilRequest != nil else { publish("等待触发，未写入"); return }
             switch submitMergedAction(input: input, aimStep: nil, recoilRequest: recoilRequest,
-                route: routeProducer.resolveRecoilOnly(),
+                route: routeProducer.resolveRecoilOnly(nativeInput: nil),
                 primaryToken: request.token, hostGeneration: hostGeneration,
                 revision: revision, requireAimTrigger: false) {
             case .idle: publish("等待自瞄触发；压枪本帧预热或无补偿")
@@ -598,14 +608,14 @@ final class CoreSetAimConsumer: CoreSetFeatureConsumer {
         }
         guard let route = routeProducer.resolveAim(pitch: input.rotationInputPitch,
             yaw: input.rotationInputYaw, configuration: configuration,
-            now: input.captureCompletedMonotonicSeconds) else {
-            fail(request, "Core c3018/c38c8 路由生产者拒绝当前输入")
+            now: input.captureCompletedMonotonicSeconds, nativeInput: nil) else {
+            fail(request, routeProducer.unresolvedReason)
             return
         }
         if !route.aimAllowed {
             guard recoilRequest != nil else { publish("检测到接管输入，暂停写入"); return }
             switch submitMergedAction(input: input, aimStep: nil, recoilRequest: recoilRequest,
-                route: routeProducer.resolveRecoilOnly(),
+                route: routeProducer.resolveRecoilOnly(nativeInput: nil),
                 primaryToken: request.token, hostGeneration: hostGeneration,
                 revision: revision, requireAimTrigger: false) {
             case .idle: publish("检测到接管输入；压枪本帧预热或无补偿")

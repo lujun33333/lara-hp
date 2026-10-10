@@ -196,9 +196,11 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertNotIn("pendingApply = (request.token, completion)", apply)
         self.assertLess(apply.index("completion(request.token, .applied(observed: settings))"),
                         apply.index("armCaptureLoop()"))
-        self.assertIn("player-loop contract=core17-single-frame-v11", player)
-        self.assertIn("capture=actor-bone-camera projection=same-frame", player)
-        self.assertIn("publication=one-shot-main", player)
+        self.assertIn("player-loop contract=core17-latest-frame-v12", player)
+        self.assertIn("presentationInterval=0.016 presentationClock=dispatch-source", player)
+        self.assertIn("rosterRetry=0.15 rosterRefresh=1.0", player)
+        self.assertIn("displayCallback=one-shot", player)
+        self.assertIn("projection=current-camera latestOnly=1", player)
         self.assertIn("configurationApply=immediate renderEvidence=separate", player)
         loop = body(player, "private func armCaptureLoop()")
         self.assertIn("withTimeInterval: 0.15, repeats: true", loop)
@@ -211,18 +213,35 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         for gate in ("CACurrentMediaTime()", "now - since >= 0.5",
                      "now - freshest >= 0.5", "commands: []", "geometryExpired = true"):
             self.assertIn(gate, expiry)
-        for removed in ("geometrySession", "presentationSession", "geometryWorker",
-                        "presentationWorker", "currentGeometry", "currentRoster",
-                        "refreshGeometry()", "refreshPresentation()"):
-            self.assertNotIn(removed, player)
+        geometry = body(player, "private func refreshGeometry()")
+        for gate in ("geometryInFlight", "CoreSetPlayerCollector.refreshGeometry",
+                     "currentGeometry ?? currentRoster", "snapshotID == rosterID", "submitGeometry"):
+            self.assertIn(gate, geometry)
+        presentation_loop = body(player, "private func armPresentationLoop()")
+        for gate in ("DispatchSource.makeTimerSource(queue: presentationWorker)",
+                     "repeating: .milliseconds(16)", "leeway: .milliseconds(2)",
+                     "enqueuePresentationTick()", "timer.resume()"):
+            self.assertIn(gate, presentation_loop)
+        enqueue_tick = body(player, "private func enqueuePresentationTick()")
+        for gate in ("presentationTickLock.lock()", "!presentationTickQueued",
+                     "presentationTickQueued = true", "DispatchQueue.main.async",
+                     "presentationTickQueued = false", "refreshPresentation()"):
+            self.assertIn(gate, enqueue_tick)
+        presentation = body(player, "private func refreshPresentation()")
+        for gate in ("presentationInFlight", "!awaitingReceipt",
+                     "CoreSetPlayerCollector.reprojectPresentation", "presentationSession",
+                     "snapshotID == geometryID", "submitGeometry"):
+            self.assertIn(gate, presentation)
         capture = body(player, "private func capture()")
         self.assertIn("self.retryCapture(failureReason, token: token)", capture)
         failed_capture = capture[capture.index("guard let snapshot,"):capture.index("self.lastCaptureFailure = nil")]
         self.assertNotIn("pendingApply = nil", failed_capture)
-        self.assertIn("self.submitGeometry(snapshot", capture)
+        self.assertIn("self.currentRoster = snapshot", capture)
+        self.assertIn("self.refreshPresentation()", capture)
+        self.assertNotIn("self.submitGeometry(snapshot", capture)
         self.assertIn("let includeOffscreen = true", capture)
         tick = body(player, "private func tick()")
-        self.assertIn("let fullCaptureInterval = 0.15", tick)
+        self.assertIn("currentRoster == nil ? 0.15 : 1.0", tick)
         self.assertIn("CACurrentMediaTime() - lastFullCaptureAttemptEndedAt", tick)
         capture = body(player, "private func capture()")
         self.assertIn("lastFullCaptureAttemptEndedAt = CACurrentMediaTime()", capture)
@@ -233,16 +252,19 @@ class ReadReceiptDiagnosticsContract(unittest.TestCase):
         self.assertGreaterEqual(receipt.count("awaitingReceipt = false"), 2)
         self.assertIn("retryCapture(reason, token: pending.0)", receipt)
         identity = body(player, "private var expectedReadIdentityMatches:")
-        for gate in ("session.ready", "session.generation == expectedSessionGeneration",
-                     "session.processID == expectedProcessID", "session.imageBase == expectedImageBase"):
-            self.assertIn(gate, identity)
+        self.assertIn("matches(session) || matches(geometrySession) || matches(presentationSession)", identity)
         shutdown = body(player, "func shutdownReadSession()")
         for reset in ("refresh?.invalidate(); refresh = nil", "awaitingReceipt = false",
                       "awaitingReceiptSince = nil", "activeSessionGeneration = nil",
                       "captureFailureStartedAt = nil"):
             self.assertIn(reset, shutdown)
         self.assertIn("battleProducer.releaseDisplay(requestID: nil)", shutdown)
-        self.assertIn("return motionClean", shutdown)
+        self.assertIn("presentationTimer?.cancel(); presentationTimer = nil", shutdown)
+        self.assertIn("presentationSession.disconnect()", shutdown)
+        cadence = body(player, "private func recordPresentationCadenceIfNeeded()")
+        for gate in ("presentation-reprojection", "presentationReceiptCount += 1",
+                     "elapsed >= 2", "effectiveFPS=%.2f", "receipt=local-renderer"):
+            self.assertIn(gate, cadence)
         ordered = [collector.index(f'CSLastCaptureDiagnostic = "{stage}"') for stage in (
             "root-world-netdriver", "root-netdriver-serverconnection",
             "root-connection-playercontroller", "root-controller-camera-manager",

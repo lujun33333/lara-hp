@@ -37,9 +37,13 @@ ANCHORS = {
     0x1000C2F20: "290108ca",  # Decode runtime offset as A XOR B.
     0x1000C2F38: "21011a8b",  # Sink address = controller + decoded offset.
     0x1000C5B08: "f30308aa",  # c5ad8 hidden result record is caller x8.
+    0x1000C5B68: "1f080071",  # Raw status 2 is normalized separately.
+    0x1000C5B70: "1f040071",  # Raw status 1 is class0; other statuses are class2.
     0x1000C5BE8: "68060039",  # Dual-axis class-2 sets result byte +1.
     0x1000C5C50: "68060039",  # Single-axis class-2 sets result byte +1.
-    0x10006308C: "a8008052",  # Exact readback success encodes raw low status 5.
+    0x100063084: "970b1b94",  # Imported memcmp compares readback with expected new bytes.
+    0x100063088: "e0020034",  # Equal readback skips raw status 5.
+    0x10006308C: "a8008052",  # Nonzero memcmp/readback mismatch encodes raw status 5.
     0x100063090: "e8b302b9",  # Raw status is returned through c620b8 x0.
     0x1000C3148: "e8574139",  # Non-fire path loads c5ad8 result byte +1.
     0x1000C3150: "21300054",  # exact-one result gate.
@@ -47,6 +51,15 @@ ANCHORS = {
     0x1000C3698: "e8050036",  # low-bit result gate.
     0x1000C1F88: "08e15d39",  # Alternate state skips config observation.
     0x1000C1F90: "086741b9",  # Per-cycle C+0x164 load.
+    0x1000C1600: "1f6501b9",  # Derived scene stores Core-local C+0x164 = 0.
+    0x100013134: "016501b9",  # Config integer ID 27 also restores C+0x164.
+    0x100012B74: "3f000071",  # ID 27 restore validator compares signed value to zero.
+    0x100012B78: "e0d79f1a",  # ID 27 restore normalizes positive to 1, others to 0.
+    0x100011D80: "2d040094",  # Restore calls the integer setter dispatcher.
+    0x1000C1C40: "99050034",  # Aim-disabled worker skips scene derivation.
+    0x1000C14F8: "2d070035",  # A nonzero C+164 forces re-derivation/clear.
+    0x1000C3730: "5fed0071",  # Route counter compares old signed count to 59.
+    0x1000C3734: "2b080054",  # Signed b.lt, not an unsigned wrap threshold.
     0x1000C1FAC: "28f109b9",  # priorConfig update.
     0x1000C1FB8: "280100b9",  # modeFlag update.
     0x1000C1FBC: "3f2500b9",  # resultGateCount reset.
@@ -56,6 +69,11 @@ ANCHORS = {
     0x1000C38E8: "14008052",  # Paused-input path w20=0.
     0x1000C3984: "14008052",  # Threshold-confirm path w20=0.
     0x1000C39B8: "14008052",  # Deadline path w20=0.
+    0x1000C39D8: "34008052",  # modeFlag true but recoil disabled still yields w20=1.
+    0x1000C39E0: "34008052",  # modeFlag false upstream path yields w20=1.
+    0x1000C2318: "ead70729",  # Clock/trigger-derived aim predicate and fire bit.
+    0x1000C2AB0: "f9434839",  # Geometry result copied to sp+210 supplies validity.
+    0x1000C2B90: "e8474839",  # Upstream reads geometry-record byte1, not sink byte1.
     0x1000C32E0: "a3030094",  # c416c result is separate from c5ad8 result byte.
     0x1000C2F9C: "08c12191",  # Index-66 current-input read path.
     0x1000C5010: "604a00bd",  # Geometry result +0x48 producer.
@@ -126,6 +144,17 @@ def main() -> None:
             templates.append(template)
         assert all(template == templates[0] for template in templates[1:])
 
+        # These indirect jump tables close the second, non-literal-zero C164
+        # write without pretending the thunk has a direct BL caller.
+        setter_cases = struct.unpack_from("<47i", image, 0x1314C)
+        getter_cases = struct.unpack_from("<48i", image, 0x125C8)
+        validator_cases = struct.unpack_from("<47i", image, 0x12D78)
+        assert 0x100012E54 + setter_cases[26] == 0x10001312C
+        assert 0x1000122CC + getter_cases[27] == 0x10001232C
+        assert 0x100012B68 + validator_cases[26] == 0x100012B74
+        # Pointer is a code-integrity table entry, not an observed invocation.
+        assert struct.unpack_from("<Q", image, 0xB927C0)[0] == 0x80100000000620B8
+
         init_address, init_offset, init_size = macho_section(image, b"__init_offsets")
         assert init_address == 0x100733BA0
         init_entries = struct.unpack_from("<" + "I" * (init_size // 4), image, init_offset)
@@ -147,7 +176,8 @@ def main() -> None:
     print(f"PASS: reference image={EXPECTED_IMAGE}; {len(ANCHORS)} opcode anchors; "
           "six identical guarded templates; loader-first producer=0x100011620; slots65/66=0x620/0x828")
     print("PASS: merge w19=0/1 selects slot65/66; sink address=published controller+decoded offset")
-    print("LIMIT: route owner still lacks C+0x164 semantics and raw c620b8 status/w20 feedback; authority remains unresolved")
+    print("PASS: C+0x164 has ID-27 config restore and conditional scene-clear owners")
+    print("LIMIT: scene-zero helper is not the complete C164 lifecycle; original upstream predicates and raw c5ad8 result/w20 provider remain unresolved")
 
 
 if __name__ == "__main__":

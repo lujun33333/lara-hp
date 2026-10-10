@@ -339,36 +339,64 @@ private:
 @implementation CoreSetV17ActionRouteDecision @end
 
 @interface CoreSetV17ActionRouteProducer () {
-    CoreSet::ActionTakeoverState _takeover;
+    CoreSet::NativeActionRouteProducer _producer;
 }
 @end
 @implementation CoreSetV17ActionRouteProducer
-- (void)reset { _takeover = {}; }
-- (CoreSetV17ActionRouteDecision *)decision:(CoreSet::ActionTakeoverObservation)observation {
-    CoreSet::ActionMergeRouteObservation route;
-    if (!CoreSet::referenceActionMergeRoute(observation.mergePredecessor, &route)) return nil;
+- (BOOL)originalProviderBound { return NO; }
+- (NSString *)unresolvedReason {
+    return @"Core 原始 upstream predicate / c5ad8 byte1 / w20 provider 未绑定，动作路由不可用";
+}
+- (void)reset { _producer.reset(); }
+- (CoreSetV17ActionRouteDecision *)decision:(CoreSet::NativeActionRouteDecision)route {
+    if (!route.resolved) return nil;
     CoreSetV17ActionRouteDecision *decision = [CoreSetV17ActionRouteDecision new];
     decision.resolved = true;
-    decision.aimAllowed = observation.aimAllowed;
+    decision.aimAllowed = route.takeover.aimAllowed;
     decision.slotRaw = route.slot == CoreSet::TargetActionSlot::controlRotation ? 1 : 2;
-    decision.predecessorRaw = (NSInteger)observation.mergePredecessor;
+    decision.predecessorRaw = (NSInteger)route.takeover.mergePredecessor;
     return decision;
 }
-- (CoreSetV17ActionRouteDecision *)resolveAimPitch:(float)pitch yaw:(float)yaw
-    configuration:(CoreSetV17AimConfiguration *)configuration now:(double)now {
-    if (!configuration) return nil;
-    CoreSet::ActionTakeoverObservation observation;
-    const float magnitude = std::hypot(pitch, yaw);
-    if (!CoreSet::referenceActionTakeover(_takeover, true, false, magnitude,
-        configuration.lockThreshold, (int)configuration.confirmationFrames,
-        (int)std::lround(configuration.takeoverPauseSeconds * 1000.0), now, &observation)) return nil;
-    return [self decision:observation];
+- (BOOL)readNativeInput:(const CoreSetNativeActionRouteInputRecord *)source
+                  into:(CoreSet::NativeActionRouteInput *)input {
+    if (!source || !input || source->present != 1 || source->currentAimActive > 1 ||
+        source->forceInput > 1 || source->recoilEnabled > 1 || source->w20 > 1 ||
+        source->resultGate > 1 || source->lifecycle > 4) return NO;
+    *input = {true, source->cycle, source->currentAimActive != 0,
+        source->forceInput != 0, source->recoilEnabled != 0, source->w20 != 0,
+        static_cast<CoreSet::RouteResultGate>(source->resultGate),
+        static_cast<CoreSet::RouteLifecycleEvent>(source->lifecycle),
+        source->configID27Value};
+    return YES;
 }
-- (CoreSetV17ActionRouteDecision *)resolveRecoilOnly {
-    CoreSet::ActionTakeoverObservation observation;
-    observation.aimAllowed = false;
-    observation.mergePredecessor = CoreSet::ActionMergePredecessor::inputDirect;
-    return [self decision:observation];
+- (CoreSetV17ActionRouteDecision *)resolveAimPitch:(float)pitch yaw:(float)yaw
+    configuration:(CoreSetV17AimConfiguration *)configuration now:(double)now
+    nativeInput:(const CoreSetNativeActionRouteInputRecord *)nativeInput {
+    CoreSet::NativeActionRouteInput native;
+    if (!configuration || ![self readNativeInput:nativeInput into:&native]) return nil;
+    CoreSet::NativeActionRouteDecision route;
+    const float magnitude = std::hypot(pitch, yaw);
+    if (!_producer.resolve(native, magnitude,
+        configuration.lockThreshold, (int)configuration.confirmationFrames,
+        (int)std::lround(configuration.takeoverPauseSeconds * 1000.0), now, &route)) return nil;
+    return [self decision:route];
+}
+- (CoreSetV17ActionRouteDecision *)resolveRecoilOnlyWithNativeInput:
+    (const CoreSetNativeActionRouteInputRecord *)nativeInput {
+    // Its original predecessor remains an upstream observation, not a constant.
+    // Recoil-only has no active Aim takeover; its scalar tuning is irrelevant.
+    CoreSet::NativeActionRouteInput native;
+    if (![self readNativeInput:nativeInput into:&native] || native.currentAimActive) return nil;
+    CoreSet::NativeActionRouteDecision route;
+    if (!_producer.resolveInactive(native, &route)) return nil;
+    return [self decision:route];
+}
+- (BOOL)observeNativeFeedback:(const CoreSetNativeActionRouteFeedbackRecord *)feedback {
+    if (!feedback || feedback->present != 1 || feedback->w20 > 1 || feedback->resultGate > 1) return NO;
+    CoreSet::NativeActionRouteFeedback native{true, feedback->cycle,
+        feedback->packedStatus, feedback->w20 != 0,
+        static_cast<CoreSet::RouteResultGate>(feedback->resultGate)};
+    return _producer.observeNativeFeedback(native);
 }
 @end
 

@@ -80,8 +80,23 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetActionInputAuthority *captured,
     NS_SWIFT_NAME(plan(candidate:input:configuration:));
 @end
 
-// Core-local route publication.  The authority is derived from the exact
-// c3018/c38c8 takeover predecessor, never from a target firing byte.
+// A future original upstream provider must supply these same-cycle records.
+// No provider is currently bound; nil is unavailable, never an input-route
+// fallback. Records are observations and do not grant target write authority.
+typedef struct {
+    uint64_t cycle;
+    int32_t configID27Value;
+    // resultGate: 0 = c3150 exact-one; 1 = c3698 low-bit.
+    // lifecycle: 0 none, 1 ID27 restore, 2 scene clear, 3 reset with count,
+    // 4 reset without count.
+    uint8_t present, currentAimActive, forceInput, recoilEnabled, w20, resultGate, lifecycle;
+} CoreSetNativeActionRouteInputRecord;
+typedef struct {
+    uint64_t cycle;
+    uint64_t packedStatus;
+    uint8_t present, w20, resultGate;
+} CoreSetNativeActionRouteFeedbackRecord;
+
 @interface CoreSetV17ActionRouteDecision : NSObject
 @property(nonatomic, readonly) BOOL resolved;
 @property(nonatomic, readonly) BOOL aimAllowed;
@@ -91,13 +106,17 @@ typedef BOOL (^CoreSetProbeLiveValidator)(CoreSetActionInputAuthority *captured,
 @end
 
 @interface CoreSetV17ActionRouteProducer : NSObject
+@property(nonatomic, readonly) BOOL originalProviderBound;
+@property(nonatomic, readonly) NSString *unresolvedReason;
 - (void)reset;
 - (nullable CoreSetV17ActionRouteDecision *)resolveAimPitch:(float)pitch yaw:(float)yaw
     configuration:(CoreSetV17AimConfiguration *)configuration now:(double)now
-    NS_SWIFT_NAME(resolveAim(pitch:yaw:configuration:now:));
-// Inactive Aim enters the closed input-direct predecessor used by recoil-only
-// operation. It does not claim the separate control-fallthrough route.
-- (CoreSetV17ActionRouteDecision *)resolveRecoilOnly;
+    nativeInput:(const CoreSetNativeActionRouteInputRecord * _Nullable)nativeInput
+    NS_SWIFT_NAME(resolveAim(pitch:yaw:configuration:now:nativeInput:));
+- (nullable CoreSetV17ActionRouteDecision *)resolveRecoilOnlyWithNativeInput:
+    (const CoreSetNativeActionRouteInputRecord * _Nullable)nativeInput
+    NS_SWIFT_NAME(resolveRecoilOnly(nativeInput:));
+- (BOOL)observeNativeFeedback:(const CoreSetNativeActionRouteFeedbackRecord *)feedback;
 @end
 
 @interface CoreSetV17ActionDelta : NSObject

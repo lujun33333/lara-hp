@@ -13,6 +13,20 @@ def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def body(source: str, signature: str) -> str:
+    start = source.index(signature)
+    opening = source.index("{", start)
+    depth = 1
+    for index in range(opening + 1, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1:index]
+    raise AssertionError(signature)
+
+
 class CoreSetFontLayoutContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -178,8 +192,12 @@ class CoreSetFontLayoutContractTests(unittest.TestCase):
             self.assertIn(token, self.metal)
         self.assertLess(self.metal.index("draw->AddRectFilled(ImVec2(pos.x - horizontal"),
                         self.metal.index("draw->AddText(font, (float)command.fontSize"))
-        self.assertLess(self.render.index("[layers addObject:background]"),
-                        self.render.index("[layers addObject:text]"))
+        reset = body(self.render, "static void CSResetCommandContainer(")
+        self.assertLess(reset.index("[container addSublayer:[CALayer layer]]"),
+                        reset.index("[container addSublayer:[CATextLayer layer]]"))
+        configure = body(self.render, "static BOOL CSConfigureCommandContainer(")
+        self.assertLess(configure.index("background.backgroundColor"),
+                        configure.index("text.string = command.text"))
 
     def test_information_uses_two_native_layouts_name_and_separate_health(self) -> None:
         for token in ('UIFont(name: "OPPOSans-H", size: fontSize)',

@@ -32,7 +32,9 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
     }
 
     private func imguiChannelReady<Value: Equatable>(_ channel: CoreSetFeatureChannel<Value>) -> Bool {
-        canStage(channel) && channel.pendingApply == nil && channel.pendingStop == nil
+        // A pending consumer receipt does not freeze Core's live scalar value.
+        // editGame coalesces newer desired values after the outstanding apply.
+        canStage(channel) && channel.pendingStop == nil
     }
 
     private func imguiStatus(_ title: String, _ text: String?) -> [String: Any] {
@@ -42,6 +44,10 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
     private func imguiPresetIndex(_ color: CoreSetRGBA?) -> Int {
         guard let color else { return 6 }
         return (0..<7).first { CoreSetReferenceMenuAppearance.preset($0) == color.referenceOpaque } ?? 6
+    }
+
+    private var imguiAimEditable: Bool {
+        featureState.aim.phase != .applying && featureState.aim.phase != .active
     }
 
     func imguiMenuSnapshot() -> [String: Any] {
@@ -158,7 +164,7 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
         ]
 
         let aim = featureState.aim.desired
-        let aimEditable = featureState.aim.phase != .applying && featureState.aim.phase != .active
+        let aimEditable = imguiAimEditable
         let aimMain: [[String: Any]] = [
             imguiItem("toggle", "自瞄总开关", "aim.enabled", value: aim.enabled == true, enabled: featureState.aim.restoration != .pending),
             imguiItem("toggle", "预瞄标记圈", "aim.preaim", value: aim.preaimCircle == true, enabled: aimEditable),
@@ -277,6 +283,38 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
         return true
     }
 
+    private func imguiActionEnabled(_ action: String) -> Bool {
+        // The changed path must not reconstruct all pages or refresh every
+        // consumer. These are the same live enable conditions used by rendering.
+        switch selectedPage {
+        case 0:
+            guard action.hasPrefix("home.") else { return false }
+            switch action {
+            case "home.fps": return imguiChannelReady(featureState.frameRate)
+            case "home.kernel": return !homeActionsInFlight.contains(.kernelAction)
+            case "home.information": return !homeActionsInFlight.contains(.informationAction)
+            default: return true
+            }
+        case 1: return action.hasPrefix("player.")
+        case 2: return action.hasPrefix("material.")
+        case 3: return action.hasPrefix("adjust.")
+        case 4: return action.hasPrefix("radar.")
+        case 5:
+            guard action.hasPrefix("aim.") else { return false }
+            if action == "aim.enabled" { return featureState.aim.restoration != .pending }
+            guard imguiAimEditable else { return false }
+            switch action {
+            case "aim.maximum", "aim.strength", "aim.smoothing", "aim.horizontal",
+                 "aim.vertical", "aim.prediction", "aim.threshold", "aim.confirmation", "aim.pause":
+                return featureState.aim.desired.scene == .custom
+            case "aim.lockStrength": return featureState.aim.desired.scene != .custom
+            default: return true
+            }
+        case 6: return action.hasPrefix("recoil.")
+        default: return false
+        }
+    }
+
     func performImGuiMenuAction(_ action: String, value: Double) -> Bool {
         precondition(Thread.isMainThread)
         guard value.isFinite else { return false }
@@ -293,6 +331,7 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
             return true
         }
         if action == "exit" { onExitHUD?(); return true }
+        guard imguiActionEnabled(action) else { return false }
         switch action {
         case "home.run":
             let values: [CoreSetRunMode] = [.safe, .efficiency]; guard values.indices.contains(Int(value)) else { return false }

@@ -2,6 +2,7 @@
 #import <MetalKit/MetalKit.h>
 #include "../third_party/imgui/imgui.h"
 #include "../third_party/imgui/backends/imgui_impl_metal.h"
+#include "CoreSetImGuiMenuPointer.h"
 #include <algorithm>
 #include <cmath>
 
@@ -58,9 +59,9 @@ static NSString *CSString(id value) {
     ImFont *_bodyFont;
     CADisplayLink *_displayLink;
     NSDictionary *_snapshot;
-    NSArray<NSDictionary *> *_hits;
-    NSString *_activeControl;
     uint64_t _renderedRevision;
+    CoreSet::ImGuiMenuPointer _pointer;
+    CGRect _inputBounds;
 }
 
 - (instancetype)initWithModel:(id<CoreSetImGuiMenuModel>)model {
@@ -118,7 +119,21 @@ static NSString *CSString(id value) {
 
 - (void)displayTick:(CADisplayLink *)link {
     if (_metalView.window && !self.view.hidden && !self.view.superview.hidden &&
-        self.view.alpha > 0.01 && self.view.superview.alpha > 0.01) [_metalView draw];
+        self.view.alpha > 0.01 && self.view.superview.alpha > 0.01) {
+        [_metalView draw];
+    } else if (_imgui && _pointer.down()) {
+        ImGui::SetCurrentContext(_imgui);
+        _pointer.cancel(ImGui::GetIO());
+    }
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    if (_imgui && !CGRectEqualToRect(_inputBounds, self.view.bounds)) {
+        ImGui::SetCurrentContext(_imgui);
+        _pointer.layoutChanged(ImGui::GetIO());
+        _inputBounds = self.view.bounds;
+    }
 }
 
 - (void)dealloc {
@@ -133,35 +148,33 @@ static NSString *CSString(id value) {
 - (void)willMoveToParentViewController:(UIViewController *)parent {
     [super willMoveToParentViewController:parent];
     if (parent) [self startDisplayLink];
-    else { [_displayLink invalidate]; _displayLink = nil; }
+    else {
+        [_displayLink invalidate]; _displayLink = nil;
+        if (_imgui) {
+            ImGui::SetCurrentContext(_imgui);
+            _pointer.cancel(ImGui::GetIO());
+        }
+    }
 }
 
-- (void)addHit:(NSMutableArray<NSDictionary *> *)hits action:(NSString *)action
-          type:(NSString *)type value:(double)value minimum:(double)minimum maximum:(double)maximum {
-    if (!action.length) return;
-    const ImVec2 low = ImGui::GetItemRectMin(), high = ImGui::GetItemRectMax();
-    if (!(high.x > low.x && high.y > low.y)) return;
-    [hits addObject:@{@"id": [NSString stringWithFormat:@"%@.%lu", action, (unsigned long)hits.count],
-                      @"action": action, @"type": type ?: @"button", @"value": @(value),
-                      @"minimum": @(minimum), @"maximum": @(maximum),
-                      @"x": @(low.x), @"y": @(low.y), @"w": @(high.x-low.x), @"h": @(high.y-low.y)}];
-}
-
-- (void)drawItem:(NSDictionary *)item hits:(NSMutableArray<NSDictionary *> *)hits {
+- (void)drawItem:(NSDictionary *)item {
     NSString *type = CSString(item[@"type"]), *title = CSString(item[@"title"]);
     NSString *action = CSString(item[@"action"]);
     const BOOL enabled = item[@"enabled"] == nil || [item[@"enabled"] boolValue];
+    ImGui::PushID(action.UTF8String);
     if (!enabled) ImGui::BeginDisabled();
     if ([type isEqualToString:@"toggle"]) {
         bool selected = [item[@"value"] boolValue];
-        ImGui::Checkbox(title.UTF8String, &selected);
-        [self addHit:hits action:action type:type value:selected ? 0 : 1 minimum:0 maximum:1];
+        if (ImGui::Checkbox(title.UTF8String, &selected) && enabled)
+            [_model performImGuiMenuAction:action value:selected ? 1 : 0];
     } else if ([type isEqualToString:@"slider"]) {
-        float value = [item[@"value"] floatValue];
-        const float minimum = [item[@"minimum"] floatValue], maximum = [item[@"maximum"] floatValue];
+        int value = [item[@"value"] intValue];
+        const int minimum = [item[@"minimum"] intValue], maximum = [item[@"maximum"] intValue];
         ImGui::SetNextItemWidth(-1);
-        ImGui::SliderFloat(title.UTF8String, &value, minimum, maximum, "%.0f");
-        [self addHit:hits action:action type:type value:value minimum:minimum maximum:maximum];
+        // Core c9158 forwards the configuration pointer to scalar behavior;
+        // publish its changed value each frame, including during a drag.
+        if (ImGui::SliderInt(title.UTF8String, &value, minimum, maximum) && enabled)
+            [_model performImGuiMenuAction:action value:value];
     } else if ([type isEqualToString:@"choice"]) {
         NSArray *options = [item[@"options"] isKindOfClass:NSArray.class] ? item[@"options"] : @[];
         const NSInteger selected = [item[@"value"] integerValue];
@@ -174,22 +187,22 @@ static NSString *CSString(id value) {
                 ImGui::PushStyleColor(ImGuiCol_Button, accent);
             }
             NSString *label = [NSString stringWithFormat:@"%@##%@.%lu", option, action, (unsigned long)index];
-            ImGui::Button(label.UTF8String);
-            [self addHit:hits action:action type:@"button" value:(double)index minimum:0 maximum:options.count-1];
+            if (ImGui::Button(label.UTF8String) && enabled)
+                [_model performImGuiMenuAction:action value:(double)index];
             if ((NSInteger)index == selected) ImGui::PopStyleColor();
         }
     } else if ([type isEqualToString:@"status"]) {
         NSString *value = CSString(item[@"text"]);
         ImGui::TextWrapped("%s  %s", title.UTF8String, value.UTF8String);
     } else {
-        ImGui::Button(title.UTF8String, ImVec2(-1, 30));
-        [self addHit:hits action:action type:@"button" value:[item[@"value"] doubleValue] minimum:0 maximum:0];
+        if (ImGui::Button(title.UTF8String, ImVec2(-1, 30)) && enabled)
+            [_model performImGuiMenuAction:action value:[item[@"value"] doubleValue]];
     }
     if (!enabled) ImGui::EndDisabled();
+    ImGui::PopID();
 }
 
 - (void)drawMenu:(NSDictionary *)snapshot {
-    NSMutableArray<NSDictionary *> *hits = [NSMutableArray array];
     NSArray *pages = [snapshot[@"pages"] isKindOfClass:NSArray.class] ? snapshot[@"pages"] : @[];
     NSInteger selected = [snapshot[@"selectedPage"] integerValue];
     if (selected < 0 || selected >= (NSInteger)pages.count) selected = 0;
@@ -217,19 +230,19 @@ static NSString *CSString(id value) {
         NSString *title = CSString(pageRecord[@"title"]);
         if ((NSInteger)index == selected) ImGui::PushStyleColor(ImGuiCol_Button, accent);
         NSString *label = [NSString stringWithFormat:@"%@##page.%lu", title, (unsigned long)index];
-        ImGui::Button(label.UTF8String, ImVec2(132, 35));
-        [self addHit:hits action:@"page" type:@"button" value:(double)index minimum:0 maximum:pages.count-1];
+        if (ImGui::Button(label.UTF8String, ImVec2(132, 35)))
+            [_model performImGuiMenuAction:@"page" value:(double)index];
         if ((NSInteger)index == selected) ImGui::PopStyleColor();
     }
     ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 48);
-    ImGui::Button("退出 HUD", ImVec2(132, 34));
-    [self addHit:hits action:@"exit" type:@"button" value:0 minimum:0 maximum:0];
+    if (ImGui::Button("退出 HUD", ImVec2(132, 34)))
+        [_model performImGuiMenuAction:@"exit" value:0];
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("content", ImVec2(0,0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
     ImGui::SetCursorPos(ImVec2(10, 8));
-    ImGui::Button("关闭##close", ImVec2(74, 28));
-    [self addHit:hits action:@"close" type:@"button" value:0 minimum:0 maximum:0];
+    if (ImGui::Button("关闭##close", ImVec2(74, 28)))
+        [_model performImGuiMenuAction:@"close" value:0];
     NSDictionary *page = pages.count ? pages[selected] : @{};
     NSArray *sections = [page[@"sections"] isKindOfClass:NSArray.class] ? page[@"sections"] : @[];
     for (NSDictionary *section in sections) {
@@ -239,11 +252,10 @@ static NSString *CSString(id value) {
         const float sectionHeight = std::max(58.0f, 34.0f + (float)items.count * 42.0f);
         ImGui::BeginChild([[NSString stringWithFormat:@"section.%@", title] UTF8String],
                           ImVec2(-1, sectionHeight), ImGuiChildFlags_Borders);
-        for (NSDictionary *item in items) [self drawItem:item hits:hits];
+        for (NSDictionary *item in items) [self drawItem:item];
         ImGui::EndChild(); ImGui::Spacing();
     }
     ImGui::EndChild(); ImGui::End();
-    _hits = [hits copy];
 }
 
 - (void)drawInMTKView:(MTKView *)view {
@@ -268,45 +280,33 @@ static NSString *CSString(id value) {
 }
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {}
 
-- (uint64_t)hostedMenuRevision { return _renderedRevision; }
-- (NSDictionary *)hitForIdentifier:(NSString *)identifier {
-    for (NSDictionary *hit in _hits) if ([hit[@"id"] isEqualToString:identifier]) return hit;
-    return nil;
-}
+- (uint64_t)hostedMenuRevision { return _pointer.layoutRevision(); }
 - (NSString *)hostedControlIDAtPoint:(CGPoint)point {
-    for (NSDictionary *hit in [_hits reverseObjectEnumerator]) {
-        CGRect rect = CGRectMake([hit[@"x"] doubleValue], [hit[@"y"] doubleValue],
-                                 [hit[@"w"] doubleValue], [hit[@"h"] doubleValue]);
-        if (CGRectContainsPoint(rect, point)) return hit[@"id"];
-    }
-    return nil;
+    // The host captures one surface pointer. Widget hit testing and disabled
+    // controls are resolved by ImGui, never by a second semantic action map.
+    return _imgui && CGRectContainsPoint(self.view.bounds, point) ? @"imgui.pointer" : nil;
 }
 - (BOOL)hostedControlAllowsDrag:(NSString *)identifier {
-    return [[[self hitForIdentifier:identifier] objectForKey:@"type"] isEqualToString:@"slider"];
+    return [identifier isEqualToString:@"imgui.pointer"];
 }
 - (BOOL)handleHostedControlID:(NSString *)identifier phase:(CoreSetHostedPointerPhase)phase atPoint:(CGPoint)point {
-    NSDictionary *hit = [self hitForIdentifier:identifier];
-    if (!hit || !_model || _model.imguiMenuModelRevision != _renderedRevision) return NO;
-    if (phase == CoreSetHostedPointerPhaseCancelled) { _activeControl = nil; return YES; }
-    if (phase == CoreSetHostedPointerPhaseBegan) { _activeControl = identifier; return YES; }
-    if (![_activeControl isEqualToString:identifier]) return NO;
-    NSString *type = hit[@"type"];
-    // Commit sliders once on End. Rebuilding the immutable model on every Move
-    // would advance hostedMenuRevision and cancel the same physical pointer.
-    if (phase == CoreSetHostedPointerPhaseMoved) return YES;
-    if (phase != CoreSetHostedPointerPhaseEnded) return YES;
-    double value = [hit[@"value"] doubleValue];
-    if ([type isEqualToString:@"slider"]) {
-        const double width = MAX(1.0, [hit[@"w"] doubleValue]);
-        const double ratio = std::clamp((point.x - [hit[@"x"] doubleValue]) / width, 0.0, 1.0);
-        value = [hit[@"minimum"] doubleValue] + ratio * ([hit[@"maximum"] doubleValue] - [hit[@"minimum"] doubleValue]);
+    if (!_imgui || ![identifier isEqualToString:@"imgui.pointer"]) return NO;
+    ImGui::SetCurrentContext(_imgui);
+    ImGuiIO &io = ImGui::GetIO();
+    if (phase == CoreSetHostedPointerPhaseCancelled) {
+        _pointer.cancel(io);
+        return YES;
     }
-    BOOL handled = [_model performImGuiMenuAction:hit[@"action"] value:value];
-    if (phase == CoreSetHostedPointerPhaseEnded) _activeControl = nil;
-    return handled;
+    if (phase == CoreSetHostedPointerPhaseBegan)
+        return _pointer.begin(io, (float)point.x, (float)point.y);
+    if (phase == CoreSetHostedPointerPhaseMoved)
+        return _pointer.move(io, (float)point.x, (float)point.y);
+    if (phase == CoreSetHostedPointerPhaseEnded)
+        return _pointer.end(io, (float)point.x, (float)point.y);
+    return NO;
 }
 - (BOOL)dispatchLocalPoint:(CGPoint)point phase:(CoreSetHostedPointerPhase)phase {
-    NSString *identifier = _activeControl ?: [self hostedControlIDAtPoint:point];
+    NSString *identifier = _pointer.down() ? @"imgui.pointer" : [self hostedControlIDAtPoint:point];
     return identifier ? [self handleHostedControlID:identifier phase:phase atPoint:point] : NO;
 }
 @end
