@@ -17,7 +17,7 @@ for token in ("ImGui::CreateContext", "ImGui_ImplMetal_Init", "ImGui::NewFrame",
               "hostedControlIDAtPoint", "handleHostedControlID",
               "revision != _renderedRevision", "!self.view.superview.hidden",
               "CAMetalLayer", "nextDrawable", "fallbackTexture",
-              "CoreSetHostedImGuiSnapshot", "scheduleRetainedPresentationFromTexture"):
+              "CoreSetHostedImGuiSnapshot", "renderSoftwareRetainedPresentation"):
     assert token in surface, token
 for token in ("AddMousePosEvent", "AddMouseButtonEvent", "ClearEventsQueue", "ClearInputMouse"):
     assert token in pointer, token
@@ -27,7 +27,8 @@ for token in ("io.ConfigInputTrickleEventQueue = false", "renderFrameAttemptPres
               "_frameSerial > beforeFrame", "_scheduledPresentationSerial > beforeScheduled",
               "ImGui input stage=frame", "processed=%d", "presentationQueued=1",
               "ImGui presentation stage=hosted-frame", "presentScheduled=%d",
-              "ImGui action stage=widget", "actionChanged", "core17-imgui-v14"):
+              "ImGui action stage=widget", "actionChanged", "core17-imgui-v15",
+              "presentationReceipt=metal-or-software-ca"):
     assert token in surface, token
 for token in ("ImVec2(838,535)", "ImVec2(170,38)", '"初始化"', '"视觉"', '"战斗"',
               "ImVec2(132, 32)", "ImVec2(24,24)"):
@@ -51,21 +52,20 @@ render = surface[surface.index("- (CoreSetImGuiFrameResult)renderFrameAttemptPre
                  surface.index("- (uint64_t)hostedMenuRevision")]
 assert "attemptPresentation && !background" in render
 assert "? [layer nextDrawable] : nil" in render
-assert "drawable ? drawable.texture" in render
-assert ": (retainedTexture ?: [self fallbackTexture])" in render
+assert "drawable ? drawable.texture : [self fallbackTexture]" in render
 assert render.index("ImGui::Render()") < render.index("result.processed = YES")
-assert "if (drawable)" in render and "result.presentScheduled = YES" in render
+assert "result.presentScheduled = YES" in render
 assert "dispatch_async(dispatch_get_main_queue()" in render
-for token in ("newRetainedPresentationTexture", "MTLStorageModeShared", "getBytes:pixels.mutableBytes",
-              "CGImageCreate",
-              "_retainedLayer.contents = imageObject", "[CATransaction flush]",
-              "result.retainedScheduled = YES", "_retainedReadbackInFlight = NO",
-              "request != owner->_retainedRequestSerial"):
+for token in ("CSRasterizeImGui", "GetTexDataAsAlpha8", "CGImageCreate",
+              "_retainedLayer.contents = (__bridge id)image", "[CATransaction flush]",
+              "result.retainedScheduled = YES", "stage=software-ca committed=1"):
     assert token in render, token
 assert "waitUntilCompleted" not in render
 assert "blitCommandEncoder" not in render
+assert "newRetainedPresentationTexture" not in render
 assert "attemptPresentation && !background" in render
 assert render.index("attemptPresentation && !background") < render.index("[layer nextDrawable]")
+assert render.index("if (background)") < render.index("id<MTLCommandBuffer> buffer")
 assert surface.index("if (background && !_retainedPresentationNeeded && !modelChanged) return") < surface.index("[self renderFrameAttemptPresentation:YES]")
 for token in ("extension CoreSetMenuViewController: CoreSetImGuiMenuModel",
               "enableImGuiRuntime()", "imguiMenuSnapshot()", "performImGuiMenuAction"):

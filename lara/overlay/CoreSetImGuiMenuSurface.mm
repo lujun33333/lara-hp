@@ -6,7 +6,9 @@
 #include "../third_party/imgui/backends/imgui_impl_metal.h"
 #include "CoreSetImGuiMenuPointer.h"
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
+#include <vector>
 
 @class CoreSetImGuiMenuViewController;
 
@@ -24,10 +26,8 @@ typedef struct CoreSetImGuiFrameResult {
 @interface CoreSetImGuiMenuViewController ()
 - (BOOL)dispatchLocalPoint:(CGPoint)point phase:(CoreSetHostedPointerPhase)phase;
 - (void)updateDrawableGeometry;
-- (id<MTLTexture>)newRetainedPresentationTexture;
 - (CoreSetImGuiFrameResult)renderFrameAttemptPresentation:(BOOL)attemptPresentation;
-- (BOOL)scheduleRetainedPresentationFromTexture:(id<MTLTexture>)texture
-                                  commandBuffer:(id<MTLCommandBuffer>)commandBuffer;
+- (BOOL)renderSoftwareRetainedPresentation;
 - (void)schedulePresentation;
 @end
 
@@ -75,6 +75,126 @@ static NSString *CSString(id value) {
     return [value isKindOfClass:NSString.class] ? value : @"";
 }
 
+// CPU renderer for the single Dear ImGui font-atlas texture used by this menu.
+// Adapted from emilk/imgui_software_renderer (public domain/perpetual license),
+// with ImGui 1.92 offsets and premultiplied RGBA output for CoreGraphics.
+struct CSSoftwarePoint { float x, y; };
+static float CSEdge(CSSoftwarePoint a, CSSoftwarePoint b, CSSoftwarePoint p) {
+    return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+}
+static uint8_t CSByte(float value) {
+    return (uint8_t)std::clamp((int)std::lround(value * 255.0f), 0, 255);
+}
+static void CSBlendSoftwarePixel(uint32_t &destination, float red, float green,
+                                 float blue, float alpha) {
+    alpha = std::clamp(alpha, 0.0f, 1.0f);
+    const float keep = 1.0f - alpha;
+    const float dr = (destination & 0xff) / 255.0f;
+    const float dg = ((destination >> 8) & 0xff) / 255.0f;
+    const float db = ((destination >> 16) & 0xff) / 255.0f;
+    const float da = ((destination >> 24) & 0xff) / 255.0f;
+    const float outA = alpha + da * keep;
+    const uint32_t r = CSByte(red * alpha + dr * keep);
+    const uint32_t g = CSByte(green * alpha + dg * keep);
+    const uint32_t b = CSByte(blue * alpha + db * keep);
+    const uint32_t a = CSByte(outA);
+    destination = r | (g << 8) | (b << 16) | (a << 24);
+}
+static BOOL CSRasterizeImGui(ImDrawData *drawData, const uint8_t *atlas,
+                             int atlasWidth, int atlasHeight,
+                             uint32_t *pixels, int width, int height) {
+    if (!drawData || !drawData->Valid || !atlas || atlasWidth <= 0 || atlasHeight <= 0 ||
+        !pixels || width <= 0 || height <= 0 || drawData->DisplaySize.x <= 0 ||
+        drawData->DisplaySize.y <= 0) return NO;
+    const float scaleX = width / drawData->DisplaySize.x;
+    const float scaleY = height / drawData->DisplaySize.y;
+    const ImVec2 origin = drawData->DisplayPos;
+    for (int listIndex = 0; listIndex < drawData->CmdListsCount; ++listIndex) {
+        const ImDrawList *list = drawData->CmdLists[listIndex];
+        if (!list) continue;
+        for (const ImDrawCmd &command : list->CmdBuffer) {
+            if (command.UserCallback || command.ElemCount < 3) continue;
+            if ((size_t)command.IdxOffset + (size_t)command.ElemCount >
+                (size_t)list->IdxBuffer.Size) return NO;
+            const int clipMinX = std::clamp((int)std::floor(
+                (command.ClipRect.x - origin.x) * scaleX), 0, width);
+            const int clipMinY = std::clamp((int)std::floor(
+                (command.ClipRect.y - origin.y) * scaleY), 0, height);
+            const int clipMaxX = std::clamp((int)std::ceil(
+                (command.ClipRect.z - origin.x) * scaleX), 0, width);
+            const int clipMaxY = std::clamp((int)std::ceil(
+                (command.ClipRect.w - origin.y) * scaleY), 0, height);
+            if (clipMinX >= clipMaxX || clipMinY >= clipMaxY) continue;
+            const ImDrawIdx *indices = list->IdxBuffer.Data + command.IdxOffset;
+            for (unsigned int element = 0; element + 2 < command.ElemCount; element += 3) {
+                const size_t i0 = (size_t)command.VtxOffset + indices[element];
+                const size_t i1 = (size_t)command.VtxOffset + indices[element + 1];
+                const size_t i2 = (size_t)command.VtxOffset + indices[element + 2];
+                if (i0 >= (size_t)list->VtxBuffer.Size ||
+                    i1 >= (size_t)list->VtxBuffer.Size ||
+                    i2 >= (size_t)list->VtxBuffer.Size) return NO;
+                const ImDrawVert &v0 = list->VtxBuffer[(int)i0];
+                const ImDrawVert &v1 = list->VtxBuffer[(int)i1];
+                const ImDrawVert &v2 = list->VtxBuffer[(int)i2];
+                const CSSoftwarePoint p0{(v0.pos.x - origin.x) * scaleX,
+                                         (v0.pos.y - origin.y) * scaleY};
+                const CSSoftwarePoint p1{(v1.pos.x - origin.x) * scaleX,
+                                         (v1.pos.y - origin.y) * scaleY};
+                const CSSoftwarePoint p2{(v2.pos.x - origin.x) * scaleX,
+                                         (v2.pos.y - origin.y) * scaleY};
+                if (!std::isfinite(p0.x) || !std::isfinite(p0.y) ||
+                    !std::isfinite(p1.x) || !std::isfinite(p1.y) ||
+                    !std::isfinite(p2.x) || !std::isfinite(p2.y)) return NO;
+                const float area = CSEdge(p0, p1, p2);
+                if (!std::isfinite(area) || std::fabs(area) < 0.0001f) continue;
+                const int minX = std::max(clipMinX, (int)std::floor(
+                    std::min({p0.x, p1.x, p2.x})));
+                const int minY = std::max(clipMinY, (int)std::floor(
+                    std::min({p0.y, p1.y, p2.y})));
+                const int maxX = std::min(clipMaxX, (int)std::ceil(
+                    std::max({p0.x, p1.x, p2.x})));
+                const int maxY = std::min(clipMaxY, (int)std::ceil(
+                    std::max({p0.y, p1.y, p2.y})));
+                const float colors[3][4] = {
+                    {(float)((v0.col >> IM_COL32_R_SHIFT) & 0xff) / 255.0f,
+                     (float)((v0.col >> IM_COL32_G_SHIFT) & 0xff) / 255.0f,
+                     (float)((v0.col >> IM_COL32_B_SHIFT) & 0xff) / 255.0f,
+                     (float)((v0.col >> IM_COL32_A_SHIFT) & 0xff) / 255.0f},
+                    {(float)((v1.col >> IM_COL32_R_SHIFT) & 0xff) / 255.0f,
+                     (float)((v1.col >> IM_COL32_G_SHIFT) & 0xff) / 255.0f,
+                     (float)((v1.col >> IM_COL32_B_SHIFT) & 0xff) / 255.0f,
+                     (float)((v1.col >> IM_COL32_A_SHIFT) & 0xff) / 255.0f},
+                    {(float)((v2.col >> IM_COL32_R_SHIFT) & 0xff) / 255.0f,
+                     (float)((v2.col >> IM_COL32_G_SHIFT) & 0xff) / 255.0f,
+                     (float)((v2.col >> IM_COL32_B_SHIFT) & 0xff) / 255.0f,
+                     (float)((v2.col >> IM_COL32_A_SHIFT) & 0xff) / 255.0f}
+                };
+                for (int y = minY; y < maxY; ++y) for (int x = minX; x < maxX; ++x) {
+                    const CSSoftwarePoint sample{(float)x + 0.5f, (float)y + 0.5f};
+                    const float w0 = CSEdge(p1, p2, sample) / area;
+                    const float w1 = CSEdge(p2, p0, sample) / area;
+                    const float w2 = 1.0f - w0 - w1;
+                    if (w0 < -0.0001f || w1 < -0.0001f || w2 < -0.0001f) continue;
+                    const float u = w0 * v0.uv.x + w1 * v1.uv.x + w2 * v2.uv.x;
+                    const float v = w0 * v0.uv.y + w1 * v1.uv.y + w2 * v2.uv.y;
+                    const int tx = std::clamp((int)std::lround(u * (atlasWidth - 1)),
+                                              0, atlasWidth - 1);
+                    const int ty = std::clamp((int)std::lround(v * (atlasHeight - 1)),
+                                              0, atlasHeight - 1);
+                    const float textureAlpha = atlas[ty * atlasWidth + tx] / 255.0f;
+                    const float r = w0 * colors[0][0] + w1 * colors[1][0] + w2 * colors[2][0];
+                    const float g = w0 * colors[0][1] + w1 * colors[1][1] + w2 * colors[2][1];
+                    const float b = w0 * colors[0][2] + w1 * colors[1][2] + w2 * colors[2][2];
+                    const float a = (w0 * colors[0][3] + w1 * colors[1][3] +
+                                     w2 * colors[2][3]) * textureAlpha;
+                    if (a > 0) CSBlendSoftwarePixel(pixels[y * width + x], r, g, b, a);
+                }
+            }
+        }
+    }
+    return YES;
+}
+
 @implementation CoreSetImGuiMenuViewController {
     __weak id<CoreSetImGuiMenuModel> _model;
     CoreSetImGuiTouchView *_surfaceView;
@@ -96,9 +216,7 @@ static NSString *CSString(id value) {
     uint64_t _scheduledPresentationSerial;
     uint64_t _widgetActionSerial;
     uint64_t _retainedRequestSerial;
-    uint64_t _retainedPresentedSerial;
     BOOL _retainedPresentationNeeded;
-    BOOL _retainedReadbackInFlight;
     BOOL _presentationQueued;
 }
 
@@ -170,7 +288,7 @@ static NSString *CSString(id value) {
     if (!ImGui_ImplMetal_Init(_device)) {
         ImGui::DestroyContext(_imgui); _imgui = nullptr; return;
     }
-    NSLog(@"Core-SET: ImGui runtime contract=core17-imgui-v14 surface=CAMetalLayer/nextDrawable size=838x535 contentOrigin=170,38 inputFrame=phase-driven semanticReceipt=cpu-frame widgetReceipt=action gpuReceipt=present-scheduled");
+    NSLog(@"Core-SET: ImGui runtime contract=core17-imgui-v15 surface=CAMetalLayer/nextDrawable+software-CA size=838x535 contentOrigin=170,38 inputFrame=phase-driven semanticReceipt=cpu-frame widgetReceipt=action presentationReceipt=metal-or-software-ca");
     [self startDisplayLink];
 }
 
@@ -237,19 +355,6 @@ static NSString *CSString(id value) {
     descriptor.usage = MTLTextureUsageRenderTarget;
     _fallbackTexture = [_device newTextureWithDescriptor:descriptor];
     return _fallbackTexture;
-}
-
-- (id<MTLTexture>)newRetainedPresentationTexture {
-    [self updateDrawableGeometry];
-    const CGSize size = _surfaceView.metalLayer.drawableSize;
-    const NSUInteger width = MAX((NSUInteger)1, (NSUInteger)llround(size.width));
-    const NSUInteger height = MAX((NSUInteger)1, (NSUInteger)llround(size.height));
-    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
-        texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                     width:width height:height mipmapped:NO];
-    descriptor.storageMode = MTLStorageModeShared;
-    descriptor.usage = MTLTextureUsageRenderTarget;
-    return [_device newTextureWithDescriptor:descriptor];
 }
 
 - (void)dealloc {
@@ -523,68 +628,47 @@ static NSString *CSString(id value) {
     ImGui::EndChild(); ImGui::End();
 }
 
-- (BOOL)scheduleRetainedPresentationFromTexture:(id<MTLTexture>)texture
-                                  commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
-    if (!texture || !commandBuffer || !_retainedLayer || !_device ||
-        _retainedReadbackInFlight ||
-        texture.storageMode != MTLStorageModeShared ||
-        texture.pixelFormat != MTLPixelFormatBGRA8Unorm ||
-        texture.width == 0 || texture.height == 0) return NO;
-    if (texture.width > NSUIntegerMax / 4) return NO;
-    const NSUInteger rowBytes = texture.width * 4;
-    if (texture.height > NSUIntegerMax / rowBytes) return NO;
-    const NSUInteger length = rowBytes * texture.height;
-    const NSUInteger width = texture.width, height = texture.height;
-    const uint64_t request = ++_retainedRequestSerial;
-    _retainedReadbackInFlight = YES;
-    __weak CoreSetImGuiMenuViewController *weakSelf = self;
-    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
-        id imageObject = nil;
-        if (completed.status == MTLCommandBufferStatusCompleted) {
-            NSMutableData *pixels = [NSMutableData dataWithLength:length];
-            [texture getBytes:pixels.mutableBytes bytesPerRow:rowBytes
-                    fromRegion:MTLRegionMake2D(0, 0, width, height)
-                   mipmapLevel:0];
-            CGDataProviderRef provider = CGDataProviderCreateWithCFData(
-                (__bridge CFDataRef)pixels);
-            CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-            CGBitmapInfo bitmap = (CGBitmapInfo)kCGBitmapByteOrder32Little |
-                (CGBitmapInfo)kCGImageAlphaPremultipliedFirst;
-            CGImageRef image = provider && colorSpace
-                ? CGImageCreate(width, height, 8, 32, rowBytes, colorSpace, bitmap,
-                                provider, nullptr, false, kCGRenderingIntentDefault)
-                : nullptr;
-            if (provider) CGDataProviderRelease(provider);
-            if (colorSpace) CGColorSpaceRelease(colorSpace);
-            imageObject = image ? CFBridgingRelease(image) : nil;
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            CoreSetImGuiMenuViewController *owner = weakSelf;
-            if (!owner) return;
-            owner->_retainedReadbackInFlight = NO;
-            if (!imageObject || !owner->_retainedLayer ||
-                request != owner->_retainedRequestSerial ||
-                request < owner->_retainedPresentedSerial) {
-                if (!imageObject)
-                    NSLog(@"Core-SET: ImGui presentation stage=retained-ca committed=0 request=%llu status=%ld reason=%@",
-                          (unsigned long long)request, (long)completed.status,
-                          completed.error.localizedDescription ?: @"image-unavailable");
-                if (owner->_retainedPresentationNeeded) [owner schedulePresentation];
-                return;
-            }
-            owner->_retainedPresentedSerial = request;
-            [CATransaction begin];
-            [CATransaction setDisableActions:YES];
-            owner->_retainedLayer.contents = imageObject;
-            owner->_retainedLayer.hidden = NO;
-            [CATransaction commit];
-            [CATransaction flush];
-            NSLog(@"Core-SET: ImGui presentation stage=retained-ca committed=1 request=%llu frame=%llu",
-                  (unsigned long long)request,
-                  (unsigned long long)owner->_frameSerial);
-            if (owner->_retainedPresentationNeeded) [owner schedulePresentation];
-        });
-    }];
+- (BOOL)renderSoftwareRetainedPresentation {
+    if (!_retainedLayer || !_imgui || !NSThread.isMainThread) return NO;
+    ImGui::SetCurrentContext(_imgui);
+    ImGuiIO &io = ImGui::GetIO();
+    unsigned char *atlas = nullptr;
+    int atlasWidth = 0, atlasHeight = 0;
+    io.Fonts->GetTexDataAsAlpha8(&atlas, &atlasWidth, &atlasHeight);
+    const CGSize bounds = _surfaceView.bounds.size;
+    const int width = MAX(1, (int)std::lround(bounds.width));
+    const int height = MAX(1, (int)std::lround(bounds.height));
+    if ((size_t)width > SIZE_MAX / (size_t)height ||
+        (size_t)width * (size_t)height > SIZE_MAX / sizeof(uint32_t)) return NO;
+    std::vector<uint32_t> pixels((size_t)width * (size_t)height, 0);
+    if (!CSRasterizeImGui(ImGui::GetDrawData(), atlas, atlasWidth, atlasHeight,
+                          pixels.data(), width, height)) return NO;
+    NSData *data = [NSData dataWithBytes:pixels.data()
+                                  length:pixels.size() * sizeof(uint32_t)];
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGBitmapInfo bitmap = (CGBitmapInfo)kCGBitmapByteOrder32Big |
+        (CGBitmapInfo)kCGImageAlphaPremultipliedLast;
+    CGImageRef image = provider && colorSpace
+        ? CGImageCreate(width, height, 8, 32, (size_t)width * sizeof(uint32_t),
+                        colorSpace, bitmap, provider, nullptr, false,
+                        kCGRenderingIntentDefault)
+        : nullptr;
+    if (provider) CGDataProviderRelease(provider);
+    if (colorSpace) CGColorSpaceRelease(colorSpace);
+    if (!image) return NO;
+    ++_retainedRequestSerial;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _retainedLayer.contents = (__bridge id)image;
+    _retainedLayer.contentsScale = 1;
+    _retainedLayer.hidden = NO;
+    [CATransaction commit];
+    [CATransaction flush];
+    CGImageRelease(image);
+    NSLog(@"Core-SET: ImGui presentation stage=software-ca committed=1 request=%llu frame=%llu pixels=%dx%d",
+          (unsigned long long)_retainedRequestSerial,
+          (unsigned long long)_frameSerial, width, height);
     return YES;
 }
 
@@ -596,14 +680,9 @@ static NSString *CSString(id value) {
     CAMetalLayer *layer = _surfaceView.metalLayer;
     const BOOL background = UIApplication.sharedApplication.applicationState !=
         UIApplicationStateActive;
-    const BOOL modelChanged = _model.imguiMenuModelRevision != _renderedRevision;
     id<CAMetalDrawable> drawable = attemptPresentation && !background
         ? [layer nextDrawable] : nil;
-    id<MTLTexture> retainedTexture = attemptPresentation && background &&
-        (_retainedPresentationNeeded || modelChanged) && !_retainedReadbackInFlight
-        ? [self newRetainedPresentationTexture] : nil;
-    id<MTLTexture> texture = drawable ? drawable.texture
-        : (retainedTexture ?: [self fallbackTexture]);
+    id<MTLTexture> texture = drawable ? drawable.texture : [self fallbackTexture];
     if (!texture) return result;
     _renderPass.colorAttachments[0].texture = texture;
     ImGui::SetCurrentContext(_imgui);
@@ -623,27 +702,28 @@ static NSString *CSString(id value) {
     ImGui::Render();
     ++_frameSerial;
     result.processed = YES;
+    if (!attemptPresentation) return result;
+    if (background) {
+        if (_retainedPresentationNeeded && [self renderSoftwareRetainedPresentation]) {
+            _retainedPresentationNeeded = NO;
+            ++_scheduledPresentationSerial;
+            result.presentScheduled = YES;
+            result.retainedScheduled = YES;
+        }
+        return result;
+    }
+    if (!drawable) return result;
     id<MTLCommandBuffer> buffer = [_queue commandBuffer];
     if (!buffer) return result;
     id<MTLRenderCommandEncoder> encoder = [buffer renderCommandEncoderWithDescriptor:_renderPass];
     if (!encoder) return result;
     ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), buffer, encoder);
     [encoder endEncoding];
-    if (drawable) {
-        ++_retainedRequestSerial; // invalidate an older asynchronous snapshot
-        _retainedLayer.hidden = YES;
-        _retainedPresentationNeeded = NO;
-        [buffer presentDrawable:drawable];
-        ++_scheduledPresentationSerial;
-        result.presentScheduled = YES;
-    } else if (retainedTexture && _retainedPresentationNeeded &&
-               [self scheduleRetainedPresentationFromTexture:texture
-                                                commandBuffer:buffer]) {
-        _retainedPresentationNeeded = NO;
-        ++_scheduledPresentationSerial;
-        result.presentScheduled = YES;
-        result.retainedScheduled = YES;
-    }
+    _retainedLayer.hidden = YES;
+    _retainedPresentationNeeded = NO;
+    [buffer presentDrawable:drawable];
+    ++_scheduledPresentationSerial;
+    result.presentScheduled = YES;
     [buffer commit];
     return result;
 }
@@ -688,7 +768,6 @@ static NSString *CSString(id value) {
     else if (phase == CoreSetHostedPointerPhaseEnded)
         queued = _pointer.end(io, (float)point.x, (float)point.y);
     if (!queued || !_surfaceView) return NO;
-    _retainedPresentationNeeded = YES;
     const uint64_t beforeFrame = _frameSerial;
     const uint64_t beforeScheduled = _scheduledPresentationSerial;
     const uint64_t beforeAction = _widgetActionSerial;
@@ -699,6 +778,9 @@ static NSString *CSString(id value) {
     const BOOL processed = frame.processed && _frameSerial > beforeFrame;
     BOOL presentScheduled = frame.presentScheduled && _scheduledPresentationSerial > beforeScheduled;
     const BOOL actionChanged = _widgetActionSerial > beforeAction;
+    if (actionChanged || phase == CoreSetHostedPointerPhaseBegan ||
+        phase == CoreSetHostedPointerPhaseEnded)
+        _retainedPresentationNeeded = YES;
     BOOL refreshed = !actionChanged;
     // The changed widget publishes a new immutable model revision during the
     // first frame. Render that revision immediately as well; otherwise a
