@@ -16,7 +16,8 @@ for token in ("ImGui::CreateContext", "ImGui_ImplMetal_Init", "ImGui::NewFrame",
               "ImGui::Begin(\"Dear Core\"", "ImGui::InvisibleButton", "ImGui::SliderInt",
               "hostedControlIDAtPoint", "handleHostedControlID",
               "revision != _renderedRevision", "!self.view.superview.hidden",
-              "CAMetalLayer", "nextDrawable", "fallbackTexture"):
+              "CAMetalLayer", "nextDrawable", "fallbackTexture",
+              "CoreSetHostedImGuiSnapshot", "scheduleRetainedPresentationFromTexture"):
     assert token in surface, token
 for token in ("AddMousePosEvent", "AddMouseButtonEvent", "ClearEventsQueue", "ClearInputMouse"):
     assert token in pointer, token
@@ -53,6 +54,13 @@ assert "drawable ? drawable.texture : [self fallbackTexture]" in render
 assert render.index("ImGui::Render()") < render.index("result.processed = YES")
 assert "if (drawable)" in render and "result.presentScheduled = YES" in render
 assert "dispatch_async(dispatch_get_main_queue()" in render
+for token in ("blitCommandEncoder", "copyFromTexture:texture", "CGImageCreate",
+              "_retainedLayer.contents = imageObject", "[CATransaction flush]",
+              "result.retainedScheduled = YES", "_retainedReadbackInFlight = NO",
+              "request != owner->_retainedRequestSerial"):
+    assert token in render, token
+assert "waitUntilCompleted" not in render
+assert surface.index("if (background && !_retainedPresentationNeeded && !modelChanged) return") < surface.index("[self renderFrameAttemptPresentation:YES]")
 for token in ("extension CoreSetMenuViewController: CoreSetImGuiMenuModel",
               "enableImGuiRuntime()", "imguiMenuSnapshot()", "performImGuiMenuAction"):
     assert token in menu, token

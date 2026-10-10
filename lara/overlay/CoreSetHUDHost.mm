@@ -38,6 +38,12 @@ typedef CFArrayRef (*CoreSetHIDEventGetChildren)(CoreSetIOHIDEventRef);
 static const double kCoreSetHUDDrawWindowLevel = 999998.0;
 static const double kCoreSetHUDMenuWindowLevel = 999999.0;
 static const double kCoreSetHUDIconWindowLevel = 1000000.0;
+static void CoreSetEnableHostedLayerUpdates(CALayer *layer) {
+    if (!layer) return;
+    SEL selector = NSSelectorFromString(@"setDisableUpdateMask:");
+    if ([layer respondsToSelector:selector])
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(layer, selector, 0);
+}
 static BOOL CoreSetHostedOrientationValid(UIInterfaceOrientation value) {
     return value == UIInterfaceOrientationPortrait ||
         value == UIInterfaceOrientationPortraitUpsideDown ||
@@ -247,6 +253,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     BOOL _drawCleanupNeeded;
     uint64_t _lastSequence;
     uint64_t _lastConsumedSequence;
+    uint64_t _drawReceiptCount;
     CGPoint _floatingCenter;
     CGPoint _dragOrigin;
     CoreSetHUDBackend _activeBackend;
@@ -526,6 +533,7 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         [_adapter prepareForHostGeneration:self.generation];
     _lastSequence = 0;
     _lastConsumedSequence = 0;
+    _drawReceiptCount = 0;
     [_layers clear]; [_metal clear];
 }
 - (BOOL)setMetalConsumer:(id<CoreSetFrameConsumer>)consumer error:(NSError **)error {
@@ -1559,6 +1567,9 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
     _drawWindow = [[CoreSetDrawWindow alloc] initWithWindowScene:scene];
     _menuWindow = [[CoreSetMenuWindow alloc] initWithWindowScene:scene];
     _iconWindow = [[CoreSetIconWindow alloc] initWithWindowScene:scene];
+    CoreSetEnableHostedLayerUpdates(_drawWindow.layer);
+    CoreSetEnableHostedLayerUpdates(_menuWindow.layer);
+    CoreSetEnableHostedLayerUpdates(_iconWindow.layer);
     _menuWindow.backgroundPassThrough = NO;
     _menuWindow.userInteractionEnabled = YES;
     _iconWindow.backgroundPassThrough = YES;
@@ -1825,11 +1836,25 @@ static void CoreSetHostedHIDCallback(void *target, void *refcon,
         NSError *error = nil;
         if (![consumer consumeFrame:frame error:&error]) {
             [consumer clear]; host.lastError = error ?: [NSError errorWithDomain:@"CoreSetHUDHost" code:7 userInfo:@{NSLocalizedDescriptionKey:@"Frame rejected"}];
+            NSLog(@"Core-SET: hosted draw stage=consumer accepted=0 backend=%s generation=%llu sequence=%llu commands=%lu reason=%@",
+                  host->_activeBackend == CoreSetHUDBackendMetal ? "Metal" : "CA",
+                  (unsigned long long)frame.generation,
+                  (unsigned long long)frame.sequence,
+                  (unsigned long)frame.commands.count,
+                  host.lastError.localizedDescription ?: @"unknown");
             if (host.frameDidConsume) host.frameDidConsume(frame, NO, host.lastError);
             [host publishState];
         } else {
             const BOOL firstFrame = host->_lastConsumedSequence == 0;
             host->_lastConsumedSequence = frame.sequence;
+            const uint64_t receipts = ++host->_drawReceiptCount;
+            if (CoreSetInputLogDue(receipts))
+                NSLog(@"Core-SET: hosted draw stage=consumer accepted=1 backend=%s generation=%llu sequence=%llu commands=%lu receipt=%llu",
+                      host->_activeBackend == CoreSetHUDBackendMetal ? "Metal" : "CA",
+                      (unsigned long long)frame.generation,
+                      (unsigned long long)frame.sequence,
+                      (unsigned long)frame.commands.count,
+                      (unsigned long long)receipts);
             if (host.frameDidConsume) host.frameDidConsume(frame, YES, nil);
             if (firstFrame) [host publishState];
         }

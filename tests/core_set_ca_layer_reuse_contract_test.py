@@ -30,6 +30,9 @@ def test_cross_application_ca_reuses_command_containers():
     ):
         assert token in consumer, token
     assert "NSMutableArray<CALayer *> *layers = [NSMutableArray arrayWithCapacity:frame.commands.count]" in consumer
+    assert "CSEnableHostedLayerUpdates(view.layer)" in consumer
+    assert "CSEnableHostedLayerUpdates(_root)" in consumer
+    assert consumer.index("[CATransaction commit]") < consumer.index("[CATransaction flush]")
 
 
 def test_reuse_is_type_stable_and_clear_discards_old_identity():

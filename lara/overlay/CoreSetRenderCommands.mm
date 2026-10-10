@@ -2,6 +2,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <ImageIO/ImageIO.h>
+#import <objc/message.h>
 #include "CoreSetTextAnchor.h"
 #include <algorithm>
 #include <cmath>
@@ -9,6 +10,17 @@
 
 static NSString *const CSBodyFontName = @"OPPOSans-H";
 static NSString *const CSIconFontName = @"icomoon";
+
+// WZ/AX keeps its retained CoreAnimation tree publishable after the source
+// application resigns active.  iOS 26 CALayerHost mirrors this same source
+// context, so opt the host and retained root into background updates when the
+// private selector is available.  Older systems simply keep the public path.
+static void CSEnableHostedLayerUpdates(CALayer *layer) {
+    if (!layer) return;
+    SEL selector = NSSelectorFromString(@"setDisableUpdateMask:");
+    if ([layer respondsToSelector:selector])
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(layer, selector, 0);
+}
 
 static BOOL CSIconGlyphAllowed(NSString *text) {
     if (text.length != 1) return NO;
@@ -474,6 +486,9 @@ static uint64_t CSWeaponEpoch;
     NSAssert(NSThread.isMainThread, @"Rendering must run on the main thread");
     _view = view;
     [_root removeFromSuperlayer];
+    _root.name = @"CoreSetHostedDrawContent";
+    CSEnableHostedLayerUpdates(view.layer);
+    CSEnableHostedLayerUpdates(_root);
     [view.layer addSublayer:_root];
 }
 - (void)setVisible:(BOOL)visible { _root.hidden = !visible; }
@@ -559,6 +574,10 @@ static uint64_t CSWeaponEpoch;
                                                    _view.bounds.size.height / size.height, 1);
     _root.sublayers = layers;
     [CATransaction commit];
+    // The source app is backgrounded while the game is foreground.  Match the
+    // working WZ retained renderer and flush the committed layer tree so the
+    // SpringBoard CALayerHost receives the new transaction immediately.
+    [CATransaction flush];
     return YES;
 }
 @end

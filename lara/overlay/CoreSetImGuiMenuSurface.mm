@@ -1,6 +1,7 @@
 #import "CoreSetImGuiMenuSurface.h"
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <objc/message.h>
 #include "../third_party/imgui/imgui.h"
 #include "../third_party/imgui/backends/imgui_impl_metal.h"
 #include "CoreSetImGuiMenuPointer.h"
@@ -12,6 +13,7 @@
 typedef struct CoreSetImGuiFrameResult {
     BOOL processed;
     BOOL presentScheduled;
+    BOOL retainedScheduled;
 } CoreSetImGuiFrameResult;
 
 @interface CoreSetImGuiTouchView : UIView
@@ -23,8 +25,17 @@ typedef struct CoreSetImGuiFrameResult {
 - (BOOL)dispatchLocalPoint:(CGPoint)point phase:(CoreSetHostedPointerPhase)phase;
 - (void)updateDrawableGeometry;
 - (CoreSetImGuiFrameResult)renderFrameAttemptPresentation:(BOOL)attemptPresentation;
+- (BOOL)scheduleRetainedPresentationFromTexture:(id<MTLTexture>)texture
+                                  commandBuffer:(id<MTLCommandBuffer>)commandBuffer;
 - (void)schedulePresentation;
 @end
+
+static void CSEnableHostedLayerUpdates(CALayer *layer) {
+    if (!layer) return;
+    SEL selector = NSSelectorFromString(@"setDisableUpdateMask:");
+    if ([layer respondsToSelector:selector])
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(layer, selector, 0);
+}
 
 @implementation CoreSetImGuiTouchView
 + (Class)layerClass { return CAMetalLayer.class; }
@@ -66,6 +77,7 @@ static NSString *CSString(id value) {
 @implementation CoreSetImGuiMenuViewController {
     __weak id<CoreSetImGuiMenuModel> _model;
     CoreSetImGuiTouchView *_surfaceView;
+    CALayer *_retainedLayer;
     id<MTLDevice> _device;
     id<MTLCommandQueue> _queue;
     MTLRenderPassDescriptor *_renderPass;
@@ -82,6 +94,10 @@ static NSString *CSString(id value) {
     uint64_t _frameSerial;
     uint64_t _scheduledPresentationSerial;
     uint64_t _widgetActionSerial;
+    uint64_t _retainedRequestSerial;
+    uint64_t _retainedPresentedSerial;
+    BOOL _retainedPresentationNeeded;
+    BOOL _retainedReadbackInFlight;
     BOOL _presentationQueued;
 }
 
@@ -112,6 +128,16 @@ static NSString *CSString(id value) {
     layer.maximumDrawableCount = 3;
     layer.allowsNextDrawableTimeout = YES;
     [fallback addSubview:_surfaceView];
+    _retainedLayer = [CALayer layer];
+    _retainedLayer.name = @"CoreSetHostedImGuiSnapshot";
+    _retainedLayer.frame = fallback.bounds;
+    _retainedLayer.contentsGravity = kCAGravityResize;
+    _retainedLayer.masksToBounds = YES;
+    _retainedLayer.hidden = YES;
+    CSEnableHostedLayerUpdates(fallback.layer);
+    CSEnableHostedLayerUpdates(layer);
+    CSEnableHostedLayerUpdates(_retainedLayer);
+    [fallback.layer addSublayer:_retainedLayer];
     _renderPass = [MTLRenderPassDescriptor renderPassDescriptor];
     _renderPass.colorAttachments[0].loadAction = MTLLoadActionClear;
     _renderPass.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -157,6 +183,10 @@ static NSString *CSString(id value) {
 - (void)displayTick:(CADisplayLink *)link {
     if (_surfaceView.window && !self.view.hidden && !self.view.superview.hidden &&
         self.view.alpha > 0.01 && self.view.superview.alpha > 0.01) {
+        const BOOL background = UIApplication.sharedApplication.applicationState !=
+            UIApplicationStateActive;
+        const BOOL modelChanged = _model.imguiMenuModelRevision != _renderedRevision;
+        if (background && !_retainedPresentationNeeded && !modelChanged) return;
         [self renderFrameAttemptPresentation:YES];
     } else if (_imgui && _pointer.down()) {
         ImGui::SetCurrentContext(_imgui);
@@ -182,9 +212,13 @@ static NSString *CSString(id value) {
                                            MAX(1, round(bounds.height * scale)));
     CAMetalLayer *layer = _surfaceView.metalLayer;
     layer.contentsScale = scale;
+    _retainedLayer.frame = _surfaceView.frame;
+    _retainedLayer.contentsScale = scale;
     if (!CGSizeEqualToSize(layer.drawableSize, drawableSize)) {
         layer.drawableSize = drawableSize;
         _fallbackTexture = nil;
+        ++_retainedRequestSerial;
+        _retainedPresentationNeeded = YES;
     }
 }
 
@@ -475,8 +509,79 @@ static NSString *CSString(id value) {
     ImGui::EndChild(); ImGui::End();
 }
 
+- (BOOL)scheduleRetainedPresentationFromTexture:(id<MTLTexture>)texture
+                                  commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
+    if (!texture || !commandBuffer || !_retainedLayer || !_device ||
+        _retainedReadbackInFlight ||
+        texture.pixelFormat != MTLPixelFormatBGRA8Unorm ||
+        texture.width == 0 || texture.height == 0) return NO;
+    if (texture.width > (NSUIntegerMax - 255) / 4) return NO;
+    const NSUInteger rowBytes = ((texture.width * 4 + 255) / 256) * 256;
+    if (texture.height > NSUIntegerMax / rowBytes) return NO;
+    const NSUInteger length = rowBytes * texture.height;
+    id<MTLBuffer> readback = [_device newBufferWithLength:length
+                                                  options:MTLResourceStorageModeShared];
+    id<MTLBlitCommandEncoder> blit = readback ? [commandBuffer blitCommandEncoder] : nil;
+    if (!readback || !blit) return NO;
+    [blit copyFromTexture:texture sourceSlice:0 sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(texture.width, texture.height, 1)
+                 toBuffer:readback destinationOffset:0
+        destinationBytesPerRow:rowBytes
+      destinationBytesPerImage:length];
+    [blit endEncoding];
+    const NSUInteger width = texture.width, height = texture.height;
+    const uint64_t request = ++_retainedRequestSerial;
+    _retainedReadbackInFlight = YES;
+    __weak CoreSetImGuiMenuViewController *weakSelf = self;
+    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+        id imageObject = nil;
+        if (completed.status == MTLCommandBufferStatusCompleted) {
+            NSData *pixels = [NSData dataWithBytes:readback.contents length:length];
+            CGDataProviderRef provider = CGDataProviderCreateWithCFData(
+                (__bridge CFDataRef)pixels);
+            CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+            CGBitmapInfo bitmap = (CGBitmapInfo)(kCGBitmapByteOrder32Little |
+                                                 kCGImageAlphaPremultipliedFirst);
+            CGImageRef image = provider && colorSpace
+                ? CGImageCreate(width, height, 8, 32, rowBytes, colorSpace, bitmap,
+                                provider, nullptr, false, kCGRenderingIntentDefault)
+                : nullptr;
+            if (provider) CGDataProviderRelease(provider);
+            if (colorSpace) CGColorSpaceRelease(colorSpace);
+            imageObject = image ? CFBridgingRelease(image) : nil;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            CoreSetImGuiMenuViewController *owner = weakSelf;
+            if (!owner) return;
+            owner->_retainedReadbackInFlight = NO;
+            if (!imageObject || !owner->_retainedLayer ||
+                request != owner->_retainedRequestSerial ||
+                request < owner->_retainedPresentedSerial) {
+                if (!imageObject)
+                    NSLog(@"Core-SET: ImGui presentation stage=retained-ca committed=0 request=%llu status=%ld",
+                          (unsigned long long)request, (long)completed.status);
+                if (owner->_retainedPresentationNeeded) [owner schedulePresentation];
+                return;
+            }
+            owner->_retainedPresentedSerial = request;
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            owner->_retainedLayer.contents = imageObject;
+            owner->_retainedLayer.hidden = NO;
+            [CATransaction commit];
+            [CATransaction flush];
+            NSLog(@"Core-SET: ImGui presentation stage=retained-ca committed=1 request=%llu frame=%llu",
+                  (unsigned long long)request,
+                  (unsigned long long)owner->_frameSerial);
+            if (owner->_retainedPresentationNeeded) [owner schedulePresentation];
+        });
+    }];
+    return YES;
+}
+
 - (CoreSetImGuiFrameResult)renderFrameAttemptPresentation:(BOOL)attemptPresentation {
-    CoreSetImGuiFrameResult result = { NO, NO };
+    CoreSetImGuiFrameResult result = { NO, NO, NO };
     if (!NSThread.isMainThread || !_imgui || !_device || !_queue || !_surfaceView || !_renderPass)
         return result;
     [self updateDrawableGeometry];
@@ -494,6 +599,7 @@ static NSString *CSString(id value) {
     ImGui_ImplMetal_NewFrame(_renderPass); ImGui::NewFrame();
     const uint64_t revision = _model.imguiMenuModelRevision;
     if (!_snapshot || revision != _renderedRevision) {
+        _retainedPresentationNeeded = YES;
         _snapshot = [[_model imguiMenuSnapshot] copy] ?: @{};
         _renderedRevision = revision;
     }
@@ -508,9 +614,19 @@ static NSString *CSString(id value) {
     ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), buffer, encoder);
     [encoder endEncoding];
     if (drawable) {
+        ++_retainedRequestSerial; // invalidate an older asynchronous snapshot
+        _retainedLayer.hidden = YES;
+        _retainedPresentationNeeded = NO;
         [buffer presentDrawable:drawable];
         ++_scheduledPresentationSerial;
         result.presentScheduled = YES;
+    } else if (attemptPresentation && _retainedPresentationNeeded &&
+               [self scheduleRetainedPresentationFromTexture:texture
+                                                commandBuffer:buffer]) {
+        _retainedPresentationNeeded = NO;
+        ++_scheduledPresentationSerial;
+        result.presentScheduled = YES;
+        result.retainedScheduled = YES;
     }
     [buffer commit];
     return result;
@@ -524,8 +640,9 @@ static NSString *CSString(id value) {
         if (!self->_imgui || !self->_surfaceView.window || self.view.hidden || self.view.superview.hidden)
             return;
         CoreSetImGuiFrameResult result = [self renderFrameAttemptPresentation:YES];
-        NSLog(@"Core-SET: ImGui presentation stage=hosted-frame processed=%d presentScheduled=%d frame=%llu scheduledFrame=%llu",
-              result.processed, result.presentScheduled, (unsigned long long)self->_frameSerial,
+        NSLog(@"Core-SET: ImGui presentation stage=hosted-frame processed=%d presentScheduled=%d retainedScheduled=%d frame=%llu scheduledFrame=%llu",
+              result.processed, result.presentScheduled, result.retainedScheduled,
+              (unsigned long long)self->_frameSerial,
               (unsigned long long)self->_scheduledPresentationSerial);
     });
 }
@@ -555,6 +672,7 @@ static NSString *CSString(id value) {
     else if (phase == CoreSetHostedPointerPhaseEnded)
         queued = _pointer.end(io, (float)point.x, (float)point.y);
     if (!queued || !_surfaceView) return NO;
+    _retainedPresentationNeeded = YES;
     const uint64_t beforeFrame = _frameSerial;
     const uint64_t beforeScheduled = _scheduledPresentationSerial;
     const uint64_t beforeAction = _widgetActionSerial;
