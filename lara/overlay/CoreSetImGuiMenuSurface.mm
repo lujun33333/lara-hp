@@ -24,6 +24,7 @@ typedef struct CoreSetImGuiFrameResult {
 @interface CoreSetImGuiMenuViewController ()
 - (BOOL)dispatchLocalPoint:(CGPoint)point phase:(CoreSetHostedPointerPhase)phase;
 - (void)updateDrawableGeometry;
+- (id<MTLTexture>)newRetainedPresentationTexture;
 - (CoreSetImGuiFrameResult)renderFrameAttemptPresentation:(BOOL)attemptPresentation;
 - (BOOL)scheduleRetainedPresentationFromTexture:(id<MTLTexture>)texture
                                   commandBuffer:(id<MTLCommandBuffer>)commandBuffer;
@@ -236,6 +237,19 @@ static NSString *CSString(id value) {
     descriptor.usage = MTLTextureUsageRenderTarget;
     _fallbackTexture = [_device newTextureWithDescriptor:descriptor];
     return _fallbackTexture;
+}
+
+- (id<MTLTexture>)newRetainedPresentationTexture {
+    [self updateDrawableGeometry];
+    const CGSize size = _surfaceView.metalLayer.drawableSize;
+    const NSUInteger width = MAX((NSUInteger)1, (NSUInteger)llround(size.width));
+    const NSUInteger height = MAX((NSUInteger)1, (NSUInteger)llround(size.height));
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                     width:width height:height mipmapped:NO];
+    descriptor.storageMode = MTLStorageModeShared;
+    descriptor.usage = MTLTextureUsageRenderTarget;
+    return [_device newTextureWithDescriptor:descriptor];
 }
 
 - (void)dealloc {
@@ -513,23 +527,13 @@ static NSString *CSString(id value) {
                                   commandBuffer:(id<MTLCommandBuffer>)commandBuffer {
     if (!texture || !commandBuffer || !_retainedLayer || !_device ||
         _retainedReadbackInFlight ||
+        texture.storageMode != MTLStorageModeShared ||
         texture.pixelFormat != MTLPixelFormatBGRA8Unorm ||
         texture.width == 0 || texture.height == 0) return NO;
-    if (texture.width > (NSUIntegerMax - 255) / 4) return NO;
-    const NSUInteger rowBytes = ((texture.width * 4 + 255) / 256) * 256;
+    if (texture.width > NSUIntegerMax / 4) return NO;
+    const NSUInteger rowBytes = texture.width * 4;
     if (texture.height > NSUIntegerMax / rowBytes) return NO;
     const NSUInteger length = rowBytes * texture.height;
-    id<MTLBuffer> readback = [_device newBufferWithLength:length
-                                                  options:MTLResourceStorageModeShared];
-    id<MTLBlitCommandEncoder> blit = readback ? [commandBuffer blitCommandEncoder] : nil;
-    if (!readback || !blit) return NO;
-    [blit copyFromTexture:texture sourceSlice:0 sourceLevel:0
-             sourceOrigin:MTLOriginMake(0, 0, 0)
-               sourceSize:MTLSizeMake(texture.width, texture.height, 1)
-                 toBuffer:readback destinationOffset:0
-        destinationBytesPerRow:rowBytes
-      destinationBytesPerImage:length];
-    [blit endEncoding];
     const NSUInteger width = texture.width, height = texture.height;
     const uint64_t request = ++_retainedRequestSerial;
     _retainedReadbackInFlight = YES;
@@ -537,7 +541,10 @@ static NSString *CSString(id value) {
     [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
         id imageObject = nil;
         if (completed.status == MTLCommandBufferStatusCompleted) {
-            NSData *pixels = [NSData dataWithBytes:readback.contents length:length];
+            NSMutableData *pixels = [NSMutableData dataWithLength:length];
+            [texture getBytes:pixels.mutableBytes bytesPerRow:rowBytes
+                    fromRegion:MTLRegionMake2D(0, 0, width, height)
+                   mipmapLevel:0];
             CGDataProviderRef provider = CGDataProviderCreateWithCFData(
                 (__bridge CFDataRef)pixels);
             CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
@@ -559,8 +566,9 @@ static NSString *CSString(id value) {
                 request != owner->_retainedRequestSerial ||
                 request < owner->_retainedPresentedSerial) {
                 if (!imageObject)
-                    NSLog(@"Core-SET: ImGui presentation stage=retained-ca committed=0 request=%llu status=%ld",
-                          (unsigned long long)request, (long)completed.status);
+                    NSLog(@"Core-SET: ImGui presentation stage=retained-ca committed=0 request=%llu status=%ld reason=%@",
+                          (unsigned long long)request, (long)completed.status,
+                          completed.error.localizedDescription ?: @"image-unavailable");
                 if (owner->_retainedPresentationNeeded) [owner schedulePresentation];
                 return;
             }
@@ -586,8 +594,16 @@ static NSString *CSString(id value) {
         return result;
     [self updateDrawableGeometry];
     CAMetalLayer *layer = _surfaceView.metalLayer;
-    id<CAMetalDrawable> drawable = attemptPresentation ? [layer nextDrawable] : nil;
-    id<MTLTexture> texture = drawable ? drawable.texture : [self fallbackTexture];
+    const BOOL background = UIApplication.sharedApplication.applicationState !=
+        UIApplicationStateActive;
+    const BOOL modelChanged = _model.imguiMenuModelRevision != _renderedRevision;
+    id<CAMetalDrawable> drawable = attemptPresentation && !background
+        ? [layer nextDrawable] : nil;
+    id<MTLTexture> retainedTexture = attemptPresentation && background &&
+        (_retainedPresentationNeeded || modelChanged) && !_retainedReadbackInFlight
+        ? [self newRetainedPresentationTexture] : nil;
+    id<MTLTexture> texture = drawable ? drawable.texture
+        : (retainedTexture ?: [self fallbackTexture]);
     if (!texture) return result;
     _renderPass.colorAttachments[0].texture = texture;
     ImGui::SetCurrentContext(_imgui);
@@ -620,7 +636,7 @@ static NSString *CSString(id value) {
         [buffer presentDrawable:drawable];
         ++_scheduledPresentationSerial;
         result.presentScheduled = YES;
-    } else if (attemptPresentation && _retainedPresentationNeeded &&
+    } else if (retainedTexture && _retainedPresentationNeeded &&
                [self scheduleRetainedPresentationFromTexture:texture
                                                 commandBuffer:buffer]) {
         _retainedPresentationNeeded = NO;

@@ -49,17 +49,23 @@ assert "MTKView" not in surface
 assert "currentDrawable" not in surface
 render = surface[surface.index("- (CoreSetImGuiFrameResult)renderFrameAttemptPresentation:"):
                  surface.index("- (uint64_t)hostedMenuRevision")]
-assert "attemptPresentation ? [layer nextDrawable] : nil" in render
-assert "drawable ? drawable.texture : [self fallbackTexture]" in render
+assert "attemptPresentation && !background" in render
+assert "? [layer nextDrawable] : nil" in render
+assert "drawable ? drawable.texture" in render
+assert ": (retainedTexture ?: [self fallbackTexture])" in render
 assert render.index("ImGui::Render()") < render.index("result.processed = YES")
 assert "if (drawable)" in render and "result.presentScheduled = YES" in render
 assert "dispatch_async(dispatch_get_main_queue()" in render
-for token in ("blitCommandEncoder", "copyFromTexture:texture", "CGImageCreate",
+for token in ("newRetainedPresentationTexture", "MTLStorageModeShared", "getBytes:pixels.mutableBytes",
+              "CGImageCreate",
               "_retainedLayer.contents = imageObject", "[CATransaction flush]",
               "result.retainedScheduled = YES", "_retainedReadbackInFlight = NO",
               "request != owner->_retainedRequestSerial"):
     assert token in render, token
 assert "waitUntilCompleted" not in render
+assert "blitCommandEncoder" not in render
+assert "attemptPresentation && !background" in render
+assert render.index("attemptPresentation && !background") < render.index("[layer nextDrawable]")
 assert surface.index("if (background && !_retainedPresentationNeeded && !modelChanged) return") < surface.index("[self renderFrameAttemptPresentation:YES]")
 for token in ("extension CoreSetMenuViewController: CoreSetImGuiMenuModel",
               "enableImGuiRuntime()", "imguiMenuSnapshot()", "performImGuiMenuAction"):
