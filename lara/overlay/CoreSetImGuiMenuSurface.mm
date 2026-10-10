@@ -57,11 +57,15 @@ static NSString *CSString(id value) {
     id<MTLCommandQueue> _queue;
     ImGuiContext *_imgui;
     ImFont *_bodyFont;
+    ImFont *_titleFont;
+    ImFont *_brandFont;
     CADisplayLink *_displayLink;
     NSDictionary *_snapshot;
     uint64_t _renderedRevision;
     CoreSet::ImGuiMenuPointer _pointer;
     CGRect _inputBounds;
+    uint64_t _frameSerial;
+    uint64_t _widgetActionSerial;
 }
 
 - (instancetype)initWithModel:(id<CoreSetImGuiMenuModel>)model {
@@ -99,14 +103,24 @@ static NSString *CSString(id value) {
     ImGui::SetCurrentContext(_imgui);
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = nullptr; io.LogFilename = nullptr;
+    // Hosted apps can stop delivering CADisplayLink ticks in the background.
+    // Each physical phase is rendered synchronously below, so one queued phase
+    // must be fully consumed by one ImGui frame rather than trickled later.
+    io.ConfigInputTrickleEventQueue = false;
     NSString *fontPath = [NSBundle.mainBundle pathForResource:@"OPPOSans-H" ofType:@"ttf"];
-    if (fontPath.length)
-        _bodyFont = io.Fonts->AddFontFromFileTTF(fontPath.UTF8String, 19.0f, nullptr,
-                                                 io.Fonts->GetGlyphRangesChineseFull());
+    if (fontPath.length) {
+        const ImWchar *ranges = io.Fonts->GetGlyphRangesChineseFull();
+        _bodyFont = io.Fonts->AddFontFromFileTTF(fontPath.UTF8String, 16.0f, nullptr, ranges);
+        _titleFont = io.Fonts->AddFontFromFileTTF(fontPath.UTF8String, 17.0f, nullptr, ranges);
+        _brandFont = io.Fonts->AddFontFromFileTTF(fontPath.UTF8String, 25.0f, nullptr, ranges);
+    }
     if (!_bodyFont) _bodyFont = io.Fonts->AddFontDefault();
+    if (!_titleFont) _titleFont = _bodyFont;
+    if (!_brandFont) _brandFont = _bodyFont;
     if (!ImGui_ImplMetal_Init(_metalView.device)) {
         ImGui::DestroyContext(_imgui); _imgui = nullptr; return;
     }
+    NSLog(@"Core-SET: ImGui runtime contract=core17-imgui-v13 size=838x535 contentOrigin=170,38 inputFrame=phase-driven semanticReceipt=widget-action");
     [self startDisplayLink];
 }
 
@@ -157,7 +171,16 @@ static NSString *CSString(id value) {
     }
 }
 
-- (void)drawItem:(NSDictionary *)item {
+- (BOOL)performWidgetAction:(NSString *)action value:(double)value {
+    const BOOL accepted = [_model performImGuiMenuAction:action value:value];
+    if (accepted) ++_widgetActionSerial;
+    NSLog(@"Core-SET: ImGui action stage=widget action=%@ accepted=%d frame=%llu actionSerial=%llu",
+          action, accepted, (unsigned long long)_frameSerial,
+          (unsigned long long)_widgetActionSerial);
+    return accepted;
+}
+
+- (void)drawItem:(NSDictionary *)item accent:(ImVec4)accent {
     NSString *type = CSString(item[@"type"]), *title = CSString(item[@"title"]);
     NSString *action = CSString(item[@"action"]);
     const BOOL enabled = item[@"enabled"] == nil || [item[@"enabled"] boolValue];
@@ -165,38 +188,135 @@ static NSString *CSString(id value) {
     if (!enabled) ImGui::BeginDisabled();
     if ([type isEqualToString:@"toggle"]) {
         bool selected = [item[@"value"] boolValue];
-        if (ImGui::Checkbox(title.UTF8String, &selected) && enabled)
-            [_model performImGuiMenuAction:action value:selected ? 1 : 0];
+        const ImVec2 start = ImGui::GetCursorScreenPos();
+        const float width = ImGui::GetContentRegionAvail().x;
+        ImGui::InvisibleButton("##toggle", ImVec2(width, 28));
+        ImDrawList *draw = ImGui::GetWindowDrawList();
+        const ImVec2 textSize = ImGui::CalcTextSize(title.UTF8String);
+        draw->AddText(ImVec2(start.x, start.y + (28 - textSize.y) * .5f),
+                      ImGui::GetColorU32(ImGuiCol_Text), title.UTF8String);
+        const ImVec2 low(start.x + width - 41, start.y + 3.5f), high(low.x + 21, low.y + 21);
+        const ImU32 border = ImGui::GetColorU32(ImGui::IsItemHovered() ? accent :
+            ImGui::GetStyleColorVec4(ImGuiCol_Border));
+        draw->AddRect(low, high, border, 3, 0, 1.5f);
+        if (selected) {
+            draw->AddRectFilled(low, high, ImGui::GetColorU32(accent), 3);
+            draw->AddLine(ImVec2(low.x + 5, low.y + 11), ImVec2(low.x + 9, low.y + 15),
+                          IM_COL32(255,255,255,255), 2);
+            draw->AddLine(ImVec2(low.x + 9, low.y + 15), ImVec2(low.x + 17, low.y + 6),
+                          IM_COL32(255,255,255,255), 2);
+        }
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && enabled)
+            [self performWidgetAction:action value:selected ? 0 : 1];
     } else if ([type isEqualToString:@"slider"]) {
         int value = [item[@"value"] intValue];
         const int minimum = [item[@"minimum"] intValue], maximum = [item[@"maximum"] intValue];
-        ImGui::SetNextItemWidth(-1);
+        const float rowY = ImGui::GetCursorPosY(), width = ImGui::GetContentRegionAvail().x;
+        ImGui::TextUnformatted(title.UTF8String);
+        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + width * .43f, rowY));
+        ImGui::SetNextItemWidth(width * .57f);
+        NSString *label = [NSString stringWithFormat:@"##%@", action];
         // Core c9158 forwards the configuration pointer to scalar behavior;
         // publish its changed value each frame, including during a drag.
-        if (ImGui::SliderInt(title.UTF8String, &value, minimum, maximum) && enabled)
-            [_model performImGuiMenuAction:action value:value];
+        if (ImGui::SliderInt(label.UTF8String, &value, minimum, maximum) && enabled)
+            [self performWidgetAction:action value:value];
+        ImGui::SetCursorPosY(rowY + 29);
+    } else if ([type isEqualToString:@"tabs"]) {
+        NSArray *options = [item[@"options"] isKindOfClass:NSArray.class] ? item[@"options"] : @[];
+        const NSInteger selected = [item[@"value"] integerValue];
+        const float rowY = ImGui::GetCursorPosY(), rowX = ImGui::GetCursorPosX();
+        for (NSUInteger index = 0; index < options.count; ++index) {
+            if (index == 6) ImGui::SetCursorPos(ImVec2(rowX, rowY + 34));
+            else if (index) ImGui::SameLine(0,6);
+            NSString *option = CSString(options[index]);
+            const float width = ImGui::CalcTextSize(option.UTF8String).x + 24;
+            if ((NSInteger)index == selected) ImGui::PushStyleColor(ImGuiCol_Button, accent);
+            NSString *label = [NSString stringWithFormat:@"%@##%@.%lu", option, action, (unsigned long)index];
+            if (ImGui::Button(label.UTF8String, ImVec2(width, 28)) && enabled)
+                [self performWidgetAction:action value:index];
+            if ((NSInteger)index == selected) ImGui::PopStyleColor();
+        }
+        ImGui::SetCursorPosY(rowY + 68);
     } else if ([type isEqualToString:@"choice"]) {
         NSArray *options = [item[@"options"] isKindOfClass:NSArray.class] ? item[@"options"] : @[];
         const NSInteger selected = [item[@"value"] integerValue];
-        ImGui::TextUnformatted(title.UTF8String);
+        const float rowY = ImGui::GetCursorPosY(), width = ImGui::GetContentRegionAvail().x;
+        float optionWidth = 46;
+        if ([action isEqualToString:@"aim.point"] || [action isEqualToString:@"aim.scene"]) optionWidth = 60;
+        else if ([action isEqualToString:@"aim.lockStrength"]) optionWidth = 54;
+        const float total = optionWidth * options.count + 6 * MAX(0, (NSInteger)options.count - 1);
+        if (width - total - 20 >= ImGui::CalcTextSize(title.UTF8String).x)
+            ImGui::TextUnformatted(title.UTF8String);
+        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + MAX(0.0f, width - total - 20), rowY));
         for (NSUInteger index = 0; index < options.count; ++index) {
-            if (index && index % 4 != 0) ImGui::SameLine();
+            if (index) ImGui::SameLine(0, 6);
             NSString *option = CSString(options[index]);
-            if ((NSInteger)index == selected) {
-                ImVec4 accent = CSColor(item[@"accent"], ImVec4(.22f,.55f,.61f,1));
-                ImGui::PushStyleColor(ImGuiCol_Button, accent);
-            }
+            if ((NSInteger)index == selected) ImGui::PushStyleColor(ImGuiCol_Button, accent);
             NSString *label = [NSString stringWithFormat:@"%@##%@.%lu", option, action, (unsigned long)index];
-            if (ImGui::Button(label.UTF8String) && enabled)
-                [_model performImGuiMenuAction:action value:(double)index];
+            if (ImGui::Button(label.UTF8String, ImVec2(optionWidth, 22)) && enabled)
+                [self performWidgetAction:action value:(double)index];
             if ((NSInteger)index == selected) ImGui::PopStyleColor();
         }
+        ImGui::SetCursorPosY(rowY + 29);
+    } else if ([type isEqualToString:@"palette"]) {
+        static const ImVec4 colors[] = {
+            ImVec4(174/255.f,139/255.f,148/255.f,1), ImVec4(180/255.f,85/255.f,94/255.f,1),
+            ImVec4(68/255.f,119/255.f,168/255.f,1), ImVec4(58/255.f,133/255.f,120/255.f,1),
+            ImVec4(126/255.f,98/255.f,171/255.f,1), ImVec4(181/255.f,86/255.f,137/255.f,1),
+            ImVec4(56/255.f,139/255.f,155/255.f,1)
+        };
+        const NSInteger selected = [item[@"value"] integerValue];
+        const float rowY = ImGui::GetCursorPosY();
+        ImGui::TextUnformatted(title.UTF8String);
+        ImGui::SetCursorPos(ImVec2(90, rowY));
+        for (NSInteger index = 0; index < 7; ++index) {
+            if (index) ImGui::SameLine(0, 7);
+            ImGui::PushStyleColor(ImGuiCol_Button, colors[index]);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colors[index]);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, colors[index]);
+            NSString *label = [NSString stringWithFormat:@"##%@.%ld", action, (long)index];
+            if (ImGui::Button(label.UTF8String, ImVec2(24,24)) && enabled)
+                [self performWidgetAction:action value:index];
+            if (index == selected) {
+                ImDrawList *draw = ImGui::GetWindowDrawList();
+                const ImVec2 low = ImGui::GetItemRectMin(), high = ImGui::GetItemRectMax();
+                draw->AddRect(ImVec2(low.x - 2, low.y - 2), ImVec2(high.x + 2, high.y + 2),
+                              ImGui::GetColorU32(ImGuiCol_Text), 6, 0, 2);
+            }
+            ImGui::PopStyleColor(3);
+        }
+        ImGui::SetCursorPosY(rowY + 31);
+    } else if ([type isEqualToString:@"tagGrid"]) {
+        NSArray *titles = [item[@"titles"] isKindOfClass:NSArray.class] ? item[@"titles"] : @[];
+        NSArray *values = [item[@"values"] isKindOfClass:NSArray.class] ? item[@"values"] : @[];
+        float rowY = ImGui::GetCursorPosY(), rowX = ImGui::GetCursorPosX();
+        const float right = rowX + ImGui::GetContentRegionAvail().x - 18;
+        for (NSUInteger index = 0; index < titles.count; ++index) {
+            NSString *name = CSString(titles[index]);
+            const float width = ImGui::CalcTextSize(name.UTF8String).x + 24;
+            if (ImGui::GetCursorPosX() + width > right && index) {
+                rowY += 32; ImGui::SetCursorPos(ImVec2(rowX, rowY));
+            } else if (index) ImGui::SameLine(0,6);
+            const BOOL selected = index < values.count && [values[index] boolValue];
+            if (selected) ImGui::PushStyleColor(ImGuiCol_Button, accent);
+            NSString *label = [NSString stringWithFormat:@"%@##material.group.%lu", name, (unsigned long)index];
+            if (ImGui::Button(label.UTF8String, ImVec2(width, 26)) && enabled)
+                [self performWidgetAction:[NSString stringWithFormat:@"material.group.%lu", (unsigned long)index]
+                                     value:selected ? 0 : 1];
+            if (selected) ImGui::PopStyleColor();
+        }
+        ImGui::SetCursorPosY(rowY + 32);
     } else if ([type isEqualToString:@"status"]) {
         NSString *value = CSString(item[@"text"]);
-        ImGui::TextWrapped("%s  %s", title.UTF8String, value.UTF8String);
+        ImGui::TextWrapped("%s: %s", title.UTF8String, value.UTF8String);
+    } else if ([type isEqualToString:@"label"]) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(.58f,.58f,.58f,1));
+        ImGui::TextUnformatted(title.UTF8String); ImGui::PopStyleColor();
     } else {
-        if (ImGui::Button(title.UTF8String, ImVec2(-1, 30)) && enabled)
-            [_model performImGuiMenuAction:action value:[item[@"value"] doubleValue]];
+        const float startX = ImGui::GetCursorPosX();
+        ImGui::SetCursorPosX(startX + 20);
+        if (ImGui::Button(title.UTF8String, ImVec2(ImGui::GetContentRegionAvail().x - 20, 30)) && enabled)
+            [self performWidgetAction:action value:[item[@"value"] doubleValue]];
     }
     if (!enabled) ImGui::EndDisabled();
     ImGui::PopID();
@@ -209,52 +329,89 @@ static NSString *CSString(id value) {
     const ImVec4 accent = CSColor(snapshot[@"accent"], ImVec4(.22f,.55f,.61f,1));
     const BOOL light = [CSString(snapshot[@"theme"]) isEqualToString:@"light"];
     ImGuiStyle &style = ImGui::GetStyle();
-    style.WindowRounding = 12; style.ChildRounding = 7; style.FrameRounding = 5;
-    style.WindowPadding = ImVec2(0,0); style.ItemSpacing = ImVec2(8,7);
+    style.WindowRounding = 12; style.ChildRounding = 8; style.FrameRounding = 5;
+    style.WindowPadding = ImVec2(0,0); style.ItemSpacing = ImVec2(8,6);
+    style.FramePadding = ImVec2(7,3); style.ScrollbarSize = 8;
     style.Colors[ImGuiCol_WindowBg] = light ? ImVec4(.96f,.96f,.96f,.98f) : ImVec4(.10f,.10f,.10f,.98f);
     style.Colors[ImGuiCol_ChildBg] = light ? ImVec4(.91f,.91f,.91f,1) : ImVec4(.14f,.14f,.14f,1);
     style.Colors[ImGuiCol_Text] = light ? ImVec4(.20f,.20f,.20f,1) : ImVec4(1,1,1,1);
     style.Colors[ImGuiCol_Button] = light ? ImVec4(.82f,.82f,.82f,1) : ImVec4(.20f,.20f,.20f,1);
     style.Colors[ImGuiCol_ButtonHovered] = accent; style.Colors[ImGuiCol_ButtonActive] = accent;
     style.Colors[ImGuiCol_CheckMark] = accent; style.Colors[ImGuiCol_SliderGrab] = accent;
-    ImGui::SetNextWindowPos(ImVec2(0,0)); ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-    ImGui::Begin("Core-SET", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+    style.Colors[ImGuiCol_Border] = light ? ImVec4(.76f,.76f,.76f,1) : ImVec4(.30f,.30f,.30f,1);
+    ImGui::SetNextWindowPos(ImVec2(0,0)); ImGui::SetNextWindowSize(ImVec2(838,535));
+    ImGui::Begin("Dear Core", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
-    ImGui::BeginChild("sidebar", ImVec2(160, 0), true);
-    ImGui::SetCursorPos(ImVec2(16, 28));
-    ImGui::PushStyleColor(ImGuiCol_Text, accent);
-    ImGui::TextUnformatted("CORE  SET"); ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0, 22));
-    for (NSUInteger index = 0; index < pages.count; ++index) {
-        NSDictionary *pageRecord = [pages[index] isKindOfClass:NSDictionary.class] ? pages[index] : @{};
-        NSString *title = CSString(pageRecord[@"title"]);
-        if ((NSInteger)index == selected) ImGui::PushStyleColor(ImGuiCol_Button, accent);
-        NSString *label = [NSString stringWithFormat:@"%@##page.%lu", title, (unsigned long)index];
-        if (ImGui::Button(label.UTF8String, ImVec2(132, 35)))
-            [_model performImGuiMenuAction:@"page" value:(double)index];
-        if ((NSInteger)index == selected) ImGui::PopStyleColor();
+    ImDrawList *rootDraw = ImGui::GetWindowDrawList();
+    const ImVec2 root = ImGui::GetWindowPos();
+    rootDraw->AddRectFilled(root, ImVec2(root.x + 160, root.y + 535),
+        ImGui::GetColorU32(light ? ImVec4(.90f,.90f,.90f,1) : ImVec4(.12f,.12f,.12f,1)), 12,
+        ImDrawFlags_RoundCornersLeft);
+    ImGui::SetCursorPos(ImVec2(18, 24));
+    ImGui::PushFont(_brandFont);
+    ImGui::PushStyleColor(ImGuiCol_Text, accent); ImGui::TextUnformatted("C"); ImGui::PopStyleColor();
+    ImGui::SameLine(0,0); ImGui::TextUnformatted("ORE");
+    ImGui::SameLine(5,0); ImGui::PushStyleColor(ImGuiCol_Text, accent);
+    ImGui::TextUnformatted("SET"); ImGui::PopStyleColor(); ImGui::PopFont();
+    const char *groups[] = {"初始化", "视觉", "战斗"};
+    const int groupStarts[] = {0, 1, 5};
+    const int groupEnds[] = {1, 5, 7};
+    float navY = 82;
+    for (int group = 0; group < 3; ++group) {
+        ImGui::SetCursorPos(ImVec2(18, navY));
+        ImGui::PushStyleColor(ImGuiCol_Text, light ? ImVec4(.42f,.42f,.42f,1) : ImVec4(.55f,.55f,.55f,1));
+        ImGui::TextUnformatted(groups[group]); ImGui::PopStyleColor(); navY += 22;
+        for (int index = groupStarts[group]; index < groupEnds[group] && index < (int)pages.count; ++index) {
+            NSDictionary *pageRecord = [pages[index] isKindOfClass:NSDictionary.class] ? pages[index] : @{};
+            NSString *title = CSString(pageRecord[@"title"]);
+            ImGui::SetCursorPos(ImVec2(14, navY));
+            if (index == selected) ImGui::PushStyleColor(ImGuiCol_Button, accent);
+            NSString *label = [NSString stringWithFormat:@"%@##page.%d", title, index];
+            if (ImGui::Button(label.UTF8String, ImVec2(132, 32)))
+                [self performWidgetAction:@"page" value:index];
+            if (index == selected) ImGui::PopStyleColor();
+            navY += 35;
+        }
+        navY += 8;
     }
-    ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 48);
-    if (ImGui::Button("退出 HUD", ImVec2(132, 34)))
-        [_model performImGuiMenuAction:@"exit" value:0];
-    ImGui::EndChild();
-    ImGui::SameLine();
-    ImGui::BeginChild("content", ImVec2(0,0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-    ImGui::SetCursorPos(ImVec2(10, 8));
-    if (ImGui::Button("关闭##close", ImVec2(74, 28)))
-        [_model performImGuiMenuAction:@"close" value:0];
+    ImGui::SetCursorPos(ImVec2(798, 6));
+    if (ImGui::Button("×##close", ImVec2(32, 26))) [self performWidgetAction:@"close" value:0];
     NSDictionary *page = pages.count ? pages[selected] : @{};
     NSArray *sections = [page[@"sections"] isKindOfClass:NSArray.class] ? page[@"sections"] : @[];
+    ImGui::SetCursorPos(ImVec2(170,38));
+    ImGui::BeginChild("content", ImVec2(668, 497), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    float maximumY = 0;
     for (NSDictionary *section in sections) {
+        NSArray *frame = [section[@"frame"] isKindOfClass:NSArray.class] ? section[@"frame"] : @[];
+        if (frame.count != 4) continue;
+        const float x = [frame[0] floatValue], y = [frame[1] floatValue];
+        const float width = [frame[2] floatValue], height = [frame[3] floatValue];
+        maximumY = MAX(maximumY, y + height);
         NSString *title = CSString(section[@"title"]);
-        ImGui::PushStyleColor(ImGuiCol_Text, accent); ImGui::TextUnformatted(title.UTF8String); ImGui::PopStyleColor();
         NSArray *items = [section[@"items"] isKindOfClass:NSArray.class] ? section[@"items"] : @[];
-        const float sectionHeight = std::max(58.0f, 34.0f + (float)items.count * 42.0f);
+        const NSInteger columns = MAX(1, [section[@"columns"] integerValue]);
+        ImGui::SetCursorPos(ImVec2(x, y));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10,8));
         ImGui::BeginChild([[NSString stringWithFormat:@"section.%@", title] UTF8String],
-                          ImVec2(-1, sectionHeight), ImGuiChildFlags_Borders);
-        for (NSDictionary *item in items) [self drawItem:item];
-        ImGui::EndChild(); ImGui::Spacing();
+                          ImVec2(width, height), ImGuiChildFlags_Borders);
+        ImGui::PushFont(_titleFont); ImGui::PushStyleColor(ImGuiCol_Text, accent);
+        ImGui::TextUnformatted(title.UTF8String); ImGui::PopStyleColor(); ImGui::PopFont();
+        ImGui::SetCursorPosY(34);
+        if (columns == 1) {
+            for (NSDictionary *item in items) [self drawItem:item accent:accent];
+        } else {
+            const float cellWidth = (ImGui::GetContentRegionAvail().x - (columns - 1) * 8) / columns;
+            for (NSUInteger index = 0; index < items.count; ++index) {
+                if (index % columns) ImGui::SameLine(0,8);
+                ImGui::BeginChild([[NSString stringWithFormat:@"cell.%lu", (unsigned long)index] UTF8String],
+                                  ImVec2(cellWidth, 28), ImGuiChildFlags_None);
+                [self drawItem:items[index] accent:accent];
+                ImGui::EndChild();
+            }
+        }
+        ImGui::EndChild(); ImGui::PopStyleVar();
     }
+    ImGui::SetCursorPos(ImVec2(0, maximumY + 1)); ImGui::Dummy(ImVec2(1,1));
     ImGui::EndChild(); ImGui::End();
 }
 
@@ -277,6 +434,7 @@ static NSString *CSString(id value) {
     id<MTLRenderCommandEncoder> encoder = [buffer renderCommandEncoderWithDescriptor:view.currentRenderPassDescriptor];
     ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), buffer, encoder);
     [encoder endEncoding]; [buffer presentDrawable:view.currentDrawable]; [buffer commit];
+    ++_frameSerial;
 }
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {}
 
@@ -297,13 +455,39 @@ static NSString *CSString(id value) {
         _pointer.cancel(io);
         return YES;
     }
+    BOOL queued = NO;
     if (phase == CoreSetHostedPointerPhaseBegan)
-        return _pointer.begin(io, (float)point.x, (float)point.y);
-    if (phase == CoreSetHostedPointerPhaseMoved)
-        return _pointer.move(io, (float)point.x, (float)point.y);
-    if (phase == CoreSetHostedPointerPhaseEnded)
-        return _pointer.end(io, (float)point.x, (float)point.y);
-    return NO;
+        queued = _pointer.begin(io, (float)point.x, (float)point.y);
+    else if (phase == CoreSetHostedPointerPhaseMoved)
+        queued = _pointer.move(io, (float)point.x, (float)point.y);
+    else if (phase == CoreSetHostedPointerPhaseEnded)
+        queued = _pointer.end(io, (float)point.x, (float)point.y);
+    if (!queued || !_metalView) return NO;
+    const uint64_t beforeFrame = _frameSerial;
+    const uint64_t beforeAction = _widgetActionSerial;
+    // A hosted source keeps its last pixels while the owner app is backgrounded,
+    // but CADisplayLink may tick seconds late. Drive the exact ImGui context now
+    // so Down/Move/Up and widget behavior share a deterministic frame sequence.
+    [_metalView draw];
+    const BOOL rendered = _frameSerial > beforeFrame;
+    const BOOL actionChanged = _widgetActionSerial > beforeAction;
+    BOOL refreshed = !actionChanged;
+    // The changed widget publishes a new immutable model revision during the
+    // first frame. Render that revision immediately as well; otherwise a
+    // backgrounded CADisplayLink could leave the old page/value visible.
+    if (rendered && actionChanged) {
+        const uint64_t actionFrame = _frameSerial;
+        [_metalView draw];
+        refreshed = _frameSerial > actionFrame;
+    }
+    NSLog(@"Core-SET: ImGui input stage=frame phase=%ld queued=1 rendered=%d refreshed=%d frame=%llu actionChanged=%d actionSerial=%llu",
+          (long)phase, rendered, refreshed, (unsigned long long)_frameSerial, actionChanged,
+          (unsigned long long)_widgetActionSerial);
+    if (!rendered) {
+        _pointer.cancel(io);
+        return NO;
+    }
+    return YES;
 }
 - (BOOL)dispatchLocalPoint:(CGPoint)point phase:(CoreSetHostedPointerPhase)phase {
     NSString *identifier = _pointer.down() ? @"imgui.pointer" : [self hostedControlIDAtPoint:point];

@@ -27,8 +27,9 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
         return result
     }
 
-    private func imguiSection(_ title: String, _ items: [[String: Any]]) -> [String: Any] {
-        ["title": title, "items": items]
+    private func imguiSection(_ title: String, _ items: [[String: Any]],
+                              frame: [Double], columns: Int = 1) -> [String: Any] {
+        ["title": title, "items": items, "frame": frame, "columns": columns]
     }
 
     private func imguiChannelReady<Value: Equatable>(_ channel: CoreSetFeatureChannel<Value>) -> Bool {
@@ -42,8 +43,8 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
     }
 
     private func imguiPresetIndex(_ color: CoreSetRGBA?) -> Int {
-        guard let color else { return 6 }
-        return (0..<7).first { CoreSetReferenceMenuAppearance.preset($0) == color.referenceOpaque } ?? 6
+        guard let color else { return -1 }
+        return (0..<7).first { CoreSetReferenceMenuAppearance.preset($0) == color.referenceOpaque } ?? -1
     }
 
     private var imguiAimEditable: Bool {
@@ -59,35 +60,54 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
         let homeSnapshot = featureState.homeSnapshot
         let runValues: [CoreSetRunMode] = [.safe, .efficiency]
         let coverValues: [CoreSetCoverMode] = [.global, .inGame, .off]
-        let homeItems: [[String: Any]] = [
+        let kernelItems: [[String: Any]] = [
+            imguiItem("label", "DarkSword"),
             imguiItem("choice", "运行模式", "home.run", value: runValues.firstIndex(of: home.runMode ?? .safe) ?? 0,
                       options: ["安全", "效率"]),
             imguiItem("choice", "掩体判断", "home.cover", value: coverValues.firstIndex(of: home.coverMode ?? .off) ?? 2,
                       options: ["全局", "局内", "关闭"]),
-            imguiItem("choice", "界面主题", "home.theme", value: home.theme == .light ? 1 : 0,
-                      options: ["暗黑", "纯白"]),
-            imguiItem("slider", "FPS 调节", "home.fps", value: featureState.frameRate.desired.framesPerSecond.value ?? 60,
-                      minimum: 30, maximum: 144, enabled: imguiChannelReady(featureState.frameRate)),
+        ] + [("内核状态", homeSnapshot?.kernel), ("运行环境", homeSnapshot?.environment),
+                     ("获取信息状态", homeSnapshot?.information), ("当前阶段", homeSnapshot?.stage),
+                     ("悬浮菜单", homeSnapshot?.floating)].map { imguiStatus($0.0, $0.1) } + [
             imguiItem("button", "内核利用", "home.kernel", enabled: !homeActionsInFlight.contains(.kernelAction)),
             imguiItem("button", "获取信息", "home.information", enabled: !homeActionsInFlight.contains(.informationAction))
         ]
-        var statusItems: [[String: Any]] = []
-        for item in [("内核状态", homeSnapshot?.kernel), ("运行环境", homeSnapshot?.environment),
-                     ("获取信息状态", homeSnapshot?.information), ("当前阶段", homeSnapshot?.stage),
-                     ("悬浮菜单", homeSnapshot?.floating)] {
-            statusItems.append(imguiStatus(item.0, item.1))
-        }
+        let appearanceItems: [[String: Any]] = [
+            imguiItem("choice", "界面主题", "home.theme", value: home.theme == .light ? 1 : 0,
+                      options: ["暗黑", "纯白"]),
+            imguiItem("palette", "预设颜色", "home.accent", value: imguiPresetIndex(home.accent),
+                      options: ["1", "2", "3", "4", "5", "6", "7"]),
+            imguiItem("palette", "悬浮颜色", "home.floating",
+                      value: floatingThemeValues.firstIndex(of: floatingThemeValue) ?? 6,
+                      options: ["1", "2", "3", "4", "5", "6", "7"])
+        ]
+        let fpsItems = [imguiItem("slider", "FPS 调节", "home.fps",
+            value: featureState.frameRate.desired.framesPerSecond.value ?? 60,
+            minimum: 30, maximum: 144, enabled: imguiChannelReady(featureState.frameRate))]
+        let performance = featureState.performanceSnapshot
+        let cpuText = performance.flatMap { $0.cpuPercent }.map { String(format: "%.1f %%", $0) }
+        let memoryText = performance.flatMap { $0.footprintMiB }.map { String(format: "%.1f MB", $0) }
+        let peakText = performance.flatMap { $0.peakFootprintMiB }.map { String(format: "%.1f MB", $0) }
+        let performanceItems = [
+            imguiStatus("CPU 占用", cpuText), imguiStatus("内存占用", memoryText),
+            imguiStatus("内存峰值", peakText)
+        ]
 
         let player = featureState.player.desired
         func actorItems(_ scope: CoreSetActorScope, _ state: CoreSetActorDisplay) -> [[String: Any]] {
             let prefix = scope == .player ? "player.player" : "player.bot"
+            let weaponValue = state.weapon.enabled == false ? 2 : (state.weapon.mode?.rawValue ?? -1)
+            let countValue = state.count.enabled == false ? 2 :
+                (state.count.mode.map { $0 == .detailed ? 0 : 1 } ?? -1)
+            let informationValue = state.information.enabled == false ? 2 :
+                (state.information.mode?.rawValue ?? -1)
             return [
-                imguiItem("choice", "显示手持", "\(prefix).weapon", value: state.weapon.mode?.rawValue ?? 0,
-                          options: ["图片", "文字"]),
-                imguiItem("choice", "玩家数量", "\(prefix).count", value: state.count.mode == .detailed ? 0 : 1,
-                          options: ["详细", "简洁"]),
-                imguiItem("choice", "显示信息", "\(prefix).information", value: state.information.mode?.rawValue ?? 0,
-                          options: ["现代", "精简"]),
+                imguiItem("choice", scope == .player ? "显示手持" : "人机手持", "\(prefix).weapon",
+                          value: weaponValue, options: ["贴图", "文字", "关闭"]),
+                imguiItem("choice", scope == .player ? "玩家数量" : "人机数量", "\(prefix).count",
+                          value: countValue, options: ["详细", "简洁", "关闭"]),
+                imguiItem("choice", "显示信息", "\(prefix).information", value: informationValue,
+                          options: ["现代", "简约", "关闭"]),
                 imguiItem("toggle", "显示射线", "\(prefix).ray", value: state.ray == true),
                 imguiItem("toggle", "显示方框", "\(prefix).box", value: state.box == true),
                 imguiItem("toggle", "显示距离", "\(prefix).distance", value: state.distance == true),
@@ -98,7 +118,9 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
             imguiItem("toggle", "隐藏人机", "player.hideBots", value: player.hideBots == true),
             imguiItem("toggle", "手雷预警", "player.grenade", value: player.grenadeWarning == true),
             imguiItem("choice", "背敌指示", "player.back", value: player.backIndicator?.rawValue ?? 2,
-                      options: ["指示+距离", "指示", "关闭"]),
+                      options: ["指示+距离", "指示", "关闭"])
+        ]
+        let playerTuning: [[String: Any]] = [
             imguiItem("slider", "绘制显示距离", "player.drawDistance", value: player.drawingDistance.value ?? 1,
                       minimum: 1, maximum: 1000),
             imguiItem("slider", "骨骼显示距离", "player.boneDistance", value: player.boneDistance.value ?? 1,
@@ -110,26 +132,31 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
         let material = featureState.materials.desired
         let category = CoreSetMaterialCategory(rawValue: previewMaterialCategory) ?? .vehicles
         let materialState = material.categories[category.rawValue]
-        var materialGroups = materialState.groups.enumerated().map { index, group in
-            imguiItem("toggle", group.displayName, "material.group.\(index)", value: group.selection == .all)
-        }
-        materialGroups.insert(imguiItem("button", "本类全开", "material.allOn"), at: 0)
-        materialGroups.insert(imguiItem("button", "本类全关", "material.allOff"), at: 1)
-        let materialGeneral: [[String: Any]] = [
+        let materialGroupGrid: [String: Any] = [
+            "type": "tagGrid", "title": "", "action": "material.group",
+            "titles": materialState.groups.map(\.displayName),
+            "values": materialState.groups.map { $0.selection == .all }, "enabled": true
+        ]
+        let materialManagement: [[String: Any]] = [
             imguiItem("toggle", "显示物资", "material.enabled", value: material.enabled == true),
             imguiItem("toggle", "持枪屏蔽物资", "material.hideArmed", value: material.hideWhileArmed == true),
             imguiItem("toggle", "地铁头甲", "material.metro", value: material.metroArmor == true),
             imguiItem("toggle", "隐藏已开启地铁箱子", "material.hideOpened", value: material.hideOpenedCrates == true),
             imguiItem("toggle", "显示地铁箱子等级", "material.crateLevel", value: material.showCrateLevel == true),
-            imguiItem("toggle", "显示载具油量血量", "material.vehicle", value: material.vehicleStatus == true),
-            imguiItem("choice", "物资分类", "material.category", value: category.rawValue,
+            imguiItem("toggle", "显示载具油量血量", "material.vehicle", value: material.vehicleStatus == true)
+        ]
+        let materialFilter: [[String: Any]] = [
+            imguiItem("tabs", "", "material.category", value: category.rawValue,
                       options: CoreSetMaterialCategory.allCases.map(\.displayName)),
             imguiItem("slider", "最小距离", "material.minimum", value: materialState.distance.minimum ?? 0,
                       minimum: 0, maximum: 2000),
             imguiItem("slider", "最大距离", "material.maximum", value: materialState.distance.maximum ?? 2000,
                       minimum: 0, maximum: 2000),
-            imguiItem("choice", "分类颜色", "material.color", value: imguiPresetIndex(materialState.color),
-                      options: ["1", "2", "3", "4", "5", "6", "7"])
+            imguiItem("palette", "分类颜色", "material.color", value: imguiPresetIndex(materialState.color),
+                      options: ["1", "2", "3", "4", "5", "6", "7"]),
+            imguiItem("button", "本类全开", "material.allOn"),
+            imguiItem("button", "本类全关", "material.allOff"),
+            materialGroupGrid
         ]
 
         let adjustment = featureState.adjustments.desired
@@ -138,7 +165,7 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
             let colors = scope == .player ? adjustment.player : adjustment.bot
             let values = [colors.name, colors.ray, colors.distance, colors.bone, colors.team]
             return ["name", "ray", "distance", "bone", "team"].enumerated().map { index, field in
-                imguiItem("choice", ["名称颜色", "射线颜色", "距离颜色", "骨骼颜色", "队伍颜色"][index],
+                imguiItem("palette", ["名称颜色", "射线颜色", "距离颜色", "骨骼颜色", "队伍颜色"][index],
                           "\(prefix).\(field)", value: imguiPresetIndex(values[index]),
                           options: ["1", "2", "3", "4", "5", "6", "7"])
             }
@@ -150,13 +177,15 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
         ]
 
         let radar = featureState.radar.desired
-        let radarItems: [[String: Any]] = [
+        let radarMain: [[String: Any]] = [
             imguiItem("toggle", "雷达", "radar.enabled", value: radar.enabled == true),
             imguiItem("toggle", "显示距离米数", "radar.distance", value: radar.showDistance == true),
             imguiItem("slider", "探测距离", "radar.detect", value: radar.detectionDistance.value ?? 100, minimum: 100, maximum: 1000),
             imguiItem("slider", "雷达半径", "radar.radius", value: radar.placement.radius ?? 80, minimum: 50, maximum: 300),
             imguiItem("slider", "雷达 X", "radar.x", value: radar.placement.x ?? 100, minimum: 0, maximum: Double(radar.placement.canvas?.width ?? 390)),
-            imguiItem("slider", "雷达 Y", "radar.y", value: radar.placement.y ?? 100, minimum: 0, maximum: Double(radar.placement.canvas?.height ?? 844)),
+            imguiItem("slider", "雷达 Y", "radar.y", value: radar.placement.y ?? 100, minimum: 0, maximum: Double(radar.placement.canvas?.height ?? 844))
+        ]
+        let radarWarning: [[String: Any]] = [
             imguiItem("toggle", "被瞄预警", "radar.warning", value: radar.warningEnabled == true),
             imguiItem("toggle", "忽略人机", "radar.ignoreBots", value: radar.ignoreBots == true),
             imguiItem("slider", "被瞄预警范围", "radar.warningRange", value: radar.warningRange.value ?? 20, minimum: 20, maximum: 300),
@@ -178,8 +207,8 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
             imguiItem("toggle", "倒地不瞄", "aim.knocked", value: aim.excludeKnocked == true, enabled: aimEditable),
             imguiItem("toggle", "瞄准人机", "aim.bots", value: aim.includeBots == true, enabled: aimEditable),
             imguiItem("toggle", "锁定同目标", "aim.lock", value: aim.lockSameTarget == true, enabled: aimEditable),
-            imguiItem("choice", "场景", "aim.scene", value: [CoreSetAimScene.far, .general, .close, .custom].firstIndex(of: aim.scene ?? .far) ?? 0,
-                      options: ["远距离", "通用", "近距离", "自定义"], enabled: aimEditable)
+            imguiItem("choice", "场景", "aim.scene", value: [CoreSetAimScene.far, .close, .general, .custom].firstIndex(of: aim.scene ?? .far) ?? -1,
+                      options: ["远距", "近战", "通用", "自定义"], enabled: aimEditable)
         ]
         var aimTuning: [[String: Any]] = []
         if aim.scene == .custom {
@@ -199,6 +228,9 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
                 value: [CoreSetLockStrength.strong, .medium, .light].firstIndex(of: aim.lockStrength ?? .light) ?? 2,
                 options: ["强锁定", "中锁定", "轻锁定"], enabled: aimEditable)]
         }
+        let aimOverview = Array(aimMain.prefix(8))
+        let aimTarget = Array(aimMain[8...10]) + (aim.scene == .custom ? Array(aimTuning.prefix(4)) : [])
+        let aimScenario = [aimMain[11]] + (aim.scene == .custom ? Array(aimTuning.dropFirst(4)) : aimTuning)
 
         let recoil = featureState.recoil.desired
         let recoilItems: [[String: Any]] = [
@@ -208,17 +240,36 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
             imguiItem("slider", "垂直补偿强度", "recoil.verticalStrength", value: recoil.verticalStrength.value ?? 0, minimum: 0, maximum: 100),
             imguiItem("toggle", "水平补偿", "recoil.horizontal", value: recoil.horizontalEnabled == true),
             imguiItem("slider", "水平补偿强度", "recoil.horizontalStrength", value: recoil.horizontalStrength.value ?? 0, minimum: 0, maximum: 100),
-            imguiStatus("说明", "压枪并非无后坐力，是纯模拟压枪，远距离效果请实测")
+            imguiStatus("说明", "压枪并非无后坐力是纯模拟压枪，远距离压不住，效果请自测！")
         ]
 
         let pages: [[String: Any]] = [
-            ["title": "主页", "sections": [imguiSection("内核管理", homeItems), imguiSection("状态", statusItems)]],
-            ["title": "玩家", "sections": [imguiSection("玩家绘制", actorItems(.player, player.player)), imguiSection("人机绘制", actorItems(.bot, player.bot)), imguiSection("进阶设置", playerAdvanced)]],
-            ["title": "物资", "sections": [imguiSection("物资管理", materialGeneral), imguiSection("物资筛选", materialGroups)]],
-            ["title": "调整", "sections": [imguiSection("玩家颜色", colorItems(.player)), imguiSection("人机颜色", colorItems(.bot)), imguiSection("粗细调节", adjustmentSizes)]],
-            ["title": "雷达", "sections": [imguiSection("雷达与预警", radarItems)]],
-            ["title": "自瞄", "sections": [imguiSection("Core 稳定自瞄", aimMain), imguiSection("场景参数", aimTuning)]],
-            ["title": "压枪", "sections": [imguiSection("Core 智能压枪【非无后坐力】", recoilItems)]]
+            ["title": "主页", "sections": [
+                imguiSection("内核管理", kernelItems, frame: [0, 0, 323, 466]),
+                imguiSection("界面设置", appearanceItems, frame: [335, 0, 323, 175]),
+                imguiSection("局内绘制帧率", fpsItems, frame: [335, 203, 323, 90]),
+                imguiSection("性能监测", performanceItems, frame: [335, 321, 323, 145])]],
+            ["title": "玩家", "sections": [
+                imguiSection("玩家显示", actorItems(.player, player.player), frame: [0, 0, 323, 225]),
+                imguiSection("人机显示", actorItems(.bot, player.bot), frame: [335, 0, 323, 225]),
+                imguiSection("进阶设置", playerAdvanced, frame: [0, 253, 323, 239]),
+                imguiSection("绘制调节", playerTuning, frame: [335, 253, 323, 239])]],
+            ["title": "物资", "sections": [
+                imguiSection("物资管理", materialManagement, frame: [0, 0, 658, 75], columns: 3),
+                imguiSection("物资筛选", materialFilter, frame: [0, 103, 658, 389])]],
+            ["title": "调整", "sections": [
+                imguiSection("玩家颜色", colorItems(.player), frame: [0, 0, 323, 225]),
+                imguiSection("人机颜色", colorItems(.bot), frame: [335, 0, 323, 225]),
+                imguiSection("粗细调节", adjustmentSizes, frame: [0, 252, 658, 232])]],
+            ["title": "雷达", "sections": [
+                imguiSection("雷达设置", radarMain, frame: [0, 0, 323, 360]),
+                imguiSection("预警设置", radarWarning, frame: [335, 0, 323, 360])]],
+            ["title": "自瞄", "sections": [
+                imguiSection("Core稳定自瞄", aimOverview, frame: [0, 0, 658, 160], columns: 2),
+                imguiSection("目标筛选", aimTarget, frame: [0, 188, 323, aim.scene == .custom ? 315 : 220]),
+                imguiSection("场景预设", aimScenario, frame: [335, 188, 323, aim.scene == .custom ? 315 : 220])]],
+            ["title": "压枪", "sections": [
+                imguiSection("Core智能压枪【非无后坐力】", recoilItems, frame: [0, 0, 658, 474])]]
         ]
         return ["selectedPage": selectedPage, "theme": home.theme?.rawValue ?? "dark",
                 "accent": accent, "pages": pages]
@@ -244,9 +295,15 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
         editGame(\.player) { state in
             func edit(_ actor: inout CoreSetActorDisplay) {
                 switch field {
-                case "weapon": if let mode = CoreSetWeaponMode(rawValue: Int(value)) { actor.weapon.select(mode) }
-                case "count": actor.count.select(Int(value) == 0 ? .detailed : .compact)
-                case "information": if let mode = CoreSetInformationMode(rawValue: Int(value)) { actor.information.select(mode) }
+                case "weapon":
+                    if Int(value) == 2 { actor.weapon.disable() }
+                    else if let mode = CoreSetWeaponMode(rawValue: Int(value)) { actor.weapon.select(mode) }
+                case "count":
+                    if Int(value) == 2 { actor.count.disable() }
+                    else { actor.count.select(Int(value) == 0 ? .detailed : .compact) }
+                case "information":
+                    if Int(value) == 2 { actor.information.disable() }
+                    else if let mode = CoreSetInformationMode(rawValue: Int(value)) { actor.information.select(mode) }
                 case "ray": actor.ray = value != 0
                 case "box": actor.box = value != 0
                 case "distance": actor.distance = value != 0
@@ -341,6 +398,19 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
             featureState.home.updateDesired { $0.selectCoverMode(values[Int(value)]) }; onHomeProbeRefusal?(.coverMode, Int(value))
         case "home.theme":
             featureState.home.updateDesired { $0.theme = Int(value) == 1 ? .light : .dark }; applyLocalAppearance()
+        case "home.accent":
+            let index = Int(value.rounded())
+            guard (0..<7).contains(index) else { return false }
+            featureState.home.updateDesired { $0.setAccent(CoreSetReferenceMenuAppearance.preset(index)) }
+            applyLocalAppearance()
+        case "home.floating":
+            let index = Int(value.rounded())
+            guard floatingThemeValues.indices.contains(index),
+                  let palette = CoreSetFloatingPalette(rawValue: floatingThemeValues[index]) else { return false }
+            featureState.home.updateDesired { $0.floatingPalette = palette }
+            applyLocalAppearance()
+            hostChannel.updateDesired { $0.floatingPalette = palette }
+            if hostConsumer != nil { applyHostSettings() }
         case "home.fps": editGame(\.frameRate) { $0.framesPerSecond.set(Int(value.rounded())) }
         case "home.kernel": return performHomeActionFromImGui(.kernelAction)
         case "home.information": return performHomeActionFromImGui(.informationAction)
@@ -414,7 +484,7 @@ extension CoreSetMenuViewController: CoreSetImGuiMenuModel {
         case "aim.bots": featureState.aim.updateDesired { $0.includeBots = value != 0 }
         case "aim.lock": featureState.aim.updateDesired { $0.lockSameTarget = value != 0 }
         case "aim.scene":
-            let values: [CoreSetAimScene] = [.far, .general, .close, .custom]; guard values.indices.contains(Int(value)) else { return false }
+            let values: [CoreSetAimScene] = [.far, .close, .general, .custom]; guard values.indices.contains(Int(value)) else { return false }
             featureState.aim.updateDesired { $0.scene = values[Int(value)] }
         case "aim.lockStrength":
             let values: [CoreSetLockStrength] = [.strong, .medium, .light]; guard values.indices.contains(Int(value)) else { return false }
@@ -504,6 +574,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private var imguiRuntimeEnabled = false
     func enableImGuiRuntime() {
         precondition(Thread.isMainThread)
+        let storedAccent = storedColor(forKey: accentKey).flatMap(rgba)
+        let storedPalette = CoreSetFloatingPalette(rawValue: storedFloatingThemeValue())
+        featureState.home.updateDesired {
+            if $0.theme == nil { $0.theme = storedTheme() }
+            if $0.accent == nil { $0.setAccent(storedAccent ?? rgba(defaultAccent)) }
+            if $0.floatingPalette == nil { $0.floatingPalette = storedPalette }
+        }
         imguiRuntimeEnabled = true
         hostedMenuRevision &+= 1
     }
