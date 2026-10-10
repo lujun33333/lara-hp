@@ -28,6 +28,9 @@ for token in ("io.ConfigInputTrickleEventQueue = false", "[_metalView draw]",
 for token in ("ImVec2(838,535)", "ImVec2(170,38)", '"初始化"', '"视觉"', '"战斗"',
               "ImVec2(132, 32)", "ImVec2(24,24)"):
     assert token in surface, token
+assert surface.count("ImGui::Dummy(ImVec2(0,0));") >= 3
+card_layout = surface[surface.index("if (columns == 1)"):surface.index("ImGui::EndChild(); ImGui::PopStyleVar();")]
+assert card_layout.index("ImGui::Dummy(ImVec2(0,0));") < card_layout.rindex("ImGui::EndChild()")
 assert "guard imguiActionEnabled(action) else { return false }" in menu
 for removed in ("addHit:", "hitForIdentifier:", "_hits", "Commit sliders once on End", "const double ratio"):
     assert removed not in surface, removed

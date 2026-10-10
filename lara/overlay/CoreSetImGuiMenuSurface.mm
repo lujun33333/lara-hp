@@ -399,6 +399,10 @@ static NSString *CSString(id value) {
         ImGui::SetCursorPosY(34);
         if (columns == 1) {
             for (NSDictionary *item in items) [self drawItem:item accent:accent];
+            // drawItem uses absolute cursor placement for Core's fixed rows.
+            // Submit an item at the final cursor before EndChild so ImGui 1.92
+            // does not treat SetCursorPos as an unsupported bounds extension.
+            ImGui::Dummy(ImVec2(0,0));
         } else {
             const float cellWidth = (ImGui::GetContentRegionAvail().x - (columns - 1) * 8) / columns;
             for (NSUInteger index = 0; index < items.count; ++index) {
@@ -406,8 +410,10 @@ static NSString *CSString(id value) {
                 ImGui::BeginChild([[NSString stringWithFormat:@"cell.%lu", (unsigned long)index] UTF8String],
                                   ImVec2(cellWidth, 28), ImGuiChildFlags_None);
                 [self drawItem:items[index] accent:accent];
+                ImGui::Dummy(ImVec2(0,0));
                 ImGui::EndChild();
             }
+            ImGui::Dummy(ImVec2(0,0));
         }
         ImGui::EndChild(); ImGui::PopStyleVar();
     }
