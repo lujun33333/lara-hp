@@ -472,6 +472,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     private var basicAimStatus = "基础模式待启动"
     func updateBasicAimStatus(_ status: String) {
         basicAimStatus = status
+        if imguiRuntimeEnabled { hostedMenuRevision &+= 1 }
         if case .unavailable(let reason) = featureState.aim.availability {
             basicAimStatusLabel?.text = reason
         } else { basicAimStatusLabel?.text = status }
@@ -603,6 +604,7 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
             }
         }
         guard changed else { return }
+        if imguiRuntimeEnabled { hostedMenuRevision &+= 1 }
         if isViewLoaded && selectedPage == 0 {
             if hostedPointerID == nil {
                 if !refreshHomeStatusLabels() { rebuildMenu() }
@@ -620,11 +622,13 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
                 footprintMiB: sample.footprintValid ? sample.footprintMiB : nil,
                 peakFootprintMiB: sample.peakValid ? sample.peakFootprintMiB : nil)
         } else { featureState.performanceSnapshot = nil }
+        if imguiRuntimeEnabled { hostedMenuRevision &+= 1 }
         if isViewLoaded && selectedPage == 0 { refreshPerformanceLabels() }
     }
     func updatePresentedFrameObservation(_ observation: CoreSetPresentedFrameObservation?) {
         precondition(Thread.isMainThread)
         featureState.presentedFrameSnapshot = observation
+        if imguiRuntimeEnabled { hostedMenuRevision &+= 1 }
         let signature = observation.map { "\($0.hostGeneration)/\($0.renderGeneration)/\($0.adapterEpoch)/\($0.sampleCount)/\($0.lastPresentedTime)" } ?? "unavailable"
         if signature != presentationProofSignature {
             presentationProofSignature = signature
@@ -1597,7 +1601,10 @@ final class CoreSetMenuViewController: UIViewController, CoreSetHostedMenuTapCon
     // and every edit additionally query the live consumer before accepting input.
     func refreshConsumerAvailability() {
         precondition(Thread.isMainThread)
-        if updateConsumerAvailability(), isViewLoaded { rebuildMenu() }
+        if updateConsumerAvailability() {
+            if imguiRuntimeEnabled { hostedMenuRevision &+= 1 }
+            else if isViewLoaded { rebuildMenu() }
+        }
         applyStagedConfigurations()
     }
     func invalidateLocalAimDisplayAfterHostReset() {

@@ -13,7 +13,8 @@ for token in ("CoreSetImGuiMenuModel", "CoreSetImGuiMenuViewController",
     assert token in surface_h, token
 for token in ("ImGui::CreateContext", "ImGui_ImplMetal_Init", "ImGui::NewFrame",
               "ImGui::Begin(\"Core-SET\"", "ImGui::Checkbox", "ImGui::SliderFloat",
-              "hostedControlIDAtPoint", "handleHostedControlID"):
+              "hostedControlIDAtPoint", "handleHostedControlID",
+              "revision != _renderedRevision", "!self.view.superview.hidden"):
     assert token in surface, token
 for token in ("extension CoreSetMenuViewController: CoreSetImGuiMenuModel",
               "enableImGuiRuntime()", "imguiMenuSnapshot()", "performImGuiMenuAction"):

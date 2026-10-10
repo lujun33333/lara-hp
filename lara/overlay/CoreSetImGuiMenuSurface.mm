@@ -57,6 +57,7 @@ static NSString *CSString(id value) {
     ImGuiContext *_imgui;
     ImFont *_bodyFont;
     CADisplayLink *_displayLink;
+    NSDictionary *_snapshot;
     NSArray<NSDictionary *> *_hits;
     NSString *_activeControl;
     uint64_t _renderedRevision;
@@ -116,7 +117,8 @@ static NSString *CSString(id value) {
 }
 
 - (void)displayTick:(CADisplayLink *)link {
-    if (_metalView.window && !self.view.hidden && self.view.alpha > 0.01) [_metalView draw];
+    if (_metalView.window && !self.view.hidden && !self.view.superview.hidden &&
+        self.view.alpha > 0.01 && self.view.superview.alpha > 0.01) [_metalView draw];
 }
 
 - (void)dealloc {
@@ -252,9 +254,12 @@ static NSString *CSString(id value) {
     io.DisplayFramebufferScale = ImVec2((float)(view.drawableSize.width/MAX(1.0,view.bounds.size.width)),
                                          (float)(view.drawableSize.height/MAX(1.0,view.bounds.size.height)));
     ImGui_ImplMetal_NewFrame(view.currentRenderPassDescriptor); ImGui::NewFrame();
-    NSDictionary *snapshot = [_model imguiMenuSnapshot] ?: @{};
-    _renderedRevision = _model.imguiMenuModelRevision;
-    ImGui::PushFont(_bodyFont); [self drawMenu:snapshot]; ImGui::PopFont();
+    const uint64_t revision = _model.imguiMenuModelRevision;
+    if (!_snapshot || revision != _renderedRevision) {
+        _snapshot = [[_model imguiMenuSnapshot] copy] ?: @{};
+        _renderedRevision = revision;
+    }
+    ImGui::PushFont(_bodyFont); [self drawMenu:_snapshot]; ImGui::PopFont();
     ImGui::Render();
     id<MTLCommandBuffer> buffer = [_queue commandBuffer];
     id<MTLRenderCommandEncoder> encoder = [buffer renderCommandEncoderWithDescriptor:view.currentRenderPassDescriptor];
